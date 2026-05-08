@@ -1,0 +1,105 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                String   @id @default(cuid())
+  nombre            String
+  email             String   @unique
+  passwordHash      String
+  zajunaUserEnc     String
+  zajunaPassEnc     String
+  competenciaCodigo String
+  competenciaNombre String
+  createdAt         DateTime @default(now())
+  fichas            Ficha[]
+  jobs              Job[]
+}
+
+model Ficha {
+  id         String     @id @default(cuid())
+  userId     String
+  codigo     String
+  programa   String     @default("")
+  courseId   Int
+  nombre     String     @default("")
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+  user       User       @relation(fields: [userId], references: [id])
+  evidencias Evidencia[]
+  aprendices Aprendiz[]
+
+  @@unique([userId, codigo])
+}
+
+model Evidencia {
+  id       String    @id @default(cuid())
+  fichaId  String
+  nombre   String
+  href     String
+  tipo     String    @default("assign")
+  ficha    Ficha     @relation(fields: [fichaId], references: [id])
+  entregas Entrega[]
+
+  @@unique([fichaId, href])
+}
+
+model Aprendiz {
+  id       String    @id @default(cuid())
+  fichaId  String
+  nombre   String
+  ficha    Ficha     @relation(fields: [fichaId], references: [id])
+  entregas Entrega[]
+
+  @@unique([fichaId, nombre])
+}
+
+model Entrega {
+  id          String           @id @default(cuid())
+  evidenciaId String
+  aprendizId  String
+  estado      String
+  fechaScan   DateTime         @default(now())
+  evidencia   Evidencia        @relation(fields: [evidenciaId], references: [id])
+  aprendiz    Aprendiz         @relation(fields: [aprendizId], references: [id])
+  historial   HistorialEstado[]
+  aiFeedback  AIFeedback[]
+
+  @@unique([evidenciaId, aprendizId])
+}
+
+model HistorialEstado {
+  id             String   @id @default(cuid())
+  entregaId      String
+  estadoAnterior String
+  estadoNuevo    String
+  fecha          DateTime @default(now())
+  entrega        Entrega  @relation(fields: [entregaId], references: [id])
+}
+
+model AIFeedback {
+  id          String   @id @default(cuid())
+  entregaId   String
+  tipo        String
+  contenido   String
+  generadoAt  DateTime @default(now())
+  entrega     Entrega  @relation(fields: [entregaId], references: [id])
+}
+
+model Job {
+  id        String   @id @default(cuid())
+  userId    String
+  tipo      String
+  fichaId   String?
+  status    String   @default("queued")
+  progreso  Int      @default(0)
+  errorMsg  String?
+  resultado Json?
+  creadoAt  DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id])
+}

@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node *)",
+      "PowerShell(New-Item *)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\zajuna\" -Exclude node_modules -Recurse | Where-Object { $_.FullName -notmatch 'node_modules' } | Select-Object -Property FullName | Sort-Object -Property FullName)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\zajuna\" -Force | Where-Object { $_.Name -ne 'node_modules' } | Select-Object -Property Name, PSIsContainer | Sort-Object -Property Name)",
+      "PowerShell(ls -Force \"C:\\\\zajuna\" | where { $_.Name -ne 'node_modules' })",
+      "PowerShell(cd C:\\\\zajuna; $env:DATABASE_URL=\"postgresql://zajuna:zajuna@localhost:5432/zajuna\"; $env:REDIS_URL=\"redis://localhost:6379\"; $env:JWT_SECRET=\"test\"; $env:ENCRYPTION_KEY=\"4a6f7a756e614b657930313233343536373839616263646566303132333435\"; node -e \"require\\('dotenv'\\).config\\(\\); require\\('./api/src/lib/crypto'\\); require\\('./api/src/lib/queue'\\); console.log\\('libs OK'\\)\" 2>&1)",
+      "PowerShell(node -e \"console.log\\(require\\('crypto'\\).randomBytes\\(32\\).toString\\('hex'\\)\\)\")",
+      "PowerShell(Stop-Process *)",
+      "PowerShell($login = Invoke-RestMethod -Method POST -Uri \"http://localhost:3000/api/auth/login\" -ContentType \"application/json\" -Body '{\"email\":\"test@sena.edu.co\",\"password\":\"1234\"}'; $token = $login.token; Write-Host \"Login OK - Token: $\\($token.Substring\\(0,30\\)\\)...\"; $fichas = Invoke-RestMethod -Method GET -Uri \"http://localhost:3000/api/fichas\" -Headers @{Authorization=\"Bearer $token\"}; $fichas | ConvertTo-Json)",
+      "PowerShell($token = \\(Invoke-RestMethod -Method POST -Uri \"http://localhost:3000/api/auth/login\" -ContentType \"application/json\" -Body '{\"email\":\"test@sena.edu.co\",\"password\":\"1234\"}'\\).token; $scan = Invoke-RestMethod -Method POST -Uri \"http://localhost:3000/api/fichas/scan\" -Headers @{Authorization=\"Bearer $token\"} -ContentType \"application/json\" -Body '{}'; Write-Host \"Job ID: $\\($scan.jobId\\)\"; Start-Sleep -Seconds 3; $job = Invoke-RestMethod -Method GET -Uri \"http://localhost:3000/api/jobs/$\\($scan.jobId\\)\" -Headers @{Authorization=\"Bearer $token\"}; $job | ConvertTo-Json -Depth 3)",
+      "PowerShell($token = \\(Invoke-RestMethod -Method POST -Uri \"http://localhost:3000/api/auth/login\" -ContentType \"application/json\" -Body '{\"email\":\"test@sena.edu.co\",\"password\":\"1234\"}'\\).token; $job = Invoke-RestMethod -Method GET -Uri \"http://localhost:3000/api/jobs/cmouwrlg10002thh4s8mbinxt\" -Headers @{Authorization=\"Bearer $token\"}; $job | ConvertTo-Json -Depth 5)",
+      "Bash(Get-ChildItem -Path \"C:\\\\zajuna\" -Filter \"*.js\")",
+      "Bash(Select-Object Name, FullName, Length)",
+      "PowerShell(Get-Item -Path \"C:\\\\zajuna\\\\root.PiOpq-8m.js\" | Select-Object Name, FullName, @{Name=\"SizeKB\";Expression={[math]::Round\\($_.Length/1KB, 2\\)}})",
+      "PowerShell(\\(Get-Content -Path \"C:\\\\zajuna\\\\root.PiOpq-8m.js\" | Measure-Object -Line\\).Lines)",
+      "Bash(Get-ChildItem -Path \"C:\\\\zajuna\" -Recurse -Force)",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(npx prisma *)",
+      "Bash(dir /s /b)",
+      "Bash(findstr /v node_modules)",
+      "Bash(findstr /v \".git\")"
+    ]
+  }
+}
