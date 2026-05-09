@@ -28,38 +28,45 @@ async function evidenciasRoutes(fastify) {
   });
 
   // GET /api/fichas/:fichaId/evidencias — evidencias guardadas con conteos de entrega
+  // Query: ?incluirCerradas=1 para incluir tambien las cerradas
   fastify.get("/api/fichas/:fichaId/evidencias", { preHandler: fastify.authenticate }, async (req, reply) => {
     const ficha = await prisma.ficha.findUnique({ where: { id: req.params.fichaId } });
     if (!ficha)                       return reply.code(404).send({ error: "Ficha no encontrada." });
     if (ficha.userId !== req.user.id) return reply.code(403).send({ error: "Sin acceso." });
 
+    const incluirCerradas = req.query?.incluirCerradas === "1";
+
     const evidencias = await prisma.evidencia.findMany({
       where:   { fichaId: ficha.id },
       include: { entregas: { select: { estado: true, fechaScan: true } } },
-      orderBy: { nombre: "asc" },
+      orderBy: [{ cerradaAt: "asc" }, { nombre: "asc" }],
+    });
+
+    const mapped = evidencias.map(ev => {
+      const pendientes  = ev.entregas.filter(e => e.estado === "pendiente").length;
+      const calificados = ev.entregas.filter(e => e.estado === "calificado").length;
+      const sinEntregar = ev.entregas.filter(e => e.estado === "sin_entregar").length;
+      const ultimoScan  = ev.entregas.length
+        ? ev.entregas.reduce((max, e) => (e.fechaScan > max ? e.fechaScan : max), ev.entregas[0].fechaScan)
+        : null;
+
+      return {
+        id:          ev.id,
+        nombre:      ev.nombre,
+        href:        ev.href,
+        tipo:        ev.tipo,
+        cerradaAt:   ev.cerradaAt,
+        pendientes,
+        calificados,
+        sinEntregar,
+        total:       ev.entregas.length,
+        ultimoScan,
+      };
     });
 
     return {
-      evidencias: evidencias.map(ev => {
-        const pendientes  = ev.entregas.filter(e => e.estado === "pendiente").length;
-        const calificados = ev.entregas.filter(e => e.estado === "calificado").length;
-        const sinEntregar = ev.entregas.filter(e => e.estado === "sin_entregar").length;
-        const ultimoScan  = ev.entregas.length
-          ? ev.entregas.reduce((max, e) => (e.fechaScan > max ? e.fechaScan : max), ev.entregas[0].fechaScan)
-          : null;
-
-        return {
-          id:          ev.id,
-          nombre:      ev.nombre,
-          href:        ev.href,
-          tipo:        ev.tipo,
-          pendientes,
-          calificados,
-          sinEntregar,
-          total:       ev.entregas.length,
-          ultimoScan,
-        };
-      }),
+      evidencias: incluirCerradas ? mapped : mapped.filter(e => !e.cerradaAt),
+      cerradasCount: mapped.filter(e => e.cerradaAt).length,
     };
   });
 }

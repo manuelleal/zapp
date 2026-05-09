@@ -60,6 +60,7 @@ model Ficha {
   nombre     String     @default("")
   createdAt  DateTime   @default(now())
   updatedAt  DateTime   @updatedAt
+  archivedAt DateTime?
   user       User       @relation(fields: [userId], references: [id])
   evidencias Evidencia[]
   aprendices Aprendiz[]
@@ -68,13 +69,14 @@ model Ficha {
 }
 
 model Evidencia {
-  id       String    @id @default(cuid())
-  fichaId  String
-  nombre   String
-  href     String
-  tipo     String    @default("assign")
-  ficha    Ficha     @relation(fields: [fichaId], references: [id])
-  entregas Entrega[]
+  id        String    @id @default(cuid())
+  fichaId   String
+  nombre    String
+  href      String
+  tipo      String    @default("assign")
+  cerradaAt DateTime?
+  ficha     Ficha     @relation(fields: [fichaId], references: [id])
+  entregas  Entrega[]
 
   @@unique([fichaId, href])
 }

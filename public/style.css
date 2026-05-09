@@ -680,6 +680,32 @@ details[open] summary::after {
 .evidencia-empty {
   text-align: center; padding: 2rem 1rem; color: var(--gray-600);
 }
+.evidencia-row.evidencia-cerrada {
+  opacity: .55;
+}
+.evidencia-row.evidencia-cerrada .evidencia-name::after {
+  content: " · cerrada";
+  color: var(--gray-400);
+  font-weight: normal;
+  font-size: .8rem;
+}
+
+/* ── Filas archivadas ─────────────────────────────────────────── */
+tr.ficha-archivada {
+  opacity: .55;
+  background: var(--gray-50, #fafafa);
+}
+tr.ficha-archivada .ficha-code::after {
+  content: " (archivada)";
+  font-weight: normal;
+  font-size: .75rem;
+  color: var(--gray-400);
+}
+
+/* ── Toggle ver archivadas/cerradas ───────────────────────────── */
+.toggle-archivadas input[type="checkbox"] {
+  cursor: pointer;
+}
 
 /* ── Footer ───────────────────────────────────────────────────── */
 .footer {

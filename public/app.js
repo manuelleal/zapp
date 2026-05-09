@@ -1,5 +1,10 @@
 "use strict";
-console.log("app.js v3 cargado - modal evidencias");
+
+// ─── ESTADO GLOBAL ───────────────────────────────────────────────────────────
+const _ui = {
+  verArchivadas: false,
+  verCerradas:   false,
+};
 
 // ─── JWT ─────────────────────────────────────────────────────────────────────
 const JWT_KEY  = "zajuna_jwt";
@@ -253,86 +258,140 @@ function pollJob(jobId) {
 // ─── CARGAR FICHAS DESDE DB ───────────────────────────────────────────────────
 async function cargarFichas() {
   try {
-    const res  = await authFetch("/api/fichas");
+    const qs  = _ui.verArchivadas ? "?incluirArchivadas=1" : "";
+    const res = await authFetch(`/api/fichas${qs}`);
     if (!res.ok) {
       const txt = await res.text().catch(() => "");
       setScanStatus(`Error al cargar fichas (${res.status}): ${txt.slice(0,200)}`, false);
-      console.error("cargarFichas non-ok", res.status, txt);
       return;
     }
     const data = await res.json();
-    console.log("cargarFichas OK", data);
     renderFichas(data.fichas || []);
   } catch (err) {
     if (!getJwt()) return;
     setScanStatus(`Error de red: ${err.message}`, false);
-    console.error("cargarFichas threw", err);
+  }
+}
+
+// Toggle "Ver archivadas"
+async function toggleVerArchivadas(checked) {
+  _ui.verArchivadas = !!checked;
+  await cargarFichas();
+}
+
+// Archivar / desarchivar ficha
+async function archivarFicha(fichaId, archivada) {
+  try {
+    const res = await authFetch(`/api/fichas/${encodeURIComponent(fichaId)}`, {
+      method: "PATCH",
+      body:   JSON.stringify({ archivada: !!archivada }),
+    });
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      setScanStatus(`No se pudo ${archivada ? "archivar" : "restaurar"} (${res.status}): ${txt.slice(0,150)}`, false);
+      return;
+    }
+    await cargarFichas();
+  } catch (err) {
+    if (!getJwt()) return;
+    setScanStatus(`Error de red: ${err.message}`, false);
   }
 }
 
 // ─── RENDER FICHAS ────────────────────────────────────────────────────────────
 function renderFichas(fichas) {
-  console.log("renderFichas called with", fichas?.length, "fichas");
   try {
-  const section = document.getElementById("fichas-section");
-  const empty   = document.getElementById("empty-section");
-  const tbody   = document.getElementById("fichas-tbody");
-  const count   = document.getElementById("fichas-count");
+    const section = document.getElementById("fichas-section");
+    const empty   = document.getElementById("empty-section");
+    const tbody   = document.getElementById("fichas-tbody");
+    const count   = document.getElementById("fichas-count");
 
-  if (!Array.isArray(fichas)) fichas = [];
+    if (!Array.isArray(fichas)) fichas = [];
 
-  if (fichas.length === 0) {
-    section.classList.remove("visible");
-    section.style.display = "none";
-    empty.style.display   = "";
-    return;
-  }
+    if (fichas.length === 0) {
+      section.classList.remove("visible");
+      section.style.display = "none";
+      empty.style.display   = "";
+      return;
+    }
 
-  empty.style.display   = "none";
-  section.style.display = "";
-  section.classList.add("visible");
-  count.textContent     = `${fichas.length} ficha${fichas.length !== 1 ? "s" : ""}`;
+    empty.style.display   = "none";
+    section.style.display = "";
+    section.classList.add("visible");
 
-  tbody.innerHTML = "";
+    const activas = fichas.filter(f => !f.archivedAt).length;
+    const arch    = fichas.length - activas;
+    count.textContent = arch
+      ? `${activas} activa${activas !== 1 ? "s" : ""} · ${arch} archivada${arch !== 1 ? "s" : ""}`
+      : `${activas} ficha${activas !== 1 ? "s" : ""}`;
 
-  for (const f of fichas) {
-    const tr = document.createElement("tr");
+    tbody.innerHTML = "";
 
-    // Código
-    const tdCod  = document.createElement("td");
-    const spanCod = document.createElement("span");
-    spanCod.className   = "ficha-code";
-    spanCod.textContent = f.codigo ?? "—";
-    tdCod.appendChild(spanCod);
+    for (const f of fichas) {
+      const tr = document.createElement("tr");
+      if (f.archivedAt) tr.classList.add("ficha-archivada");
 
-    // Programa
-    const tdProg  = document.createElement("td");
-    const spanProg = document.createElement("span");
-    spanProg.className   = f.programa ? "badge badge-green" : "badge badge-gray";
-    spanProg.textContent = f.programa || "—";
-    tdProg.appendChild(spanProg);
+      // Código
+      const tdCod  = document.createElement("td");
+      const spanCod = document.createElement("span");
+      spanCod.className   = "ficha-code";
+      spanCod.textContent = f.codigo ?? "—";
+      tdCod.appendChild(spanCod);
 
-    // Nombre del curso
-    const tdNombre  = document.createElement("td");
-    tdNombre.textContent = f.nombre;
+      // Programa
+      const tdProg  = document.createElement("td");
+      const spanProg = document.createElement("span");
+      spanProg.className   = f.programa ? "badge badge-green" : "badge badge-gray";
+      spanProg.textContent = f.programa || "—";
+      tdProg.appendChild(spanProg);
 
-    // Evidencias (pendiente)
-    const tdEv  = document.createElement("td");
-    tdEv.textContent = "—";
+      // Nombre del curso
+      const tdNombre  = document.createElement("td");
+      tdNombre.textContent = f.nombre;
 
-    // Botón acción
-    const tdBtn = document.createElement("td");
-    const btnEv = document.createElement("button");
-    btnEv.className   = "btn btn-ghost btn-sm";
-    btnEv.textContent = "Ver evidencias";
-    btnEv.addEventListener("click", () => verEvidencias(f.id, f.codigo, f.nombre));
-    tdBtn.appendChild(btnEv);
+      // Pendientes (badge)
+      const tdEv = document.createElement("td");
+      const pend = typeof f.pendientes === "number" ? f.pendientes : null;
+      if (pend === null) {
+        const s = document.createElement("span");
+        s.className = "badge badge-gray";
+        s.textContent = "Sin escanear";
+        tdEv.appendChild(s);
+      } else if (pend === 0) {
+        const s = document.createElement("span");
+        s.className = "badge badge-green";
+        s.textContent = "Al día";
+        tdEv.appendChild(s);
+      } else {
+        const s = document.createElement("span");
+        s.className = "badge badge-yellow";
+        s.textContent = `${pend} pendiente${pend !== 1 ? "s" : ""}`;
+        tdEv.appendChild(s);
+      }
 
-    tr.append(tdCod, tdProg, tdNombre, tdEv, tdBtn);
-    tbody.appendChild(tr);
-  }
+      // Acciones
+      const tdBtn = document.createElement("td");
+      tdBtn.style.whiteSpace = "nowrap";
+
+      const btnEv = document.createElement("button");
+      btnEv.className   = "btn btn-ghost btn-sm";
+      btnEv.textContent = "Ver evidencias";
+      btnEv.addEventListener("click", () => verEvidencias(f.id, f.codigo, f.nombre));
+      btnEv.disabled = !!f.archivedAt;
+      tdBtn.appendChild(btnEv);
+
+      const btnArch = document.createElement("button");
+      btnArch.className = "btn btn-ghost btn-sm btn-icon";
+      btnArch.style.marginLeft = ".4rem";
+      btnArch.textContent = f.archivedAt ? "Restaurar" : "Archivar";
+      btnArch.title = f.archivedAt ? "Restaurar ficha" : "Archivar ficha";
+      btnArch.addEventListener("click", () => archivarFicha(f.id, !f.archivedAt));
+      tdBtn.appendChild(btnArch);
+
+      tr.append(tdCod, tdProg, tdNombre, tdEv, tdBtn);
+      tbody.appendChild(tr);
+    }
   } catch (err) {
-    console.error("renderFichas crashed", err);
     setScanStatus(`Error al renderizar: ${err.message}`, false);
   }
 }
@@ -384,15 +443,33 @@ function verEvidencias(fichaId, codigo, nombre) {
   // Footer
   const footer = document.createElement("div");
   footer.className = "modal-footer";
+
   const status = document.createElement("span");
   status.id = "evidencias-status";
   status.className = "job-status";
+
+  const toggleWrap = document.createElement("label");
+  toggleWrap.style.cssText = "display:flex;align-items:center;gap:.4rem;font-size:.8rem;color:var(--gray-600);cursor:pointer;margin-right:auto;";
+  const toggleCb = document.createElement("input");
+  toggleCb.type = "checkbox";
+  toggleCb.id = "toggle-ver-cerradas";
+  toggleCb.checked = _ui.verCerradas;
+  toggleCb.addEventListener("change", async () => {
+    _ui.verCerradas = toggleCb.checked;
+    await cargarEvidencias(fichaId);
+  });
+  const toggleLbl = document.createElement("span");
+  toggleLbl.id = "toggle-ver-cerradas-label";
+  toggleLbl.textContent = "Ver cerradas";
+  toggleWrap.append(toggleCb, toggleLbl);
+
   const scanBtn = document.createElement("button");
   scanBtn.id = "btn-scan-evidencias";
   scanBtn.className = "btn btn-primary btn-sm";
   scanBtn.textContent = "Escanear evidencias";
   scanBtn.addEventListener("click", () => scanEvidencias(fichaId));
-  footer.append(status, scanBtn);
+
+  footer.append(toggleWrap, status, scanBtn);
 
   modal.append(header, body, footer);
   backdrop.appendChild(modal);
@@ -422,7 +499,8 @@ async function cargarEvidencias(fichaId) {
   const body = document.getElementById("evidencias-body");
   if (!body) return;
   try {
-    const res = await authFetch(`/api/fichas/${encodeURIComponent(fichaId)}/evidencias`);
+    const qs  = _ui.verCerradas ? "?incluirCerradas=1" : "";
+    const res = await authFetch(`/api/fichas/${encodeURIComponent(fichaId)}/evidencias${qs}`);
     if (!res.ok) {
       const txt = await res.text().catch(() => "");
       body.innerHTML = "";
@@ -433,7 +511,7 @@ async function cargarEvidencias(fichaId) {
       return;
     }
     const data = await res.json();
-    renderEvidencias(data.evidencias || []);
+    renderEvidencias(data.evidencias || [], data.cerradasCount || 0, fichaId);
   } catch (err) {
     if (!getJwt()) return;
     body.innerHTML = "";
@@ -444,15 +522,23 @@ async function cargarEvidencias(fichaId) {
   }
 }
 
-function renderEvidencias(evidencias) {
+function renderEvidencias(evidencias, cerradasCount, fichaId) {
   const body = document.getElementById("evidencias-body");
   if (!body) return;
   body.innerHTML = "";
 
+  // Actualizar etiqueta del toggle con contador
+  const lbl = document.getElementById("toggle-ver-cerradas-label");
+  if (lbl) lbl.textContent = `Ver cerradas (${cerradasCount || 0})`;
+
   if (!evidencias.length) {
     const p = document.createElement("p");
     p.className = "evidencia-empty";
-    p.textContent = "Aún no hay evidencias escaneadas para esta ficha. Pulsa “Escanear evidencias”.";
+    p.textContent = _ui.verCerradas
+      ? "No hay evidencias en esta ficha. Pulsa “Escanear evidencias”."
+      : (cerradasCount > 0
+          ? `Todas las evidencias están al día (${cerradasCount} cerradas). Activa “Ver cerradas” para revisarlas.`
+          : "Aún no hay evidencias escaneadas para esta ficha. Pulsa “Escanear evidencias”.");
     body.appendChild(p);
     return;
   }
@@ -460,6 +546,7 @@ function renderEvidencias(evidencias) {
   for (const ev of evidencias) {
     const row = document.createElement("div");
     row.className = "evidencia-row";
+    if (ev.cerradaAt) row.classList.add("evidencia-cerrada");
 
     const left = document.createElement("div");
     const name = document.createElement("div");
@@ -469,8 +556,15 @@ function renderEvidencias(evidencias) {
     meta.style.fontSize = ".75rem";
     meta.style.color = "var(--gray-600)";
     const fecha = ev.ultimoScan ? new Date(ev.ultimoScan).toLocaleString("es-CO") : "sin escaneo";
-    meta.textContent = `Total: ${ev.total} · último: ${fecha}`;
+    const cerradaTxt = ev.cerradaAt ? ` · cerrada ${new Date(ev.cerradaAt).toLocaleDateString("es-CO")}` : "";
+    meta.textContent = `Total: ${ev.total} · último: ${fecha}${cerradaTxt}`;
     left.append(name, meta);
+
+    const right = document.createElement("div");
+    right.style.display = "flex";
+    right.style.flexDirection = "column";
+    right.style.gap = ".4rem";
+    right.style.alignItems = "flex-end";
 
     const counts = document.createElement("div");
     counts.className = "evidencia-counts";
@@ -480,8 +574,48 @@ function renderEvidencias(evidencias) {
       makeBadge(`Sin entregar ${ev.sinEntregar}`, "badge-gray"),
     );
 
-    row.append(left, counts);
+    const actions = document.createElement("div");
+    actions.style.display = "flex";
+    actions.style.gap = ".4rem";
+
+    if (ev.href) {
+      const open = document.createElement("a");
+      open.href = ev.href;
+      open.target = "_blank";
+      open.rel = "noopener";
+      open.className = "btn btn-ghost btn-sm";
+      open.textContent = "Abrir en Zajuna";
+      actions.appendChild(open);
+    }
+
+    const toggleBtn = document.createElement("button");
+    toggleBtn.className = "btn btn-ghost btn-sm";
+    toggleBtn.textContent = ev.cerradaAt ? "Reabrir" : "Cerrar";
+    toggleBtn.title = ev.cerradaAt ? "Reabrir evidencia" : "Marcar como cerrada (ocultar)";
+    toggleBtn.addEventListener("click", () => cerrarEvidencia(ev.id, !ev.cerradaAt, fichaId));
+    actions.appendChild(toggleBtn);
+
+    right.append(counts, actions);
+    row.append(left, right);
     body.appendChild(row);
+  }
+}
+
+async function cerrarEvidencia(evidenciaId, cerrada, fichaId) {
+  try {
+    const res = await authFetch(`/api/evidencias/${encodeURIComponent(evidenciaId)}`, {
+      method: "PATCH",
+      body:   JSON.stringify({ cerrada: !!cerrada }),
+    });
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      setEvidenciasStatus(`No se pudo ${cerrada ? "cerrar" : "reabrir"} (${res.status}): ${txt.slice(0,150)}`, false);
+      return;
+    }
+    await cargarEvidencias(fichaId);
+  } catch (err) {
+    if (!getJwt()) return;
+    setEvidenciasStatus(`Error de red: ${err.message}`, false);
   }
 }
 

@@ -115,6 +115,10 @@
             Escanear fichas
           </button>
           <span id="scan-fichas-status" class="job-status"></span>
+          <label class="toggle-archivadas" style="margin-left:auto;display:flex;align-items:center;gap:.4rem;font-size:.85rem;color:var(--gray-600);cursor:pointer;">
+            <input type="checkbox" id="toggle-ver-archivadas" onchange="toggleVerArchivadas(this.checked)" />
+            Ver archivadas
+          </label>
         </div>
       </section>
 
@@ -134,8 +138,8 @@
                   <th>Código</th>
                   <th>Programa</th>
                   <th>Nombre del curso</th>
-                  <th>Evidencias</th>
-                  <th>Acción</th>
+                  <th>Pendientes</th>
+                  <th>Acciones</th>
                 </tr>
               </thead>
               <tbody id="fichas-tbody"></tbody>

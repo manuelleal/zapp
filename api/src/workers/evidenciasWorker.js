@@ -37,7 +37,7 @@ const worker = new Worker("evidencias", async (job) => {
       const ev = evidencias[i];
       const entregas = await revisarEntregas(page, ev.actId);
 
-      // Upsert evidencia
+      // Upsert evidencia (preserva cerradaAt actual)
       const evDb = await prisma.evidencia.upsert({
         where:  { fichaId_href: { fichaId, href: ev.href } },
         update: { nombre: ev.texto },
@@ -84,6 +84,14 @@ const worker = new Worker("evidencias", async (job) => {
         else if (entrega.estado === "sin_entregar") sinEntregar++;
       }
 
+      // Auto-cierre: si no quedan pendientes ni sin_entregar, marcar cerradaAt
+      // Si vuelven a aparecer pendientes/sin_entregar, reabrir (cerradaAt = null)
+      const sinTrabajoPendiente = pendientes === 0 && sinEntregar === 0 && entregas.length > 0;
+      await prisma.evidencia.update({
+        where: { id: evDb.id },
+        data:  { cerradaAt: sinTrabajoPendiente ? (evDb.cerradaAt || new Date()) : null },
+      });
+
       resumen.push({
         nombre:     ev.texto,
         href:       ev.href,
@@ -91,6 +99,7 @@ const worker = new Worker("evidencias", async (job) => {
         calificados,
         sinEntregar,
         total:      entregas.length,
+        autoCerrada: sinTrabajoPendiente,
       });
 
       const progreso = Math.round(50 + ((i + 1) / evidencias.length) * 40);

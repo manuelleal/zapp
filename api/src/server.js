@@ -40,6 +40,7 @@ fastify.register(require("./routes/auth"));
 fastify.register(require("./routes/fichas"));
 fastify.register(require("./routes/jobs"));
 fastify.register(require("./routes/evidencias"));
+fastify.register(require("./routes/archivar"));
 
 // ─── WORKER ──────────────────────────────────────────────────────────────────
 
