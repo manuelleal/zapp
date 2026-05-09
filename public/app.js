@@ -266,7 +266,7 @@ async function cargarFichas() {
       return;
     }
     const data = await res.json();
-    renderFichas(data.fichas || []);
+    renderFichas(data.fichas || [], data.archivadasCount || 0);
   } catch (err) {
     if (!getJwt()) return;
     setScanStatus(`Error de red: ${err.message}`, false);
@@ -299,7 +299,7 @@ async function archivarFicha(fichaId, archivada) {
 }
 
 // ─── RENDER FICHAS ────────────────────────────────────────────────────────────
-function renderFichas(fichas) {
+function renderFichas(fichas, archivadasCount = 0) {
   try {
     const section = document.getElementById("fichas-section");
     const empty   = document.getElementById("empty-section");
@@ -312,6 +312,15 @@ function renderFichas(fichas) {
       section.classList.remove("visible");
       section.style.display = "none";
       empty.style.display   = "";
+      // Mensaje contextual segun haya o no archivadas
+      const msg = empty.querySelector("p");
+      if (msg) {
+        if (!_ui.verArchivadas && archivadasCount > 0) {
+          msg.innerHTML = `No hay fichas activas. Tienes <strong>${archivadasCount} archivada${archivadasCount !== 1 ? "s" : ""}</strong>. Activa <strong>Ver archivadas</strong> arriba para verlas.`;
+        } else {
+          msg.innerHTML = `Aún no tienes fichas escaneadas.<br>Haz clic en <strong>Escanear fichas</strong> para empezar.`;
+        }
+      }
       return;
     }
 

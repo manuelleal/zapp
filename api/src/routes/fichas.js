@@ -41,22 +41,32 @@ async function fichasRoutes(fastify) {
       },
     });
 
+    // Conteo de archivadas (siempre, para que la UI pueda dar pista
+    // "todas estan archivadas, activa Ver archivadas")
+    const archivadasCount = await prisma.ficha.count({
+      where: { userId: req.user.id, archivedAt: { not: null } },
+    });
+
     return {
+      archivadasCount,
       fichas: fichas.map(f => {
-        let pendientes = 0;
+        let pendientes    = 0;
+        let totalEntregas = 0;
         for (const ev of f.evidencias) {
           for (const e of ev.entregas) {
+            totalEntregas++;
             if (e.estado === "pendiente") pendientes++;
           }
         }
         return {
-          id:              f.id,
-          codigo:          f.codigo,
-          nombre:          f.nombre,
-          courseId:        f.courseId,
-          programa:        f.programa,
-          archivedAt:      f.archivedAt,
-          pendientes,
+          id:               f.id,
+          codigo:           f.codigo,
+          nombre:           f.nombre,
+          courseId:         f.courseId,
+          programa:         f.programa,
+          archivedAt:       f.archivedAt,
+          // null = ficha jamas escaneada (sin entregas en DB)
+          pendientes:       totalEntregas === 0 ? null : pendientes,
           tieneCodigoFicha: true,
         };
       }),
