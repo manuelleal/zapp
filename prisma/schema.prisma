@@ -82,11 +82,12 @@ model Evidencia {
 }
 
 model Aprendiz {
-  id       String    @id @default(cuid())
-  fichaId  String
-  nombre   String
-  ficha    Ficha     @relation(fields: [fichaId], references: [id])
-  entregas Entrega[]
+  id        String    @id @default(cuid())
+  fichaId   String
+  nombre    String
+  moodleId  String?
+  ficha     Ficha     @relation(fields: [fichaId], references: [id])
+  entregas  Entrega[]
 
   @@unique([fichaId, nombre])
 }

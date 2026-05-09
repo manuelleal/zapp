@@ -49,11 +49,11 @@ const worker = new Worker("evidencias", async (job) => {
       let sinEntregar = 0;
 
       for (const entrega of entregas) {
-        // Upsert aprendiz
+        // Upsert aprendiz (actualiza moodleId si viene del scraper)
         const aprendizDb = await prisma.aprendiz.upsert({
           where:  { fichaId_nombre: { fichaId, nombre: entrega.nombre } },
-          update: {},
-          create: { fichaId, nombre: entrega.nombre },
+          update: entrega.aprendizMoodleId ? { moodleId: entrega.aprendizMoodleId } : {},
+          create: { fichaId, nombre: entrega.nombre, moodleId: entrega.aprendizMoodleId || null },
         });
 
         // Upsert entrega con historial si el estado cambió

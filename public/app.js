@@ -571,8 +571,11 @@ function renderEvidencias(evidencias, cerradasCount, fichaId) {
   }
 
   for (const ev of evidencias) {
+    const wrapper = document.createElement("div");
+    wrapper.className = "evidencia-wrapper";
+
     const row = document.createElement("div");
-    row.className = "evidencia-row";
+    row.className = "evidencia-row evidencia-row--clickable";
     if (ev.cerradaAt) row.classList.add("evidencia-cerrada");
 
     const left = document.createElement("div");
@@ -605,13 +608,19 @@ function renderEvidencias(evidencias, cerradasCount, fichaId) {
     actions.style.display = "flex";
     actions.style.gap = ".4rem";
 
+    const expandBtn = document.createElement("button");
+    expandBtn.className = "btn btn-ghost btn-sm";
+    expandBtn.textContent = "▸ Aprendices";
+    expandBtn.title = "Ver lista de aprendices y sus estados";
+    actions.appendChild(expandBtn);
+
     if (ev.href) {
       const open = document.createElement("a");
       open.href = ev.href;
       open.target = "_blank";
       open.rel = "noopener";
       open.className = "btn btn-ghost btn-sm";
-      open.textContent = "Abrir en Zajuna";
+      open.textContent = "Zajuna";
       actions.appendChild(open);
     }
 
@@ -619,12 +628,24 @@ function renderEvidencias(evidencias, cerradasCount, fichaId) {
     toggleBtn.className = "btn btn-ghost btn-sm";
     toggleBtn.textContent = ev.cerradaAt ? "Reabrir" : "Cerrar";
     toggleBtn.title = ev.cerradaAt ? "Reabrir evidencia" : "Marcar como cerrada (ocultar)";
-    toggleBtn.addEventListener("click", () => cerrarEvidencia(ev.id, !ev.cerradaAt, fichaId));
+    toggleBtn.addEventListener("click", (e) => { e.stopPropagation(); cerrarEvidencia(ev.id, !ev.cerradaAt, fichaId); });
     actions.appendChild(toggleBtn);
 
     right.append(counts, actions);
     row.append(left, right);
-    body.appendChild(row);
+
+    // Panel expandible de aprendices
+    const panel = document.createElement("div");
+    panel.className = "aprendices-panel";
+    panel.style.display = "none";
+
+    expandBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleAprendicesPanel(ev.id, panel, expandBtn);
+    });
+
+    wrapper.append(row, panel);
+    body.appendChild(wrapper);
   }
 }
 
@@ -643,6 +664,124 @@ async function cerrarEvidencia(evidenciaId, cerrada, fichaId) {
   } catch (err) {
     if (!getJwt()) return;
     setEvidenciasStatus(`Error de red: ${err.message}`, false);
+  }
+}
+
+// ─── PANEL DE APRENDICES ─────────────────────────────────────────────────────
+const ZAJUNA_BASE = "https://zajuna.sena.edu.co/zajuna";
+
+async function toggleAprendicesPanel(evidenciaId, panel, btn) {
+  // Toggle visibility
+  if (panel.style.display !== "none") {
+    panel.style.display = "none";
+    btn.textContent = "▸ Aprendices";
+    return;
+  }
+
+  btn.textContent = "▾ Aprendices";
+  panel.style.display = "";
+  panel.innerHTML = '<p class="aprendices-loading">Cargando aprendices...</p>';
+
+  try {
+    const res = await authFetch(`/api/evidencias/${encodeURIComponent(evidenciaId)}/entregas`);
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      panel.innerHTML = `<p class="aprendices-loading">Error (${res.status}): ${txt.slice(0,150)}</p>`;
+      return;
+    }
+    const data = await res.json();
+    renderAprendices(data, panel);
+  } catch (err) {
+    panel.innerHTML = `<p class="aprendices-loading">Error de red: ${err.message}</p>`;
+  }
+}
+
+function renderAprendices(data, panel) {
+  panel.innerHTML = "";
+  const { entregas, actId } = data;
+
+  if (!entregas.length) {
+    panel.innerHTML = '<p class="aprendices-loading">Sin entregas registradas.</p>';
+    return;
+  }
+
+  // Filtros rapidos
+  const toolbar = document.createElement("div");
+  toolbar.className = "aprendices-toolbar";
+  const counts = { pendiente: 0, calificado: 0, sin_entregar: 0 };
+  for (const e of entregas) counts[e.estado] = (counts[e.estado] || 0) + 1;
+
+  const filters = [
+    { label: `Todos (${entregas.length})`, value: "" },
+    { label: `Pendientes (${counts.pendiente})`, value: "pendiente" },
+    { label: `Calificados (${counts.calificado})`, value: "calificado" },
+    { label: `Sin entregar (${counts.sin_entregar})`, value: "sin_entregar" },
+  ];
+
+  let activeFilter = "";
+  for (const f of filters) {
+    const b = document.createElement("button");
+    b.className = "btn btn-ghost btn-xs" + (f.value === "" ? " btn-active" : "");
+    b.textContent = f.label;
+    b.addEventListener("click", () => {
+      activeFilter = f.value;
+      toolbar.querySelectorAll("button").forEach(x => x.classList.remove("btn-active"));
+      b.classList.add("btn-active");
+      renderAprendicesList(entregas, list, actId, activeFilter);
+    });
+    toolbar.appendChild(b);
+  }
+
+  const list = document.createElement("div");
+  list.className = "aprendices-list";
+
+  panel.append(toolbar, list);
+  renderAprendicesList(entregas, list, actId, "");
+}
+
+function renderAprendicesList(entregas, container, actId, filter) {
+  container.innerHTML = "";
+  const filtered = filter ? entregas.filter(e => e.estado === filter) : entregas;
+
+  for (const e of filtered) {
+    const row = document.createElement("div");
+    row.className = "aprendiz-row";
+
+    const nameEl = document.createElement("span");
+    nameEl.className = "aprendiz-nombre";
+    nameEl.textContent = e.aprendiz.nombre;
+
+    const badgeCls = e.estado === "pendiente" ? "badge-yellow"
+                   : e.estado === "calificado" ? "badge-green"
+                   : "badge-gray";
+    const badge = document.createElement("span");
+    badge.className = `badge ${badgeCls}`;
+    badge.textContent = e.estado === "pendiente" ? "Pendiente"
+                      : e.estado === "calificado" ? "Calificado"
+                      : "Sin entregar";
+
+    const actionsEl = document.createElement("span");
+    actionsEl.className = "aprendiz-actions";
+
+    if (actId && e.aprendiz.moodleId) {
+      const link = document.createElement("a");
+      link.href = `${ZAJUNA_BASE}/mod/assign/view.php?id=${actId}&rownum=0&action=grader&userid=${e.aprendiz.moodleId}`;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.className = "btn btn-ghost btn-xs";
+      link.textContent = "Abrir entrega";
+      actionsEl.appendChild(link);
+    }
+
+    row.append(nameEl, badge, actionsEl);
+    container.appendChild(row);
+  }
+
+  if (!filtered.length) {
+    const p = document.createElement("p");
+    p.className = "aprendices-loading";
+    p.textContent = "Ningún aprendiz con este filtro.";
+    container.appendChild(p);
   }
 }
 
