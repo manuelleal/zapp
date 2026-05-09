@@ -423,7 +423,10 @@ function verEvidencias(fichaId, codigo, nombre) {
   const subtitle = document.createElement("div");
   subtitle.className = "modal-subtitle";
   subtitle.textContent = nombre || "";
-  titleWrap.append(title, subtitle);
+  const updated = document.createElement("div");
+  updated.id = "evidencias-updated";
+  updated.className = "modal-updated";
+  titleWrap.append(title, subtitle, updated);
   const closeBtn = document.createElement("button");
   closeBtn.className = "modal-close";
   closeBtn.setAttribute("aria-label", "Cerrar");
@@ -466,7 +469,8 @@ function verEvidencias(fichaId, codigo, nombre) {
   const scanBtn = document.createElement("button");
   scanBtn.id = "btn-scan-evidencias";
   scanBtn.className = "btn btn-primary btn-sm";
-  scanBtn.textContent = "Escanear evidencias";
+  scanBtn.textContent = "Refrescar";
+  scanBtn.title = "Volver a consultar Zajuna y actualizar el cache local";
   scanBtn.addEventListener("click", () => scanEvidencias(fichaId));
 
   footer.append(toggleWrap, status, scanBtn);
@@ -531,14 +535,28 @@ function renderEvidencias(evidencias, cerradasCount, fichaId) {
   const lbl = document.getElementById("toggle-ver-cerradas-label");
   if (lbl) lbl.textContent = `Ver cerradas (${cerradasCount || 0})`;
 
+  // Actualizar "Actualizado hace X" en el header
+  const upd = document.getElementById("evidencias-updated");
+  if (upd) {
+    const fechas = evidencias.map(e => e.ultimoScan).filter(Boolean).map(s => new Date(s).getTime());
+    if (fechas.length) {
+      const maxMs = Math.max(...fechas);
+      upd.textContent = `Actualizado ${tiempoRelativo(maxMs)} · datos en cache`;
+      upd.classList.toggle("modal-updated--stale", (Date.now() - maxMs) > 24 * 60 * 60 * 1000);
+    } else {
+      upd.textContent = "Sin escaneos previos · pulsa Refrescar";
+      upd.classList.add("modal-updated--stale");
+    }
+  }
+
   if (!evidencias.length) {
     const p = document.createElement("p");
     p.className = "evidencia-empty";
     p.textContent = _ui.verCerradas
-      ? "No hay evidencias en esta ficha. Pulsa “Escanear evidencias”."
+      ? "No hay evidencias en esta ficha. Pulsa “Refrescar”."
       : (cerradasCount > 0
-          ? `Todas las evidencias están al día (${cerradasCount} cerradas). Activa “Ver cerradas” para revisarlas.`
-          : "Aún no hay evidencias escaneadas para esta ficha. Pulsa “Escanear evidencias”.");
+          ? `Todas las evidencias están cerradas (${cerradasCount}). Activa “Ver cerradas” para revisarlas.`
+          : "Aún no hay evidencias escaneadas para esta ficha. Pulsa “Refrescar”.");
     body.appendChild(p);
     return;
   }
@@ -624,6 +642,19 @@ function makeBadge(text, cls) {
   s.className = `badge ${cls || ""}`;
   s.textContent = text;
   return s;
+}
+
+// "hace 5 min" / "hace 2 h" / "hace 3 d" / "el 2026-05-01"
+function tiempoRelativo(ms) {
+  const diffSec = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+  if (diffSec < 60)         return `hace ${diffSec} s`;
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60)         return `hace ${diffMin} min`;
+  const diffH = Math.floor(diffMin / 60);
+  if (diffH < 24)           return `hace ${diffH} h`;
+  const diffD = Math.floor(diffH / 24);
+  if (diffD < 30)           return `hace ${diffD} d`;
+  return `el ${new Date(ms).toLocaleDateString("es-CO")}`;
 }
 
 async function scanEvidencias(fichaId) {

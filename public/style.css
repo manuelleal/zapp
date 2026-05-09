@@ -680,6 +680,12 @@ details[open] summary::after {
 .evidencia-empty {
   text-align: center; padding: 2rem 1rem; color: var(--gray-600);
 }
+.modal-updated {
+  margin-top: .35rem;
+  font-size: .72rem;
+  color: var(--gray-400);
+}
+.modal-updated.modal-updated--stale { color: var(--warning); }
 .evidencia-row.evidencia-cerrada {
   opacity: .55;
 }
