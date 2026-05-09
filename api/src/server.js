@@ -1,11 +1,21 @@
 require("dotenv").config({ path: require("path").resolve(__dirname, "../../.env") });
 
 const path    = require("path");
-const fastify = require("fastify")({ logger: true });
+const fastify = require("fastify")({
+  logger: {
+    level: "info",
+    serializers: {
+      req(req) { return { method: req.method, url: req.url, hostname: req.hostname }; },
+    },
+  },
+});
 
 // ─── PLUGINS ─────────────────────────────────────────────────────────────────
 
-fastify.register(require("@fastify/cors"), { origin: "*" });
+fastify.register(require("@fastify/cors"), {
+  origin: process.env.ALLOWED_ORIGIN || false,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+});
 
 fastify.register(require("@fastify/jwt"), { secret: process.env.JWT_SECRET });
 

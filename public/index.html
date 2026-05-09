@@ -4,24 +4,16 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Zajuna Manager</title>
-  <meta name="description" content="Gestión de fichas SENA para instructores" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 
-  <!-- ── HEADER ─────────────────────────────────────────────────────────────── -->
-  <header class="header" role="banner">
-    <div class="header-inner">
-
-      <div class="header-brand">
-        <div class="header-logo" aria-hidden="true">
-          <!-- Ícono de fichas/grid -->
-          <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-            <rect x="3" y="3" width="7" height="7" rx="1.5"/>
-            <rect x="14" y="3" width="7" height="7" rx="1.5"/>
-            <rect x="3" y="14" width="7" height="7" rx="1.5"/>
-            <rect x="14" y="14" width="7" height="7" rx="1.5"/>
-          </svg>
+  <!-- ── AUTH VIEW ─────────────────────────────────────────────────────────── -->
+  <div id="auth-view">
+    <div class="auth-wrap">
+      <div class="auth-brand">
+        <div class="header-logo" style="width:2.5rem;height:2.5rem;">
+          <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
         </div>
         <div>
           <div class="header-title">Zajuna Manager</div>
@@ -29,137 +21,143 @@
         </div>
       </div>
 
-      <div class="header-user" aria-label="Usuario actual">
-        <div class="header-avatar" aria-hidden="true">JD</div>
-        <span>Juan Docente</span>
+      <!-- tabs -->
+      <div class="auth-tabs">
+        <button class="auth-tab active" id="tab-login" onclick="showTab('login')">Iniciar sesión</button>
+        <button class="auth-tab" id="tab-register" onclick="showTab('register')">Registrarse</button>
       </div>
 
+      <!-- login form -->
+      <form id="form-login" class="auth-form" onsubmit="handleLogin(event)">
+        <div class="field">
+          <label>Email</label>
+          <input type="email" id="login-email" placeholder="tu@email.com" required autocomplete="email" />
+        </div>
+        <div class="field">
+          <label>Contraseña</label>
+          <input type="password" id="login-pass" placeholder="••••••••" required autocomplete="current-password" />
+        </div>
+        <div id="login-error" class="auth-error" style="display:none"></div>
+        <button type="submit" class="btn btn-primary" style="width:100%">Entrar</button>
+      </form>
+
+      <!-- register form -->
+      <form id="form-register" class="auth-form" style="display:none" onsubmit="handleRegister(event)">
+        <div class="field">
+          <label>Nombre completo</label>
+          <input type="text" id="reg-nombre" placeholder="Juan Pérez" required />
+        </div>
+        <div class="field">
+          <label>Email</label>
+          <input type="email" id="reg-email" placeholder="tu@email.com" required />
+        </div>
+        <div class="field">
+          <label>Contraseña (plataforma)</label>
+          <input type="password" id="reg-pass" placeholder="••••••••" required />
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>Cédula Zajuna</label>
+            <input type="text" id="reg-zajuna-user" placeholder="1052499107" required />
+          </div>
+          <div class="field">
+            <label>Contraseña Zajuna</label>
+            <input type="password" id="reg-zajuna-pass" placeholder="••••••••" required />
+          </div>
+        </div>
+        <div class="field">
+          <label>Competencia</label>
+          <select id="reg-competencia" required>
+            <option value="" disabled selected>Selecciona tu competencia</option>
+            <option value="240202501" data-nombre="Inglés">Inglés (240202501)</option>
+            <option value="220501046" data-nombre="Bases de datos">Bases de datos (220501046)</option>
+            <option value="220501040" data-nombre="Análisis y desarrollo">Análisis y desarrollo (220501040)</option>
+            <option value="228118003" data-nombre="Programación de software">Programación de software (228118003)</option>
+          </select>
+        </div>
+        <div id="register-error" class="auth-error" style="display:none"></div>
+        <button type="submit" class="btn btn-primary" style="width:100%">Crear cuenta</button>
+      </form>
     </div>
-  </header>
+  </div>
 
-  <!-- ── CONTENIDO PRINCIPAL ────────────────────────────────────────────────── -->
-  <main class="main" role="main">
+  <!-- ── DASHBOARD VIEW ─────────────────────────────────────────────────────── -->
+  <div id="dashboard-view" style="display:none">
 
-    <!-- Aviso modo demo -->
-    <div class="alert alert-info" id="alert-info" role="status">
-      <span>ℹ️</span>
-      <span>
-        <strong>Modo demo:</strong> selecciona tu competencia y haz clic en
-        "Escanear mis fichas" para ver los datos de ejemplo.
-        Conecta el backend real descomentando el <code>fetch</code> en <code>app.js</code>.
-      </span>
-    </div>
-
-    <!-- ── SELECCIÓN DE COMPETENCIA ─────────────────────────────────────────── -->
-    <section class="card" aria-labelledby="comp-title">
-      <h2 class="card-title" id="comp-title">
-        <span class="icon" aria-hidden="true">🎓</span>
-        Selecciona tu competencia
-      </h2>
-      <div class="competencia-grid" id="competencia-grid" role="group" aria-label="Competencias disponibles">
-        <!-- Generado por app.js → initCompetencias() -->
+    <header class="header">
+      <div class="header-inner">
+        <div class="header-brand">
+          <div class="header-logo" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+          </div>
+          <div>
+            <div class="header-title">Zajuna Manager</div>
+            <div class="header-subtitle" id="header-competencia">—</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:1rem;">
+          <div class="header-user">
+            <div class="header-avatar" id="header-avatar">?</div>
+            <span id="header-nombre">—</span>
+          </div>
+          <button class="btn btn-ghost btn-sm" onclick="logout()">Salir</button>
+        </div>
       </div>
-    </section>
+    </header>
 
-    <!-- ── ACCIONES ─────────────────────────────────────────────────────────── -->
-    <section class="card" aria-label="Acciones de escaneo">
-      <div class="actions-row">
-        <button
-          id="btn-escanear"
-          class="btn btn-primary"
-          disabled
-          aria-busy="false"
-          aria-label="Escanear fichas asignadas en Zajuna"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-               stroke="currentColor" stroke-width="2.5"
-               stroke-linecap="round" stroke-linejoin="round"
-               aria-hidden="true">
-            <circle cx="11" cy="11" r="8"/>
-            <line x1="21" y1="21" x2="16.65" y2="16.65"/>
-          </svg>
-          Escanear mis fichas
-        </button>
+    <main class="main">
 
-        <p style="font-size:.82rem; color:var(--gray-600); margin:0;">
-          Selecciona una competencia para activar el escaneo.
+      <!-- Acciones globales -->
+      <section class="card">
+        <div class="actions-row">
+          <button id="btn-scan-fichas" class="btn btn-primary" onclick="scanFichas()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            Escanear fichas
+          </button>
+          <span id="scan-fichas-status" class="job-status"></span>
+        </div>
+      </section>
+
+      <!-- Fichas -->
+      <section id="fichas-section" class="results-section" style="display:none">
+        <div class="card" style="padding-bottom:0">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;">
+            <h2 class="card-title" style="margin-bottom:0">
+              <span class="icon">📋</span> Fichas
+            </h2>
+            <span id="fichas-count" class="badge badge-green"></span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Código</th>
+                  <th>Programa</th>
+                  <th>Nombre del curso</th>
+                  <th>Evidencias</th>
+                  <th>Acción</th>
+                </tr>
+              </thead>
+              <tbody id="fichas-tbody"></tbody>
+            </table>
+          </div>
+          <div style="height:1px;background:var(--gray-200);margin:1rem -1.5rem 0"></div>
+          <p style="padding:.6rem 0;font-size:.75rem;color:var(--gray-400);text-align:right">
+            Solo fichas con código de 7 dígitos · Datos de Zajuna/Moodle
+          </p>
+        </div>
+      </section>
+
+      <!-- Estado vacío -->
+      <section id="empty-section" class="card" style="display:none;text-align:center;padding:3rem 1.5rem">
+        <div class="empty-icon">📭</div>
+        <p style="margin:.5rem 0 1.5rem;color:var(--gray-600)">
+          Aún no tienes fichas escaneadas.<br>Haz clic en <strong>Escanear fichas</strong> para empezar.
         </p>
-      </div>
-    </section>
+      </section>
 
-    <!-- ── BARRA DE CARGA ───────────────────────────────────────────────────── -->
-    <div class="loading-banner" id="loading-banner" role="status" aria-live="polite">
-      <div class="spinner spinner-green" aria-hidden="true"></div>
-      <span>Escaneando fichas en Zajuna — esto puede tardar unos segundos…</span>
-      <div class="progress-bar-wrap" aria-hidden="true">
-        <div class="progress-bar-fill" id="progress-fill"></div>
-      </div>
-    </div>
-
-    <!-- ── RESULTADOS: TABLA DE FICHAS ─────────────────────────────────────── -->
-    <section class="results-section" id="results-section" aria-labelledby="fichas-title">
-
-      <div class="card" style="padding-bottom: 0;">
-        <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:.75rem; margin-bottom:1rem;">
-          <h2 class="card-title" id="fichas-title" style="margin-bottom:0;">
-            <span class="icon" aria-hidden="true">📋</span>
-            Fichas encontradas
-          </h2>
-          <div class="stats-row" id="stats-row" style="margin-bottom:0;"></div>
-        </div>
-
-        <div class="table-wrap">
-          <table aria-label="Tabla de fichas del instructor">
-            <thead>
-              <tr>
-                <th scope="col">Código</th>
-                <th scope="col">Programa</th>
-                <th scope="col">Nombre del curso</th>
-                <th scope="col" class="col-courseid">Course ID</th>
-                <th scope="col">Acción</th>
-              </tr>
-            </thead>
-            <tbody id="tabla-fichas-body">
-              <!-- Generado por app.js → renderFichas() -->
-            </tbody>
-          </table>
-        </div>
-
-        <!-- Separador visual antes del footer de la card -->
-        <div style="height:1px; background:var(--gray-200); margin:1rem -1.5rem 0;"></div>
-        <p style="padding:.65rem 0; font-size:.75rem; color:var(--gray-400); text-align:right;">
-          Datos obtenidos de Zajuna/Moodle · Solo fichas con código de 7 dígitos
-        </p>
-      </div>
-
-    </section>
-
-    <!-- ── OTROS CURSOS (colapsable) ─────────────────────────────────────────── -->
-    <section class="otros-section" id="otros-section" aria-label="Otros cursos sin código de ficha">
-      <details>
-        <summary>
-          <span style="display:flex; align-items:center; gap:.5rem;">
-            <span aria-hidden="true">📂</span>
-            Otros cursos sin código de ficha
-            <span
-              class="badge badge-gray"
-              id="otros-badge"
-              aria-label="cantidad de otros cursos"
-            >0</span>
-          </span>
-        </summary>
-        <div class="otros-list" id="otros-list">
-          <!-- Generado por app.js → renderFichas() -->
-        </div>
-      </details>
-    </section>
-
-  </main>
-
-  <!-- ── FOOTER ─────────────────────────────────────────────────────────────── -->
-  <footer class="footer" role="contentinfo">
-    Zajuna Manager &mdash; Herramienta para instructores SENA &mdash; MVP v0.1
-  </footer>
+    </main>
+  </div>
 
   <script src="app.js"></script>
 </body>

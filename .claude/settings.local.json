@@ -21,7 +21,11 @@
       "Bash(npx prisma *)",
       "Bash(dir /s /b)",
       "Bash(findstr /v node_modules)",
-      "Bash(findstr /v \".git\")"
+      "Bash(findstr /v \".git\")",
+      "Bash(docker-compose up *)",
+      "Bash(docker-compose ps *)",
+      "PowerShell(echo \"\" | npx prisma migrate dev --name add_raps_competencias 2>&1)",
+      "Bash(curl *)"
     ]
   }
 }

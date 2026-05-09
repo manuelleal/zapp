@@ -522,6 +522,165 @@ details[open] summary::after {
   gap: .35rem;
 }
 
+/* ── Auth view ────────────────────────────────────────────────── */
+#auth-view {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  background: var(--gray-100);
+}
+
+.auth-wrap {
+  background: var(--sena-white);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  border: 1px solid var(--gray-200);
+  padding: 2rem;
+  width: 100%;
+  max-width: 420px;
+}
+
+.auth-brand {
+  display: flex;
+  align-items: center;
+  gap: .65rem;
+  margin-bottom: 1.75rem;
+}
+
+.auth-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 2px solid var(--gray-200);
+  margin-bottom: 1.5rem;
+}
+
+.auth-tab {
+  flex: 1;
+  background: none;
+  border: none;
+  padding: .6rem 1rem;
+  font-family: inherit;
+  font-size: .88rem;
+  font-weight: 600;
+  color: var(--gray-600);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  transition: color var(--transition), border-color var(--transition);
+}
+
+.auth-tab:hover { color: var(--sena-green); }
+
+.auth-tab.active {
+  color: var(--sena-green);
+  border-bottom-color: var(--sena-green);
+}
+
+.auth-form { display: flex; flex-direction: column; gap: 1rem; }
+
+.field { display: flex; flex-direction: column; gap: .3rem; }
+
+.field label {
+  font-size: .82rem;
+  font-weight: 600;
+  color: var(--gray-800);
+}
+
+.field input,
+.field select {
+  padding: .55rem .75rem;
+  border: 1.5px solid var(--gray-200);
+  border-radius: var(--radius);
+  font-family: inherit;
+  font-size: .9rem;
+  color: var(--gray-900);
+  background: var(--sena-white);
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+
+.field input:focus,
+.field select:focus {
+  outline: none;
+  border-color: var(--sena-green);
+  box-shadow: 0 0 0 3px rgba(0,166,80,.1);
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: .75rem;
+}
+
+.auth-error {
+  background: #FFF5F5;
+  border: 1px solid #FEB2B2;
+  color: var(--danger);
+  border-radius: var(--radius);
+  padding: .55rem .85rem;
+  font-size: .83rem;
+  display: none;
+}
+
+/* ── Job status chip ──────────────────────────────────────────── */
+.job-status {
+  font-size: .82rem;
+  color: var(--gray-600);
+  font-style: italic;
+}
+
+.job-status--loading {
+  color: var(--sena-green-dark);
+  font-style: normal;
+  font-weight: 500;
+}
+
+/* ── Empty section ────────────────────────────────────────────── */
+#empty-section .empty-icon { font-size: 2.5rem; margin-bottom: .5rem; }
+
+/* ── Modal evidencias ─────────────────────────────────────────── */
+.modal-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.45);
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 2rem 1rem; z-index: 1000;
+  overflow-y: auto;
+}
+.modal {
+  background: #fff; border-radius: 12px;
+  width: 100%; max-width: 920px;
+  box-shadow: 0 20px 50px rgba(0,0,0,.25);
+  overflow: hidden;
+}
+.modal-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 1rem 1.25rem; border-bottom: 1px solid var(--gray-200);
+}
+.modal-title { font-weight: 600; font-size: 1.05rem; margin: 0; }
+.modal-subtitle { font-size: .8rem; color: var(--gray-600); margin-top: .15rem; }
+.modal-close {
+  background: none; border: none; font-size: 1.4rem; cursor: pointer;
+  color: var(--gray-600); padding: .25rem .5rem; border-radius: 6px;
+}
+.modal-close:hover { background: var(--gray-100); }
+.modal-body { padding: 1.25rem; }
+.modal-footer {
+  padding: .9rem 1.25rem; border-top: 1px solid var(--gray-200);
+  display: flex; gap: .75rem; align-items: center; justify-content: flex-end;
+  background: var(--gray-50, #fafafa);
+}
+.evidencia-row {
+  display: grid; grid-template-columns: 1fr auto; gap: .5rem 1rem;
+  padding: .75rem 0; border-bottom: 1px solid var(--gray-100);
+}
+.evidencia-row:last-child { border-bottom: none; }
+.evidencia-name { font-weight: 500; }
+.evidencia-counts { display: flex; gap: .4rem; flex-wrap: wrap; }
+.evidencia-empty {
+  text-align: center; padding: 2rem 1rem; color: var(--gray-600);
+}
+
 /* ── Footer ───────────────────────────────────────────────────── */
 .footer {
   text-align: center;

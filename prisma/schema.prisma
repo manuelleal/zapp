@@ -7,18 +7,48 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model Competencia {
+  id     String @id @default(cuid())
+  codigo String @unique
+  nombre String
+  raps   RAP[]
+  users  User[]
+}
+
+model RAP {
+  id            String      @id @default(cuid())
+  competenciaId String
+  codigo        String
+  descripcion   String
+  criterios     Criterio[]
+  feedbacks     AIFeedback[]
+  competencia   Competencia @relation(fields: [competenciaId], references: [id])
+
+  @@unique([competenciaId, codigo])
+}
+
+model Criterio {
+  id          String @id @default(cuid())
+  rapId       String
+  descripcion String
+  orden       Int    @default(0)
+  rap         RAP    @relation(fields: [rapId], references: [id])
+}
+
 model User {
-  id                String   @id @default(cuid())
+  id                String       @id @default(cuid())
   nombre            String
-  email             String   @unique
+  email             String       @unique
   passwordHash      String
   zajunaUserEnc     String
   zajunaPassEnc     String
   competenciaCodigo String
   competenciaNombre String
-  createdAt         DateTime @default(now())
+  competenciaId     String?
+  createdAt         DateTime     @default(now())
   fichas            Ficha[]
   jobs              Job[]
+  competencia       Competencia? @relation(fields: [competenciaId], references: [id])
 }
 
 model Ficha {
@@ -83,12 +113,15 @@ model HistorialEstado {
 }
 
 model AIFeedback {
-  id          String   @id @default(cuid())
-  entregaId   String
-  tipo        String
-  contenido   String
-  generadoAt  DateTime @default(now())
-  entrega     Entrega  @relation(fields: [entregaId], references: [id])
+  id                   String   @id @default(cuid())
+  entregaId            String
+  rapId                String?
+  tipo                 String
+  calificacionSugerida String?
+  contenido            String
+  generadoAt           DateTime @default(now())
+  entrega              Entrega  @relation(fields: [entregaId], references: [id])
+  rap                  RAP?     @relation(fields: [rapId], references: [id])
 }
 
 model Job {

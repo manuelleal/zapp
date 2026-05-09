@@ -1,312 +1,32 @@
-/**
- * Zajuna Manager — app.js
- * Lógica del frontend. Funciona con datos mock sin backend.
- * Para conectar al backend real, descomentar la sección "FETCH REAL".
- */
-
 "use strict";
+console.log("app.js v3 cargado - modal evidencias");
 
-// ─── COMPETENCIAS (espejo de scraper/fichas.js) ───────────────────────────────
+// ─── JWT ─────────────────────────────────────────────────────────────────────
+const JWT_KEY  = "zajuna_jwt";
+const getJwt   = ()  => localStorage.getItem(JWT_KEY);
+const setJwt   = (t) => localStorage.setItem(JWT_KEY, t);
+const clearJwt = ()  => localStorage.removeItem(JWT_KEY);
 
-const COMPETENCIAS = [
-  { nombre: "Inglés",                    codigo: "240202501" },
-  { nombre: "Bases de datos",            codigo: "220501046" },
-  { nombre: "Programación de software",  codigo: "220501046" },
-  { nombre: "Análisis y desarrollo",     codigo: "220501040" },
-];
-
-// ─── DATOS MOCK ───────────────────────────────────────────────────────────────
-// Estructura exacta que retorna descubrirFichas() en scraper/fichas.js
-
-const MOCK_DATA = {
-  fichas: [
-    {
-      codigo: "3186683",
-      nombre: "ADSO - Análisis y Desarrollo de Software 3186683",
-      courseId: 51083,
-      programa: "ADSO",
-      tieneCodigoFicha: true,
-    },
-    {
-      codigo: "2758941",
-      nombre: "ADSO - Análisis y Desarrollo de Software 2758941",
-      courseId: 48210,
-      programa: "ADSO",
-      tieneCodigoFicha: true,
-    },
-    {
-      codigo: "3042217",
-      nombre: "Inglés B1 - Ficha 3042217",
-      courseId: 49905,
-      programa: "",
-      tieneCodigoFicha: true,
-    },
-    {
-      codigo: "2994530",
-      nombre: "Programación de Software - Ficha 2994530",
-      courseId: 47341,
-      programa: "PROG. SOFTWARE",
-      tieneCodigoFicha: true,
-    },
-  ],
-  otrosCursos: [
-    {
-      courseId: 12345,
-      nombre: "Inducción SENA 2025",
-      programa: "",
-      tieneCodigoFicha: false,
-    },
-    {
-      courseId: 99001,
-      nombre: "Comunidad de Práctica Instructores",
-      programa: "",
-      tieneCodigoFicha: false,
-    },
-    {
-      courseId: 99002,
-      nombre: "Bienestar y Salud Ocupacional",
-      programa: "",
-      tieneCodigoFicha: false,
-    },
-  ],
-};
-
-// ─── ESTADO GLOBAL ────────────────────────────────────────────────────────────
-
-const state = {
-  competenciaSeleccionada: null,
-  cargando: false,
-  datos: null,
-};
-
-// ─── REFERENCIAS AL DOM ───────────────────────────────────────────────────────
-
-const dom = {
-  scanBtn:         () => document.getElementById("btn-escanear"),
-  loadingBanner:   () => document.getElementById("loading-banner"),
-  progressFill:    () => document.getElementById("progress-fill"),
-  resultsSection:  () => document.getElementById("results-section"),
-  tablaBody:       () => document.getElementById("tabla-fichas-body"),
-  statsRow:        () => document.getElementById("stats-row"),
-  otrosSection:    () => document.getElementById("otros-section"),
-  otrosList:       () => document.getElementById("otros-list"),
-  otrosBadge:      () => document.getElementById("otros-badge"),
-  alertInfo:       () => document.getElementById("alert-info"),
-  compBtns:        () => document.querySelectorAll(".comp-btn"),
-};
-
-// ─── RENDER FICHAS ─────────────────────────────────────────────────────────────
-/**
- * renderFichas(data)
- * Recibe el objeto exacto que retorna descubrirFichas() y pinta la UI.
- *
- * @param {{ fichas: Array, otrosCursos: Array }} data
- */
-function renderFichas(data) {
-  const { fichas, otrosCursos } = data;
-
-  // ── Stats chips ──────────────────────────────────────────────
-  const statsRow = dom.statsRow();
-  statsRow.innerHTML = `
-    <div class="stat-chip">
-      <span>📋</span>
-      <span>${fichas.length} ficha${fichas.length !== 1 ? "s" : ""} encontrada${fichas.length !== 1 ? "s" : ""}</span>
-    </div>
-    ${state.competenciaSeleccionada
-      ? `<div class="stat-chip">
-           <span>🎓</span>
-           <span>${state.competenciaSeleccionada.nombre}</span>
-         </div>`
-      : ""}
-  `.trim();
-
-  // ── Tabla de fichas ──────────────────────────────────────────
-  const tbody = dom.tablaBody();
-
-  if (fichas.length === 0) {
-    tbody.innerHTML = `
-      <tr>
-        <td colspan="5">
-          <div class="empty-state">
-            <div class="empty-icon">🔍</div>
-            <p>No se encontraron fichas con código de 7 dígitos.<br>
-               Prueba con otra competencia o revisa en Zajuna.</p>
-          </div>
-        </td>
-      </tr>
-    `;
-  } else {
-    tbody.innerHTML = fichas.map(f => `
-      <tr>
-        <td>
-          <span class="ficha-code">${escHtml(f.codigo ?? "—")}</span>
-        </td>
-        <td>
-          ${f.programa
-            ? `<span class="badge badge-green">${escHtml(f.programa)}</span>`
-            : `<span class="badge badge-gray">—</span>`}
-        </td>
-        <td>${escHtml(f.nombre)}</td>
-        <td class="col-courseid">
-          <span class="course-id">${f.courseId}</span>
-        </td>
-        <td>
-          <button
-            class="btn btn-ghost btn-sm"
-            onclick="verEvidencias(${f.courseId}, '${escHtml(f.codigo ?? "")}', '${escHtml(f.nombre)}')"
-            title="Ver evidencias de la ficha ${escHtml(f.codigo ?? f.courseId.toString())}"
-          >
-            Ver evidencias
-          </button>
-        </td>
-      </tr>
-    `).join("");
+// ─── FETCH AUTENTICADO ────────────────────────────────────────────────────────
+async function authFetch(url, opts = {}) {
+  const headers = { ...(opts.headers || {}) };
+  if (opts.body != null && !headers["Content-Type"]) {
+    headers["Content-Type"] = "application/json";
   }
+  const jwt = getJwt();
+  if (jwt) headers["Authorization"] = `Bearer ${jwt}`;
 
-  // ── Sección "Otros cursos" ───────────────────────────────────
-  const otrosSec = dom.otrosSection();
-  if (otrosCursos && otrosCursos.length > 0) {
-    dom.otrosBadge().textContent = otrosCursos.length;
-    const lista = dom.otrosList();
-    lista.innerHTML = otrosCursos.map(c => `
-      <div class="otro-item">
-        <span class="course-id">[ID:${c.courseId}]</span>
-        <span>${escHtml(c.nombre)}</span>
-      </div>
-    `).join("");
-    otrosSec.classList.add("visible");
-  } else {
-    otrosSec.classList.remove("visible");
+  const res = await fetch(url, { ...opts, headers });
+
+  if (res.status === 401) {
+    clearJwt();
+    showAuth();
+    throw new Error("Sesión expirada. Inicia sesión de nuevo.");
   }
-
-  // ── Mostrar la sección de resultados ─────────────────────────
-  dom.resultsSection().classList.add("visible");
+  return res;
 }
 
-// ─── ESCANEAR FICHAS ──────────────────────────────────────────────────────────
-
-async function escanearFichas() {
-  if (state.cargando) return;
-
-  state.cargando = true;
-  actualizarBotonEscaneo(true);
-  mostrarCargando(true);
-  dom.resultsSection().classList.remove("visible");
-
-  try {
-    // ── FETCH REAL (descomentar cuando el backend esté listo) ──────────────
-    //
-    // const codigoComp = state.competenciaSeleccionada?.codigo ?? "";
-    // const resp = await fetch(`/api/fichas?competencia=${codigoComp}`, {
-    //   method: "GET",
-    //   headers: {
-    //     "Content-Type": "application/json",
-    //     // "Authorization": `Bearer ${getToken()}`,  // JWT cuando haya auth
-    //   },
-    // });
-    // if (!resp.ok) throw new Error(`Error del servidor: ${resp.status}`);
-    // const data = await resp.json();
-    // renderFichas(data);
-    //
-    // ── FIN FETCH REAL ─────────────────────────────────────────────────────
-
-    // Simular 2 segundos de scraping con datos mock
-    await delay(2000);
-    state.datos = MOCK_DATA;
-    renderFichas(state.datos);
-
-  } catch (err) {
-    mostrarError(err.message);
-  } finally {
-    state.cargando = false;
-    actualizarBotonEscaneo(false);
-    mostrarCargando(false);
-  }
-}
-
-// ─── VER EVIDENCIAS ───────────────────────────────────────────────────────────
-// Placeholder — cuando exista la ruta /evidencias/:courseId
-function verEvidencias(courseId, codigo, nombre) {
-  alert(`Pronto disponible:\n\nFicha ${codigo || courseId}\n${nombre}\n\nEsta sección mostrará el estado de entregas de cada aprendiz.`);
-  // TODO: navegar a /evidencias?ficha=${courseId}
-}
-
-// ─── INICIALIZAR SELECTOR DE COMPETENCIAS ─────────────────────────────────────
-
-function initCompetencias() {
-  const grid = document.getElementById("competencia-grid");
-  grid.innerHTML = COMPETENCIAS.map((c, i) => `
-    <button
-      class="comp-btn"
-      data-index="${i}"
-      onclick="seleccionarCompetencia(${i})"
-      title="Código: ${c.codigo}"
-    >
-      <span class="comp-btn-name">${escHtml(c.nombre)}</span>
-      <span class="comp-btn-code">${c.codigo}</span>
-    </button>
-  `).join("");
-}
-
-function seleccionarCompetencia(index) {
-  const comp = COMPETENCIAS[index];
-  if (!comp) return;
-
-  state.competenciaSeleccionada = comp;
-
-  // Actualizar clases de los botones
-  document.querySelectorAll(".comp-btn").forEach((btn, i) => {
-    btn.classList.toggle("active", i === index);
-  });
-
-  // Habilitar botón de escaneo
-  dom.scanBtn().disabled = false;
-
-  // Ocultar alerta de info
-  const alert = dom.alertInfo();
-  if (alert) alert.style.display = "none";
-}
-
-// ─── UI HELPERS ───────────────────────────────────────────────────────────────
-
-function actualizarBotonEscaneo(cargando) {
-  const btn = dom.scanBtn();
-  if (cargando) {
-    btn.disabled = true;
-    btn.innerHTML = `
-      <div class="spinner"></div>
-      Escaneando...
-    `;
-  } else {
-    btn.disabled = !state.competenciaSeleccionada;
-    btn.innerHTML = `
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-      </svg>
-      Escanear mis fichas
-    `;
-  }
-}
-
-function mostrarCargando(visible) {
-  dom.loadingBanner().classList.toggle("visible", visible);
-}
-
-function mostrarError(msg) {
-  const tbody = dom.tablaBody();
-  tbody.innerHTML = `
-    <tr>
-      <td colspan="5">
-        <div class="empty-state">
-          <div class="empty-icon">⚠️</div>
-          <p>Error al cargar fichas: ${escHtml(msg)}</p>
-        </div>
-      </td>
-    </tr>
-  `;
-  dom.resultsSection().classList.add("visible");
-}
-
+// ─── ESCAPE HTML ──────────────────────────────────────────────────────────────
 function escHtml(str) {
   if (str == null) return "";
   return String(str)
@@ -317,16 +37,566 @@ function escHtml(str) {
     .replace(/'/g, "&#39;");
 }
 
-function delay(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+// ─── VISTAS ───────────────────────────────────────────────────────────────────
+function showAuth() {
+  document.getElementById("auth-view").style.display       = "";
+  document.getElementById("dashboard-view").style.display  = "none";
 }
 
-// ─── INIT ─────────────────────────────────────────────────────────────────────
+function showDashboard(user) {
+  document.getElementById("auth-view").style.display       = "none";
+  document.getElementById("dashboard-view").style.display  = "";
 
-document.addEventListener("DOMContentLoaded", () => {
-  initCompetencias();
+  const initials = (user.nombre || "?")
+    .split(" ")
+    .filter(Boolean)
+    .map(w => w[0])
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
 
-  // El botón empieza deshabilitado hasta elegir competencia
-  dom.scanBtn().disabled = true;
-  dom.scanBtn().addEventListener("click", escanearFichas);
+  document.getElementById("header-avatar").textContent        = initials;
+  document.getElementById("header-nombre").textContent        = user.nombre    || "";
+  document.getElementById("header-competencia").textContent   = user.competenciaNombre || "";
+}
+
+// ─── TABS DE AUTH ─────────────────────────────────────────────────────────────
+function showTab(tab) {
+  const isLogin = tab === "login";
+  document.getElementById("form-login").style.display    = isLogin ? "" : "none";
+  document.getElementById("form-register").style.display = isLogin ? "none" : "";
+  document.getElementById("tab-login").classList.toggle("active",  isLogin);
+  document.getElementById("tab-register").classList.toggle("active", !isLogin);
+  setError("login-error",    "");
+  setError("register-error", "");
+}
+
+// ─── ERROR HELPER ─────────────────────────────────────────────────────────────
+function setError(id, msg) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent    = msg;
+  el.style.display  = msg ? "" : "none";
+}
+
+// ─── ESTADO DEL BOTÓN ────────────────────────────────────────────────────────
+function setBtnLoading(btn, loading, labelIdle) {
+  btn.disabled     = loading;
+  btn.textContent  = loading ? "..." : labelIdle;
+}
+
+// ─── LOGIN ────────────────────────────────────────────────────────────────────
+async function handleLogin(e) {
+  e.preventDefault();
+  setError("login-error", "");
+
+  const email    = document.getElementById("login-email").value.trim();
+  const password = document.getElementById("login-pass").value;
+
+  const btn = e.target.querySelector("button[type=submit]");
+  setBtnLoading(btn, true, "Entrar");
+
+  try {
+    const res = await fetch("/api/auth/login", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ email, password }),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      setError("login-error", data.error || "Error al iniciar sesión.");
+      return;
+    }
+
+    setJwt(data.token);
+    document.getElementById("login-pass").value = "";
+    showDashboard(data.user);
+    await cargarFichas();
+
+  } catch {
+    setError("login-error", "No se pudo conectar al servidor.");
+  } finally {
+    setBtnLoading(btn, false, "Entrar");
+  }
+}
+
+// ─── REGISTRO ────────────────────────────────────────────────────────────────
+async function handleRegister(e) {
+  e.preventDefault();
+  setError("register-error", "");
+
+  const nombre   = document.getElementById("reg-nombre").value.trim();
+  const email    = document.getElementById("reg-email").value.trim();
+  const password = document.getElementById("reg-pass").value;
+  const zajunaUser = document.getElementById("reg-zajuna-user").value.trim();
+  const zajunaPass = document.getElementById("reg-zajuna-pass").value;
+
+  const select            = document.getElementById("reg-competencia");
+  const competenciaCodigo = select.value;
+  const competenciaNombre = select.options[select.selectedIndex]?.dataset?.nombre || "";
+
+  const btn = e.target.querySelector("button[type=submit]");
+  setBtnLoading(btn, true, "Crear cuenta");
+
+  try {
+    const res = await fetch("/api/auth/register", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({
+        nombre,
+        email,
+        password,
+        zajunaUser,
+        zajunaPass,
+        competenciaCodigo,
+        competenciaNombre,
+      }),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      setError("register-error", data.error || "Error al crear la cuenta.");
+      return;
+    }
+
+    setJwt(data.token);
+    // Limpiar campos sensibles inmediatamente — no quedan en memoria JS
+    document.getElementById("reg-pass").value        = "";
+    document.getElementById("reg-zajuna-pass").value = "";
+    showDashboard(data.user);
+    await cargarFichas();
+
+  } catch {
+    setError("register-error", "No se pudo conectar al servidor.");
+  } finally {
+    setBtnLoading(btn, false, "Crear cuenta");
+  }
+}
+
+// ─── LOGOUT ───────────────────────────────────────────────────────────────────
+function logout() {
+  clearJwt();
+  document.getElementById("fichas-section").classList.remove("visible");
+  document.getElementById("empty-section").style.display  = "none";
+  document.getElementById("fichas-tbody").innerHTML        = "";
+  setScanStatus("", false);
+  showAuth();
+}
+
+// ─── ESCANEAR FICHAS ──────────────────────────────────────────────────────────
+async function scanFichas() {
+  const btn = document.getElementById("btn-scan-fichas");
+  btn.disabled = true;
+  setScanStatus("Iniciando escaneo...", true);
+
+  try {
+    const res  = await authFetch("/api/fichas/scan", { method: "POST", body: "{}" });
+    const data = await res.json();
+
+    if (!res.ok) {
+      setScanStatus(data.error || "Error al iniciar el escaneo.", false);
+      return;
+    }
+
+    await pollJob(data.jobId);
+
+  } catch (err) {
+    if (!getJwt()) return; // 401 ya manejado en authFetch
+    setScanStatus(err.message || "Error inesperado.", false);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ─── POLLING JOB ─────────────────────────────────────────────────────────────
+function pollJob(jobId) {
+  return new Promise((resolve, reject) => {
+    const timer = setInterval(async () => {
+      try {
+        const res  = await authFetch(`/api/jobs/${jobId}`);
+        const data = await res.json();
+
+        if (!res.ok) {
+          clearInterval(timer);
+          setScanStatus(data.error || "Error al consultar el job.", false);
+          return reject(new Error(data.error));
+        }
+
+        const { status, progreso, errorMsg } = data;
+
+        if (status === "done") {
+          clearInterval(timer);
+          setScanStatus("Escaneo completo.", false);
+          await cargarFichas();
+          resolve();
+
+        } else if (status === "error") {
+          clearInterval(timer);
+          setScanStatus(errorMsg || "El escaneo falló.", false);
+          reject(new Error(errorMsg));
+
+        } else {
+          setScanStatus(`Escaneando... ${progreso || 0}%`, true);
+        }
+
+      } catch (err) {
+        clearInterval(timer);
+        reject(err);
+      }
+    }, 3000);
+  });
+}
+
+// ─── CARGAR FICHAS DESDE DB ───────────────────────────────────────────────────
+async function cargarFichas() {
+  try {
+    const res  = await authFetch("/api/fichas");
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      setScanStatus(`Error al cargar fichas (${res.status}): ${txt.slice(0,200)}`, false);
+      console.error("cargarFichas non-ok", res.status, txt);
+      return;
+    }
+    const data = await res.json();
+    console.log("cargarFichas OK", data);
+    renderFichas(data.fichas || []);
+  } catch (err) {
+    if (!getJwt()) return;
+    setScanStatus(`Error de red: ${err.message}`, false);
+    console.error("cargarFichas threw", err);
+  }
+}
+
+// ─── RENDER FICHAS ────────────────────────────────────────────────────────────
+function renderFichas(fichas) {
+  console.log("renderFichas called with", fichas?.length, "fichas");
+  try {
+  const section = document.getElementById("fichas-section");
+  const empty   = document.getElementById("empty-section");
+  const tbody   = document.getElementById("fichas-tbody");
+  const count   = document.getElementById("fichas-count");
+
+  if (!Array.isArray(fichas)) fichas = [];
+
+  if (fichas.length === 0) {
+    section.classList.remove("visible");
+    section.style.display = "none";
+    empty.style.display   = "";
+    return;
+  }
+
+  empty.style.display   = "none";
+  section.style.display = "";
+  section.classList.add("visible");
+  count.textContent     = `${fichas.length} ficha${fichas.length !== 1 ? "s" : ""}`;
+
+  tbody.innerHTML = "";
+
+  for (const f of fichas) {
+    const tr = document.createElement("tr");
+
+    // Código
+    const tdCod  = document.createElement("td");
+    const spanCod = document.createElement("span");
+    spanCod.className   = "ficha-code";
+    spanCod.textContent = f.codigo ?? "—";
+    tdCod.appendChild(spanCod);
+
+    // Programa
+    const tdProg  = document.createElement("td");
+    const spanProg = document.createElement("span");
+    spanProg.className   = f.programa ? "badge badge-green" : "badge badge-gray";
+    spanProg.textContent = f.programa || "—";
+    tdProg.appendChild(spanProg);
+
+    // Nombre del curso
+    const tdNombre  = document.createElement("td");
+    tdNombre.textContent = f.nombre;
+
+    // Evidencias (pendiente)
+    const tdEv  = document.createElement("td");
+    tdEv.textContent = "—";
+
+    // Botón acción
+    const tdBtn = document.createElement("td");
+    const btnEv = document.createElement("button");
+    btnEv.className   = "btn btn-ghost btn-sm";
+    btnEv.textContent = "Ver evidencias";
+    btnEv.addEventListener("click", () => verEvidencias(f.id, f.codigo, f.nombre));
+    tdBtn.appendChild(btnEv);
+
+    tr.append(tdCod, tdProg, tdNombre, tdEv, tdBtn);
+    tbody.appendChild(tr);
+  }
+  } catch (err) {
+    console.error("renderFichas crashed", err);
+    setScanStatus(`Error al renderizar: ${err.message}`, false);
+  }
+}
+
+// ─── VER EVIDENCIAS (modal) ──────────────────────────────────────────────────
+let _evidenciasState = { fichaId: null, pollTimer: null };
+
+function verEvidencias(fichaId, codigo, nombre) {
+  closeEvidenciasModal();
+  _evidenciasState = { fichaId, pollTimer: null };
+
+  const backdrop = document.createElement("div");
+  backdrop.className = "modal-backdrop";
+  backdrop.id = "evidencias-modal";
+  backdrop.addEventListener("click", (e) => {
+    if (e.target === backdrop) closeEvidenciasModal();
+  });
+
+  const modal = document.createElement("div");
+  modal.className = "modal";
+
+  // Header
+  const header = document.createElement("div");
+  header.className = "modal-header";
+  const titleWrap = document.createElement("div");
+  const title = document.createElement("h3");
+  title.className = "modal-title";
+  title.textContent = `Evidencias · ${codigo || ""}`;
+  const subtitle = document.createElement("div");
+  subtitle.className = "modal-subtitle";
+  subtitle.textContent = nombre || "";
+  titleWrap.append(title, subtitle);
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "modal-close";
+  closeBtn.setAttribute("aria-label", "Cerrar");
+  closeBtn.textContent = "✕";
+  closeBtn.addEventListener("click", closeEvidenciasModal);
+  header.append(titleWrap, closeBtn);
+
+  // Body
+  const body = document.createElement("div");
+  body.className = "modal-body";
+  body.id = "evidencias-body";
+  const loading = document.createElement("p");
+  loading.className = "evidencia-empty";
+  loading.textContent = "Cargando evidencias...";
+  body.appendChild(loading);
+
+  // Footer
+  const footer = document.createElement("div");
+  footer.className = "modal-footer";
+  const status = document.createElement("span");
+  status.id = "evidencias-status";
+  status.className = "job-status";
+  const scanBtn = document.createElement("button");
+  scanBtn.id = "btn-scan-evidencias";
+  scanBtn.className = "btn btn-primary btn-sm";
+  scanBtn.textContent = "Escanear evidencias";
+  scanBtn.addEventListener("click", () => scanEvidencias(fichaId));
+  footer.append(status, scanBtn);
+
+  modal.append(header, body, footer);
+  backdrop.appendChild(modal);
+  document.body.appendChild(backdrop);
+
+  cargarEvidencias(fichaId);
+}
+
+function closeEvidenciasModal() {
+  if (_evidenciasState.pollTimer) {
+    clearInterval(_evidenciasState.pollTimer);
+    _evidenciasState.pollTimer = null;
+  }
+  const m = document.getElementById("evidencias-modal");
+  if (m) m.remove();
+  _evidenciasState.fichaId = null;
+}
+
+function setEvidenciasStatus(msg, loading) {
+  const el = document.getElementById("evidencias-status");
+  if (!el) return;
+  el.textContent = msg || "";
+  el.className = loading ? "job-status job-status--loading" : "job-status";
+}
+
+async function cargarEvidencias(fichaId) {
+  const body = document.getElementById("evidencias-body");
+  if (!body) return;
+  try {
+    const res = await authFetch(`/api/fichas/${encodeURIComponent(fichaId)}/evidencias`);
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      body.innerHTML = "";
+      const p = document.createElement("p");
+      p.className = "evidencia-empty";
+      p.textContent = `Error (${res.status}): ${txt.slice(0, 200)}`;
+      body.appendChild(p);
+      return;
+    }
+    const data = await res.json();
+    renderEvidencias(data.evidencias || []);
+  } catch (err) {
+    if (!getJwt()) return;
+    body.innerHTML = "";
+    const p = document.createElement("p");
+    p.className = "evidencia-empty";
+    p.textContent = `Error de red: ${err.message}`;
+    body.appendChild(p);
+  }
+}
+
+function renderEvidencias(evidencias) {
+  const body = document.getElementById("evidencias-body");
+  if (!body) return;
+  body.innerHTML = "";
+
+  if (!evidencias.length) {
+    const p = document.createElement("p");
+    p.className = "evidencia-empty";
+    p.textContent = "Aún no hay evidencias escaneadas para esta ficha. Pulsa “Escanear evidencias”.";
+    body.appendChild(p);
+    return;
+  }
+
+  for (const ev of evidencias) {
+    const row = document.createElement("div");
+    row.className = "evidencia-row";
+
+    const left = document.createElement("div");
+    const name = document.createElement("div");
+    name.className = "evidencia-name";
+    name.textContent = ev.nombre || "—";
+    const meta = document.createElement("div");
+    meta.style.fontSize = ".75rem";
+    meta.style.color = "var(--gray-600)";
+    const fecha = ev.ultimoScan ? new Date(ev.ultimoScan).toLocaleString("es-CO") : "sin escaneo";
+    meta.textContent = `Total: ${ev.total} · último: ${fecha}`;
+    left.append(name, meta);
+
+    const counts = document.createElement("div");
+    counts.className = "evidencia-counts";
+    counts.append(
+      makeBadge(`Pendientes ${ev.pendientes}`, "badge-yellow"),
+      makeBadge(`Calificados ${ev.calificados}`, "badge-green"),
+      makeBadge(`Sin entregar ${ev.sinEntregar}`, "badge-gray"),
+    );
+
+    row.append(left, counts);
+    body.appendChild(row);
+  }
+}
+
+function makeBadge(text, cls) {
+  const s = document.createElement("span");
+  s.className = `badge ${cls || ""}`;
+  s.textContent = text;
+  return s;
+}
+
+async function scanEvidencias(fichaId) {
+  const btn = document.getElementById("btn-scan-evidencias");
+  if (btn) btn.disabled = true;
+  setEvidenciasStatus("Iniciando escaneo...", true);
+
+  try {
+    const res = await authFetch(`/api/fichas/${encodeURIComponent(fichaId)}/evidencias/scan`, { method: "POST", body: "{}" });
+    const data = await res.json();
+    if (!res.ok) {
+      setEvidenciasStatus(data.error || "Error al iniciar el escaneo.", false);
+      if (btn) btn.disabled = false;
+      return;
+    }
+    pollEvidenciasJob(data.jobId, fichaId, btn);
+  } catch (err) {
+    if (!getJwt()) return;
+    setEvidenciasStatus(`Error de red: ${err.message}`, false);
+    if (btn) btn.disabled = false;
+  }
+}
+
+function pollEvidenciasJob(jobId, fichaId, btn) {
+  if (_evidenciasState.pollTimer) clearInterval(_evidenciasState.pollTimer);
+
+  _evidenciasState.pollTimer = setInterval(async () => {
+    if (_evidenciasState.fichaId !== fichaId) {
+      clearInterval(_evidenciasState.pollTimer);
+      _evidenciasState.pollTimer = null;
+      return;
+    }
+    try {
+      const res = await authFetch(`/api/jobs/${encodeURIComponent(jobId)}`);
+      const data = await res.json();
+      if (!res.ok) {
+        clearInterval(_evidenciasState.pollTimer);
+        _evidenciasState.pollTimer = null;
+        setEvidenciasStatus(data.error || "Error consultando job.", false);
+        if (btn) btn.disabled = false;
+        return;
+      }
+
+      if (data.status === "done") {
+        clearInterval(_evidenciasState.pollTimer);
+        _evidenciasState.pollTimer = null;
+        setEvidenciasStatus("Escaneo completo.", false);
+        if (btn) btn.disabled = false;
+        await cargarEvidencias(fichaId);
+      } else if (data.status === "error") {
+        clearInterval(_evidenciasState.pollTimer);
+        _evidenciasState.pollTimer = null;
+        setEvidenciasStatus(data.errorMsg || "El escaneo falló.", false);
+        if (btn) btn.disabled = false;
+      } else {
+        setEvidenciasStatus(`Escaneando... ${data.progreso || 0}%`, true);
+      }
+    } catch (err) {
+      clearInterval(_evidenciasState.pollTimer);
+      _evidenciasState.pollTimer = null;
+      if (!getJwt()) return;
+      setEvidenciasStatus(`Error de red: ${err.message}`, false);
+      if (btn) btn.disabled = false;
+    }
+  }, 3000);
+}
+
+// ─── SCAN STATUS ─────────────────────────────────────────────────────────────
+function setScanStatus(msg, loading) {
+  const el     = document.getElementById("scan-fichas-status");
+  el.textContent = msg;
+  el.className   = loading ? "job-status job-status--loading" : "job-status";
+}
+
+// ─── INIT ────────────────────────────────────────────────────────────────────
+document.addEventListener("DOMContentLoaded", async () => {
+  const jwt = getJwt();
+
+  if (!jwt) {
+    showAuth();
+    return;
+  }
+
+  // JWT presente — verificar sesión y cargar fichas
+  try {
+    const res = await fetch("/api/fichas", {
+      headers: { "Authorization": `Bearer ${jwt}` },
+    });
+
+    if (res.status === 401) {
+      clearJwt();
+      showAuth();
+      return;
+    }
+
+    // Token válido — decodificar payload para nombre/competencia
+    const payload = JSON.parse(atob(jwt.split(".")[1]));
+    showDashboard({
+      nombre:           payload.nombre || "",
+      competenciaNombre: "",
+    });
+
+    const data = await res.json();
+    renderFichas(data.fichas || []);
+
+  } catch {
+    clearJwt();
+    showAuth();
+  }
 });
