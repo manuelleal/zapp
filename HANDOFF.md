@@ -7,10 +7,10 @@
 
 ## 🎯 Estado actual del proyecto
 
-- **Rama activa:** `feature/archivar-fichas-evidencias`
-- **HEAD:** `7141f87` (6 commits sobre master)
+- **Rama activa:** `feature/frontend-react`
+- **HEAD:** `31d1a94` (Sprint 1.2 completo)
 - **Stack:** Fastify 5 + Prisma 6 + Postgres + Redis + BullMQ + Playwright 1.59
-- **Frontend:** vanilla JS en `public/` (~800 LOC) — **a migrar a React+Vite**
+- **Frontend:** React+Vite+Tailwind+shadcn en `web/` — vanilla en `public/` (se borra en Sprint 1.4)
 
 ### ✅ Features implementados y probados
 1. Auth JWT + credenciales Zajuna cifradas (AES-256-GCM)
@@ -21,6 +21,20 @@
 6. Modal evidencias con cache + botón "Refrescar" + indicador "hace X"
 7. Cerrar/reabrir evidencias **manualmente** (worker NUNCA toca `cerradaAt`)
 8. Panel "▸ Aprendices" expandible con filtros + URL directa al grader
+
+### ✅ Sprint 1.1 — React setup (commit 35b7485)
+- `web/` con Vite 5 + React 18 + TypeScript + Tailwind 3 + shadcn/ui
+- Login.tsx + Dashboard.tsx con paridad completa al vanilla
+- `SERVE_REACT=1` en server.js para servir `web/dist`
+
+### ✅ Sprint 1.2 — Modal evidencias + Panel aprendices (commits b5d2831, 5dde387, 31d1a94)
+- `web/src/components/EvidenciasModal.tsx`: Dialog shadcn, header con `tiempoRelativo`, toggle "Ver cerradas", Refrescar + pollJob, cerrar/reabrir evidencia
+- `web/src/components/AprendicesPanel.tsx`: filtros client-side, lista con badges, links a Moodle
+  - Nombre del aprendiz **pendiente** = link a `action=grading` (tabla de entregas, 2 pasos para calificar)
+  - Botón "Calificar" a la derecha = link a `action=grader&userid=X` (calificador directo si hay sesión Moodle activa)
+  - Botón "Ver entrega" para calificados/sin entregar
+- `Dashboard.tsx`: "Ver evidencias" abre EvidenciasModal
+- **Nota Moodle**: `action=grader&userid=X` directo solo funciona si hay sesión previa en Zajuna; sin sesión redirige al overview. El nombre-link usa `action=grading` que siempre funciona.
 
 ### 📂 Documentación crítica (leer en este orden)
 1. `CLAUDE.md` — contexto rápido del proyecto
