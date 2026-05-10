@@ -257,16 +257,21 @@ Configuración de concurrencia recomendada en Railway starter:
 
 ## Fases de desarrollo
 
-### Fase 1 — MVP (prioridad ahora)
-- [ ] Auth: registro, login, JWT
-- [ ] Guardar y cifrar credenciales Zajuna por usuario
-- [ ] Selección de competencia al registrarse
-- [ ] Scraping de fichas (módulo `scraper/fichas.js`)
-- [ ] Scraping de evidencias (módulo `scraper/evidencias.js`)
-- [ ] Dashboard: lista de fichas + pendientes por calificar
-- [ ] Historial básico de estados por aprendiz
+### Fase 1 — MVP (estado mayo 2026)
+- [x] Auth: registro, login, JWT
+- [x] Cifrado AES-256-GCM de credenciales Zajuna por usuario
+- [x] Scraping de fichas + evidencias + entregas + moodleId aprendiz
+- [x] Dashboard con badges (Sin escanear / Al día / N pendientes)
+- [x] Archivar/restaurar fichas
+- [x] Cerrar/reabrir evidencias (100% manual, NO automático)
+- [x] Cache instantáneo + botón Refrescar
+- [x] Panel aprendices con filtros + URL grader directa
+- [ ] **Sprint 1 actual:** migración React+Vite+Tailwind+shadcn + bulk close
+- [ ] **Sprint 2:** bandeja de mensajes
+- [ ] **Sprint 3:** foros
+- [ ] **Sprint 4:** anuncios masivos
 
-### Fase 2 — IA
+### Fase 2 — IA (después del Sprint 4)
 - [ ] Agente calificador (sugiere nota con criterios)
 - [ ] Agente retroalimentador (genera feedback aprendiz)
 - [ ] Agente foros (draft de respuestas)
@@ -309,8 +314,10 @@ ANTHROPIC_API_KEY=...
 
 ---
 
-## Próximo paso inmediato
+## Próximo paso inmediato (mayo 2026)
 
-Crear `scraper/fichas.js` — módulo que descubre fichas del instructor
-(sin tocar `zajuna-evidencias.js`), probarlo en CLI primero,
-luego integrarlo a la API cuando la arquitectura esté montada.
+**Sprint 1.1** — Setup `web/` con Vite + React 18 + Tailwind + shadcn/ui.
+Ver `HANDOFF.md` para los prompts listos del día.
+
+Rama de trabajo: `feature/archivar-fichas-evidencias` (HEAD: 7141f87).
+Próxima rama: `feature/frontend-react` (se abrirá al iniciar 1.1).

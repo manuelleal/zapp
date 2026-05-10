@@ -7,13 +7,14 @@ Desarrollador: instructor SENA Bucaramanga — inglés y otras competencias.
 
 ---
 
-## Stack real (implementado)
-- **Backend:** Node.js + Fastify 5 + BullMQ + Redis + PostgreSQL + Prisma
-- **Frontend:** HTML/CSS/JS vanilla (en `public/`) — sin build tools por ahora
-- **Scraping:** Playwright (workers BullMQ)
-- **IA:** Claude API — fase 2
+## Stack real (implementado, mayo 2026)
+- **Backend:** Node.js + Fastify 5 + BullMQ + Redis + PostgreSQL + Prisma 6
+- **Frontend actual:** HTML/CSS/JS vanilla en `public/` (~800 LOC) — **a migrar a React+Vite+Tailwind+shadcn en Sprint 1**
+- **Scraping:** Playwright 1.59 (workers BullMQ, concurrency 3)
+- **IA:** Claude API — fase 2 (no implementado)
 - **Deploy objetivo:** Railway (Postgres + Redis nativos)
 - **Dev local:** Docker Compose (Postgres 16 + Redis 7)
+- **Rama activa:** `feature/archivar-fichas-evidencias` (HEAD: 7141f87, 6 commits sobre master)
 
 ---
 
@@ -89,7 +90,12 @@ ENCRYPTION_KEY=        ← 64 chars hex (32 bytes) para AES-256-GCM
 | POST | `/api/auth/register` | No | Crea usuario, cifra credenciales Zajuna, retorna JWT |
 | POST | `/api/auth/login` | No | Verifica password, retorna JWT |
 | POST | `/api/fichas/scan` | JWT | Crea job BullMQ → worker hace login y descubre fichas |
-| GET | `/api/fichas` | JWT | Fichas guardadas en DB del usuario |
+| GET | `/api/fichas?incluirArchivadas=1` | JWT | Fichas del usuario (filtra archivadas, conteo de pendientes) |
+| PATCH | `/api/fichas/:id` | JWT | `{archivada: bool}` — archiva/restaura |
+| POST | `/api/fichas/:fichaId/evidencias/scan` | JWT | Re-scrapea evidencias de una ficha |
+| GET | `/api/fichas/:fichaId/evidencias?incluirCerradas=1` | JWT | Evidencias con conteos pendientes/calificados/sin entregar |
+| PATCH | `/api/evidencias/:id` | JWT | `{cerrada: bool}` — cerrar/reabrir manualmente |
+| GET | `/api/evidencias/:id/entregas?estado=...` | JWT | Aprendices con estado + moodleId + actId para URL grader |
 | GET | `/api/jobs/:id` | JWT | Polling de job: queued → running → done/error |
 
 ---
@@ -129,34 +135,83 @@ POST /api/fichas/scan
 
 ---
 
-## Lo que ya funciona (probado)
-- [x] Login en Zajuna con Playwright
-- [x] Descubrimiento de 15 fichas del instructor
-- [x] Backend Fastify con auth JWT + bcrypt
+## Lo que ya funciona (probado en producción local)
+- [x] Login + registro UI con JWT en localStorage
 - [x] Credenciales Zajuna cifradas AES-256-GCM en DB
-- [x] Worker BullMQ: job queued → running → done
-- [x] Upsert de fichas en PostgreSQL
-- [x] UI mock en `public/index.html` (sin conectar aún al backend)
-- [x] CLI `zajuna-evidencias.js` funcional para revisar entregas
+- [x] Worker fichas: descubre y persiste 15 fichas del instructor
+- [x] Worker evidencias: scrapea entregas + estados + moodleId del aprendiz
+- [x] Dashboard fichas con badges (Sin escanear / Al día / N pendientes)
+- [x] **Archivar/restaurar fichas** con toggle "Ver archivadas" + conteo
+- [x] Modal evidencias con cache instantáneo desde DB
+- [x] Botón **Refrescar** (re-scrape on demand) + indicador "Actualizado hace X"
+- [x] **Cerrar/reabrir evidencias manualmente** (worker NO toca cerradaAt)
+- [x] **Panel "▸ Aprendices"** expandible por evidencia con filtros (Todos/Pendientes/Calificados/Sin entregar)
+- [x] Botón **"Abrir entrega"** → URL directa al grader Zajuna por aprendiz
+- [x] CLI `zajuna-evidencias.js` funcional como respaldo
+- [x] `scraper/mensajes.js`: enviar mensaje interno Moodle (NO conectado a UI)
 
-## Pendiente (en orden)
-- [ ] Conectar `public/app.js` al backend (descomentar fetch, agregar login UI)
-- [ ] Worker de evidencias (`scraper/evidencias.js` ya existe en `zajuna-evidencias.js`, extraer como módulo)
-- [ ] Rutas `/api/evidencias/scan` y `/api/evidencias`
-- [ ] Dashboard con datos reales de DB
-- [ ] Agentes IA (Claude API): calificador, retroalimentador, foros
-- [ ] Deploy en Railway
+## Pendiente — orden actualizado mayo 2026
+
+### Sprint 1 — Frontend React + bulk evidencias (en progreso)
+- [ ] Migrar `public/` → `web/` con Vite + React 18 + Tailwind + shadcn/ui
+- [ ] Paridad funcional: Login, Dashboard, Modal evidencias, Panel aprendices
+- [ ] Servir `web/dist` desde Fastify (`@fastify/static`)
+- [ ] Selección múltiple de evidencias + toolbar acciones masivas
+- [ ] Endpoint `PATCH /api/evidencias/bulk` (cerrar/reabrir N)
+- [ ] Borrar `public/` legacy cuando QA pase
+
+### Sprint 2 — Bandeja de mensajes
+- [ ] Scraper: leer conversaciones del instructor (`core_message_data_for_messagearea_*`)
+- [ ] Schema: tabla `Conversacion` + `Mensaje`
+- [ ] Worker `mensajesWorker.js` + endpoint sincronización
+- [ ] UI: bandeja con badge "N sin leer"
+
+### Sprint 3 — Foros
+- [ ] `scraper/foros.js`: listar foros + discusiones + mensajes
+- [ ] Schema: `Foro` + `Discusion` + `MensajeForo`
+- [ ] UI: pestaña "Foros" en modal de ficha, drill-down
+
+### Sprint 4 — Anuncios masivos
+- [ ] Investigar `mod_forum_add_discussion` Moodle
+- [ ] Editor + selector multi-ficha + dry-run
+- [ ] Tabla `AnuncioPublicado` para auditoría
+
+### Fase 2 (después)
+- [ ] Agentes IA Claude: calificador, retroalimentador, foroResponder
+- [ ] Reportes Excel (`exceljs`)
+- [ ] Upload Sofía Plus
+- [ ] WhatsApp masivo
+- [ ] Deploy Railway
 
 ---
 
 ## Reglas de desarrollo
 - **Plan mode siempre** antes de features que tocan más de 2 archivos
-- **Subagentes** para explorar código sin quemar contexto del chat principal
+- **Subagentes / `code_search`** para explorar código sin quemar contexto
 - **No hardcodear** nada — todo desde `.env`
 - **Multitenant desde el inicio** — todo query a DB filtra por `userId`
-- **`zajuna-evidencias.js` no se toca** — es el CLI de referencia y respaldo
+- **`zajuna-evidencias.js` no se toca** — CLI de referencia y respaldo
 - **Workers son stateless** — reciben job, ejecutan, cierran browser, retornan resultado
 - **La IA no actúa sola** — siempre muestra al instructor antes de calificar o responder
+- **Soft state** — `archivedAt` / `cerradaAt` son `DateTime?`, NO booleanos
+- **Cierre de evidencias 100% manual** — el worker NUNCA setea `cerradaAt` automáticamente (decisión QA: fechas viejas ≠ revisado)
+- **Nuevos campos `DateTime?`** siguen el mismo patrón: `archivedAt`, `cerradaAt`, `pinnedAt`, etc.
+- **Smoke test obligatorio** antes de cada commit (con JWT real, no mocks)
+
+## Convenciones de migración Prisma
+- Una migración por feature lógico
+- Nombres descriptivos en snake_case: `aprendiz_moodle_id`, `archivar_fichas`, `cerrar_evidencias`
+- Verificar con `npx prisma studio` antes de commit
+
+## Modelos de IA por tarea (cuando uses Cascade/Claude)
+| Tarea | Modelo | Razón |
+|---|---|---|
+| Arquitectura, decisiones | Claude Sonnet 4.5 / Opus 4.1 | Razonamiento profundo |
+| Implementación de features | Claude Sonnet 4.5 | Balance código/precio |
+| Edits puntuales, smoke tests | Claude Haiku 4 | Barato y suficiente |
+| Debug complejo | Claude Opus 4.1 / GPT-5 | Vale los tokens si algo se rompe raro |
+| Auditoría codebase grande | Gemini 2.5 Pro | 2M context |
+| QA exhaustivo | Claude Sonnet 4.5 | Investigación + reporte |
 
 ---
 
