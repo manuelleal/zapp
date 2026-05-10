@@ -10,6 +10,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
 import { apiFetch, authFetch, ApiError } from "@/api/client"
 import { tiempoRelativo } from "@/lib/utils"
@@ -79,6 +80,8 @@ export default function EvidenciasModal({
   const [scanStatus, setScanStatus] = useState("")
   const [scanLoading, setScanLoading] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [confirmBulkClose, setConfirmBulkClose] = useState(false)
 
   function stopPoll() {
     if (pollRef.current) {
@@ -97,8 +100,14 @@ export default function EvidenciasModal({
       setScanStatus("")
       setScanLoading(false)
       setExpandedId(null)
+      setSelectedIds(new Set())
+      setConfirmBulkClose(false)
     }
   }, [open])
+
+  useEffect(() => {
+    setSelectedIds(new Set())
+  }, [verCerradas, fichaId])
 
   const { data, isLoading, error } = useQuery<EvidenciasResponse>({
     queryKey: ["evidencias", fichaId, verCerradas],
@@ -122,6 +131,52 @@ export default function EvidenciasModal({
       if (err instanceof ApiError) setScanStatus(`Error: ${err.message}`)
     },
   })
+
+  const bulkMutation = useMutation({
+    mutationFn: ({ ids, cerrada }: { ids: string[]; cerrada: boolean }) =>
+      apiFetch<{ actualizadas: number }>("/api/evidencias/bulk", {
+        method: "PATCH",
+        body: JSON.stringify({ ids, cerrada }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["evidencias", fichaId] })
+      setSelectedIds(new Set())
+      setConfirmBulkClose(false)
+    },
+    onError: (err) => {
+      if (err instanceof ApiError) setScanStatus(`Error: ${err.message}`)
+      setConfirmBulkClose(false)
+    },
+  })
+
+  function toggleSelectAll() {
+    if (selectedIds.size === evidencias.length && evidencias.length > 0) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(evidencias.map((e) => e.id)))
+    }
+  }
+
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function handleBulkReabrir() {
+    bulkMutation.mutate({ ids: [...selectedIds], cerrada: false })
+  }
+
+  function handleBulkCerrar() {
+    setConfirmBulkClose(true)
+  }
+
+  function confirmCerrar() {
+    bulkMutation.mutate({ ids: [...selectedIds], cerrada: true })
+  }
 
   async function handleScan() {
     setScanLoading(true)
@@ -184,6 +239,7 @@ export default function EvidenciasModal({
   const { text: updatedText, stale: isStale } = computeUpdatedText(evidencias)
 
   return (
+    <>
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="flex flex-col p-0 gap-0 overflow-hidden max-h-[90vh]">
         {/* Header */}
@@ -219,6 +275,24 @@ export default function EvidenciasModal({
             </p>
           ) : (
             <div className="divide-y divide-gray-100">
+              <div className="px-6 py-2 flex items-center gap-2.5 bg-gray-50/50 border-b border-gray-100">
+                <Checkbox
+                  checked={
+                    selectedIds.size === 0
+                      ? false
+                      : selectedIds.size === evidencias.length
+                      ? true
+                      : "indeterminate"
+                  }
+                  onCheckedChange={toggleSelectAll}
+                  aria-label="Seleccionar todo"
+                />
+                <span className="text-xs text-gray-500 select-none">
+                  {selectedIds.size > 0
+                    ? `${selectedIds.size} seleccionada${selectedIds.size !== 1 ? "s" : ""}`
+                    : "Seleccionar todo"}
+                </span>
+              </div>
               {evidencias.map((ev) => (
                 <EvidenciaRow
                   key={ev.id}
@@ -230,11 +304,47 @@ export default function EvidenciasModal({
                   onCerrar={(cerrada) =>
                     cerrarMutation.mutate({ evidenciaId: ev.id, cerrada })
                   }
+                  selected={selectedIds.has(ev.id)}
+                  onSelect={() => toggleSelect(ev.id)}
                 />
               ))}
             </div>
           )}
         </div>
+
+        {/* Bulk toolbar */}
+        {selectedIds.size > 0 && (
+          <div className="px-6 py-2.5 border-t border-blue-100 bg-blue-50 shrink-0 flex items-center gap-2">
+            <span className="text-xs font-medium text-blue-700 mr-auto">
+              {selectedIds.size} seleccionada{selectedIds.size !== 1 ? "s" : ""}
+            </span>
+            <Button
+              size="sm"
+              variant="outline"
+              className="text-xs h-7"
+              onClick={() => setSelectedIds(new Set())}
+            >
+              Cancelar
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="text-xs h-7"
+              onClick={handleBulkReabrir}
+              disabled={bulkMutation.isPending}
+            >
+              Reabrir ({selectedIds.size})
+            </Button>
+            <Button
+              size="sm"
+              className="text-xs h-7 bg-red-600 hover:bg-red-700 text-white"
+              onClick={handleBulkCerrar}
+              disabled={bulkMutation.isPending}
+            >
+              Cerrar ({selectedIds.size})
+            </Button>
+          </div>
+        )}
 
         {/* Footer */}
         <div className="px-6 py-3 border-t border-gray-200 shrink-0 bg-gray-50 flex items-center gap-3">
@@ -274,6 +384,30 @@ export default function EvidenciasModal({
         </div>
       </DialogContent>
     </Dialog>
+
+    <Dialog open={confirmBulkClose} onOpenChange={(v) => { if (!v) setConfirmBulkClose(false) }}>
+      <DialogContent className="max-w-sm">
+        <DialogTitle>¿Cerrar {selectedIds.size} evidencias?</DialogTitle>
+        <DialogDescription>
+          Se marcarán {selectedIds.size} evidencia{selectedIds.size !== 1 ? "s" : ""} como
+          cerradas. Podrás reabrirlas más tarde.
+        </DialogDescription>
+        <div className="flex justify-end gap-2 mt-4">
+          <Button variant="outline" size="sm" onClick={() => setConfirmBulkClose(false)}>
+            Cancelar
+          </Button>
+          <Button
+            size="sm"
+            className="bg-red-600 hover:bg-red-700 text-white"
+            onClick={confirmCerrar}
+            disabled={bulkMutation.isPending}
+          >
+            {bulkMutation.isPending ? "Cerrando..." : "Sí, cerrar"}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+    </>
   )
 }
 
@@ -282,6 +416,8 @@ interface EvidenciaRowProps {
   expanded: boolean
   onToggleExpand: () => void
   onCerrar: (cerrada: boolean) => void
+  selected: boolean
+  onSelect: () => void
 }
 
 function EvidenciaRow({
@@ -289,10 +425,19 @@ function EvidenciaRow({
   expanded,
   onToggleExpand,
   onCerrar,
+  selected,
+  onSelect,
 }: EvidenciaRowProps) {
   return (
     <div className={ev.cerradaAt ? "opacity-60" : ""}>
       <div className="flex items-start gap-3 px-6 py-3 hover:bg-gray-50 transition-colors">
+        <div className="pt-0.5 shrink-0">
+          <Checkbox
+            checked={selected}
+            onCheckedChange={() => onSelect()}
+            aria-label={`Seleccionar ${ev.nombre}`}
+          />
+        </div>
         {/* Left */}
         <div className="flex-1 min-w-0">
           <div className="font-medium text-sm text-gray-800 truncate">{ev.nombre}</div>

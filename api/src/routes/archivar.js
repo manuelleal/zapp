@@ -41,6 +41,38 @@ async function archivarRoutes(fastify) {
 
     return { id: updated.id, cerradaAt: updated.cerradaAt };
   });
+
+  // PATCH /api/evidencias/bulk  body: { ids: string[], cerrada: boolean }
+  fastify.patch("/api/evidencias/bulk", { preHandler: fastify.authenticate }, async (req, reply) => {
+    const { ids, cerrada } = req.body || {};
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return reply.code(400).send({ error: "Campo 'ids' (array no vacío) requerido." });
+    }
+    if (typeof cerrada !== "boolean") {
+      return reply.code(400).send({ error: "Campo 'cerrada' (boolean) requerido." });
+    }
+
+    const evs = await prisma.evidencia.findMany({
+      where:   { id: { in: ids } },
+      include: { ficha: { select: { userId: true } } },
+    });
+
+    if (evs.length !== ids.length) {
+      return reply.code(404).send({ error: "Una o más evidencias no encontradas." });
+    }
+
+    const unauthorized = evs.some((ev) => ev.ficha.userId !== req.user.id);
+    if (unauthorized) {
+      return reply.code(403).send({ error: "Sin acceso a una o más evidencias." });
+    }
+
+    const result = await prisma.evidencia.updateMany({
+      where: { id: { in: ids } },
+      data:  { cerradaAt: cerrada ? new Date() : null },
+    });
+
+    return { actualizadas: result.count };
+  });
 }
 
 module.exports = archivarRoutes;
