@@ -123,9 +123,21 @@ export default function AprendicesPanel({ evidenciaId }: { evidenciaId: string }
               key={e.id}
               className="flex items-center gap-2 py-1.5 border-b border-gray-100 last:border-0"
             >
-              <span className="flex-1 text-sm text-gray-700 min-w-0 truncate">
-                {e.aprendiz.nombre}
-              </span>
+              {actId && e.estado === "pendiente" ? (
+                <a
+                  href={`${ZAJUNA_BASE}/mod/assign/view.php?id=${actId}&action=grading`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex-1 text-sm text-gray-800 font-medium min-w-0 truncate hover:underline hover:text-sena-green"
+                  title="Ver tabla de entregas"
+                >
+                  {e.aprendiz.nombre}
+                </a>
+              ) : (
+                <span className="flex-1 text-sm text-gray-700 min-w-0 truncate">
+                  {e.aprendiz.nombre}
+                </span>
+              )}
               <Badge variant={estadoVariant(e.estado)} className="text-xs shrink-0">
                 {estadoLabel(e.estado)}
               </Badge>
