@@ -19,12 +19,8 @@ fastify.register(require("@fastify/cors"), {
 
 fastify.register(require("@fastify/jwt"), { secret: process.env.JWT_SECRET });
 
-const staticRoot = process.env.SERVE_REACT === "1"
-  ? path.join(__dirname, "../../web/dist")
-  : path.join(__dirname, "../../public");
-
 fastify.register(require("@fastify/static"), {
-  root:   staticRoot,
+  root:   path.join(__dirname, "../../web/dist"),
   prefix: "/",
 });
 

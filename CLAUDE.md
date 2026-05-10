@@ -9,12 +9,12 @@ Desarrollador: instructor SENA Bucaramanga — inglés y otras competencias.
 
 ## Stack real (implementado, mayo 2026)
 - **Backend:** Node.js + Fastify 5 + BullMQ + Redis + PostgreSQL + Prisma 6
-- **Frontend actual:** HTML/CSS/JS vanilla en `public/` (~800 LOC) — **a migrar a React+Vite+Tailwind+shadcn en Sprint 1**
+- **Frontend:** React 18 + Vite 5 + Tailwind 3 + shadcn/ui en `web/` — servido desde `web/dist` por Fastify
 - **Scraping:** Playwright 1.59 (workers BullMQ, concurrency 3)
 - **IA:** Claude API — fase 2 (no implementado)
 - **Deploy objetivo:** Railway (Postgres + Redis nativos)
 - **Dev local:** Docker Compose (Postgres 16 + Redis 7)
-- **Rama activa:** `feature/archivar-fichas-evidencias` (HEAD: 7141f87, 6 commits sobre master)
+- **Rama activa:** `feature/frontend-react` (Sprint 1 completo)
 
 ---
 
@@ -40,10 +40,12 @@ C:\zajuna\
 ├── scraper/
 │   ├── auth.js                    ← login(), cerrarModal(), BASE_URL, TIMEOUT, log
 │   └── fichas.js                  ← descubrirFichas(page, competenciaCodigo) → {fichas, otrosCursos}
-├── public/
-│   ├── index.html                 ← UI responsiva con datos mock
-│   ├── style.css                  ← colores SENA (#00A650)
-│   └── app.js                     ← fetch comentado, listo para conectar al backend
+├── web/
+│   └── src/
+│       ├── components/            ← EvidenciasModal.tsx, AprendicesPanel.tsx + shadcn ui/
+│       ├── api/                   ← hooks TanStack Query (useEvidencias, useEntregas, etc.)
+│       ├── App.tsx                ← React Router: /login → /dashboard
+│       └── main.tsx
 ├── zajuna-evidencias.js           ← CLI original FUNCIONAL — NO TOCAR
 ├── ARCHITECTURE.md                ← diseño completo del sistema (leer antes de cualquier feature)
 ├── docker-compose.yml             ← postgres:16-alpine + redis:7-alpine
@@ -63,8 +65,11 @@ npx prisma migrate dev
 # 3. Abrir Prisma Studio (explorar DB)
 npx prisma studio
 
-# 4. Arrancar servidor (puerto 3000)
+# 4. Arrancar servidor (puerto 3000) — sirve web/dist en /
 node api/src/server.js
+
+# 4b. Dev frontend con HMR (proxy → localhost:3000)
+cd web && npm run dev   # puerto 5173
 
 # 5. Probar scraper fichas CLI
 echo 1 | node scraper/fichas.js --no-headless
@@ -95,6 +100,7 @@ ENCRYPTION_KEY=        ← 64 chars hex (32 bytes) para AES-256-GCM
 | POST | `/api/fichas/:fichaId/evidencias/scan` | JWT | Re-scrapea evidencias de una ficha |
 | GET | `/api/fichas/:fichaId/evidencias?incluirCerradas=1` | JWT | Evidencias con conteos pendientes/calificados/sin entregar |
 | PATCH | `/api/evidencias/:id` | JWT | `{cerrada: bool}` — cerrar/reabrir manualmente |
+| PATCH | `/api/evidencias/bulk` | JWT | `{ids: string[], cerrada: bool}` — bulk cerrar/reabrir N evidencias |
 | GET | `/api/evidencias/:id/entregas?estado=...` | JWT | Aprendices con estado + moodleId + actId para URL grader |
 | GET | `/api/jobs/:id` | JWT | Polling de job: queued → running → done/error |
 
@@ -152,13 +158,13 @@ POST /api/fichas/scan
 
 ## Pendiente — orden actualizado mayo 2026
 
-### Sprint 1 — Frontend React + bulk evidencias (en progreso)
-- [ ] Migrar `public/` → `web/` con Vite + React 18 + Tailwind + shadcn/ui
-- [ ] Paridad funcional: Login, Dashboard, Modal evidencias, Panel aprendices
-- [ ] Servir `web/dist` desde Fastify (`@fastify/static`)
-- [ ] Selección múltiple de evidencias + toolbar acciones masivas
-- [ ] Endpoint `PATCH /api/evidencias/bulk` (cerrar/reabrir N)
-- [ ] Borrar `public/` legacy cuando QA pase
+### ✅ Sprint 1 — Frontend React + bulk evidencias (COMPLETO — mayo 2026)
+- [x] Migrar `public/` → `web/` con Vite + React 18 + Tailwind + shadcn/ui
+- [x] Paridad funcional: Login, Dashboard, Modal evidencias, Panel aprendices
+- [x] Servir `web/dist` desde Fastify (`@fastify/static`) — sin flag de entorno
+- [x] Selección múltiple de evidencias + toolbar acciones masivas
+- [x] Endpoint `PATCH /api/evidencias/bulk` (cerrar/reabrir N)
+- [x] `public/` legacy eliminado — solo existe `web/`
 
 ### Sprint 2 — Bandeja de mensajes
 - [ ] Scraper: leer conversaciones del instructor (`core_message_data_for_messagearea_*`)

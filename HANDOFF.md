@@ -1,16 +1,17 @@
 # HANDOFF.md — Guía operativa Zajuna App
 
 > Documento maestro para continuar el desarrollo en chats nuevos.
-> Léelo PRIMERO antes de cualquier prompt. Última actualización: mayo 2026.
+> Léelo PRIMERO antes de cualquier prompt. Última actualización: mayo 2026 — Sprint 1 completo.
 
 ---
 
 ## 🎯 Estado actual del proyecto
 
 - **Rama activa:** `feature/frontend-react`
-- **HEAD:** `31d1a94` (Sprint 1.2 completo)
+- **HEAD:** commit final Sprint 1 (ver git log)
 - **Stack:** Fastify 5 + Prisma 6 + Postgres + Redis + BullMQ + Playwright 1.59
-- **Frontend:** React+Vite+Tailwind+shadcn en `web/` — vanilla en `public/` (se borra en Sprint 1.4)
+- **Frontend:** React 18 + Vite 5 + Tailwind 3 + shadcn/ui en `web/` — `web/dist` servido por Fastify sin flags
+- **`public/` eliminado** ✅
 
 ### ✅ Features implementados y probados
 1. Auth JWT + credenciales Zajuna cifradas (AES-256-GCM)
@@ -22,12 +23,12 @@
 7. Cerrar/reabrir evidencias **manualmente** (worker NUNCA toca `cerradaAt`)
 8. Panel "▸ Aprendices" expandible con filtros + URL directa al grader
 
-### ✅ Sprint 1.1 — React setup (commit 35b7485)
+### ✅ Sprint 1.1 — React setup (commit 35b7485) COMPLETO
 - `web/` con Vite 5 + React 18 + TypeScript + Tailwind 3 + shadcn/ui
 - Login.tsx + Dashboard.tsx con paridad completa al vanilla
 - `SERVE_REACT=1` en server.js para servir `web/dist`
 
-### ✅ Sprint 1.2 — Modal evidencias + Panel aprendices (commits b5d2831, 5dde387, 31d1a94)
+### ✅ Sprint 1.2 — Modal evidencias + Panel aprendices (commits b5d2831, 5dde387, 31d1a94) COMPLETO
 - `web/src/components/EvidenciasModal.tsx`: Dialog shadcn, header con `tiempoRelativo`, toggle "Ver cerradas", Refrescar + pollJob, cerrar/reabrir evidencia
 - `web/src/components/AprendicesPanel.tsx`: filtros client-side, lista con badges, links a Moodle
   - Nombre del aprendiz **pendiente** = link a `action=grading` (tabla de entregas, 2 pasos para calificar)
@@ -35,6 +36,19 @@
   - Botón "Ver entrega" para calificados/sin entregar
 - `Dashboard.tsx`: "Ver evidencias" abre EvidenciasModal
 - **Nota Moodle**: `action=grader&userid=X` directo solo funciona si hay sesión previa en Zajuna; sin sesión redirige al overview. El nombre-link usa `action=grading` que siempre funciona.
+
+### ✅ Sprint 1.3 — Bulk close evidencias (commit 23ad0fb) COMPLETO
+- Endpoint `PATCH /api/evidencias/bulk` en `api/src/routes/archivar.js`
+- Checkbox por fila + select-all (indeterminate) en `EvidenciasModal.tsx`
+- Toolbar flotante: Cancelar / Reabrir / Cerrar + Dialog de confirmación
+- Smoke test pasó: CERRAR 200 `{actualizadas:2}`, REABRIR 200 `{actualizadas:2}`, 404 fake-id correcto
+
+### ✅ Sprint 1.4 — QA + cleanup + merge (COMPLETO)
+- Smoke test completo (todos los endpoints): 200 en fichas, archivar, evidencias, aprendices, bulk close/reopen, 404 bulk fake-id
+- `public/` legacy eliminado
+- `SERVE_REACT` flag eliminado de `server.js` — siempre sirve `web/dist`
+- `feature/archivar-fichas-evidencias` ya era ancestro de `feature/frontend-react` (merge implícito)
+- Docs actualizados (CLAUDE.md + HANDOFF.md)
 
 ### 📂 Documentación crítica (leer en este orden)
 1. `CLAUDE.md` — contexto rápido del proyecto
@@ -48,13 +62,14 @@
 
 | # | Sprint | Tamaño | Modelo IA recomendado |
 |---|---|---|---|
-| **1.1** | Setup React+Vite+Tailwind+shadcn (paridad Login + Dashboard) | Medio (~150k tokens) | **Claude Sonnet 4.5** |
-| **1.2** | Migrar Modal evidencias + Panel aprendices a React | Medio (~150k) | **Claude Sonnet 4.5** |
-| **1.3** | Bulk close evidencias (selección múltiple + endpoint `/bulk`) | Pequeño (~50k) | **Claude Sonnet 4.5** o Haiku |
-| **1.4** | QA + borrar `public/` legacy + merge a master | Pequeño (~30k) | **Claude Haiku 4** |
+| **✅ 1.1** | Setup React+Vite+Tailwind+shadcn (paridad Login + Dashboard) | Medio (~150k tokens) | **Claude Sonnet 4.5** |
+| **✅ 1.2** | Migrar Modal evidencias + Panel aprendices a React | Medio (~150k) | **Claude Sonnet 4.5** |
+| **✅ 1.3** | Bulk close evidencias (selección múltiple + endpoint `/bulk`) | Pequeño (~50k) | **Claude Sonnet 4.5** o Haiku |
+| **✅ 1.4** | QA + borrar `public/` legacy + merge a master | Pequeño (~30k) | **Claude Haiku 4** |
 | **2** | Bandeja de mensajes (lectura) | Grande (~250k) | Claude Sonnet 4.5 |
 | **3** | Foros (listar + drill-down) | Grande (~300k) | Claude Sonnet 4.5 |
 | **4** | Anuncios masivos | Mediano (~200k) | Claude Sonnet 4.5 |
+| **5** | Configurar evidencias en Zajuna (fechas apertura/entrega/extensión + intentos, bulk) — equivalente a la extensión Z | Grande (~300k) | Claude Sonnet 4.5 |
 
 **Regla:** un chat por paso (1.1, 1.2, 1.3, 1.4) para mantener tokens bajos.
 
@@ -253,10 +268,11 @@ NO empezar Sprint 2 en este chat.
 - **Levantar entorno:**
   ```powershell
   docker-compose up -d
-  node api/src/server.js
-  # En otra terminal (Sprint 1.1+):
-  cd web && npm run dev
+  node api/src/server.js   # sirve web/dist en puerto 3000
+  # Dev frontend con HMR:
+  cd web && npm run dev    # puerto 5173 con proxy a 3000
   ```
+- **Build producción:** `cd web && npm run build` (genera `web/dist/`)
 - **DB inspector:** `npx prisma studio`
 - **Smoke test JWT:**
   ```powershell
