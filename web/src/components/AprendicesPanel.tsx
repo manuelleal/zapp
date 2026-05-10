@@ -131,12 +131,16 @@ export default function AprendicesPanel({ evidenciaId }: { evidenciaId: string }
               </Badge>
               {actId && e.aprendiz.moodleId ? (
                 <a
-                  href={`${ZAJUNA_BASE}/mod/assign/view.php?id=${actId}&rownum=0&action=grader&userid=${e.aprendiz.moodleId}`}
+                  href={`${ZAJUNA_BASE}/mod/assign/view.php?id=${actId}&action=grader&userid=${e.aprendiz.moodleId}&useridlistid=0`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-xs text-blue-600 hover:underline shrink-0"
+                  className={`text-xs hover:underline shrink-0 font-medium ${
+                    e.estado === "pendiente"
+                      ? "text-sena-green"
+                      : "text-blue-500"
+                  }`}
                 >
-                  Abrir entrega
+                  {e.estado === "pendiente" ? "Calificar" : "Ver entrega"}
                 </a>
               ) : (
                 <span className="text-xs text-gray-300 shrink-0 w-[72px]" />
