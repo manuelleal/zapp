@@ -8,6 +8,7 @@ import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
 import { useAuthStore } from "@/store/auth"
 import { authFetch, apiFetch, ApiError } from "@/api/client"
+import EvidenciasModal from "@/components/EvidenciasModal"
 
 interface Ficha {
   id: string
@@ -50,6 +51,11 @@ export default function Dashboard() {
   const [verArchivadas, setVerArchivadas] = useState(false)
   const [scanStatus, setScanStatus] = useState("")
   const [scanLoading, setScanLoading] = useState(false)
+  const [evidenciasModal, setEvidenciasModal] = useState<{
+    fichaId: string
+    fichaCodigo: string
+    fichaNombre: string
+  } | null>(null)
 
   // Auto-login from stored JWT on first load
   useEffect(() => {
@@ -286,6 +292,9 @@ export default function Dashboard() {
                       key={f.id}
                       ficha={f}
                       onArchivar={(id, archivada) => archivarMutation.mutate({ id, archivada })}
+                      onVerEvidencias={(id, codigo, nombre) =>
+                        setEvidenciasModal({ fichaId: id, fichaCodigo: codigo, fichaNombre: nombre })
+                      }
                     />
                   ))}
                 </tbody>
@@ -300,6 +309,16 @@ export default function Dashboard() {
           </div>
         )}
       </main>
+
+      {evidenciasModal && (
+        <EvidenciasModal
+          fichaId={evidenciasModal.fichaId}
+          fichaCodigo={evidenciasModal.fichaCodigo}
+          fichaNombre={evidenciasModal.fichaNombre}
+          open={true}
+          onClose={() => setEvidenciasModal(null)}
+        />
+      )}
     </div>
   )
 }
@@ -307,9 +326,11 @@ export default function Dashboard() {
 function FichaRow({
   ficha: f,
   onArchivar,
+  onVerEvidencias,
 }: {
   ficha: Ficha
   onArchivar: (id: string, archivada: boolean) => void
+  onVerEvidencias: (id: string, codigo: string, nombre: string) => void
 }) {
   const isArchivada = !!f.archivedAt
 
@@ -333,7 +354,13 @@ function FichaRow({
       </td>
       <td className="px-5 py-3 whitespace-nowrap">
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" disabled={isArchivada} className="text-xs h-7 px-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={isArchivada}
+            className="text-xs h-7 px-2"
+            onClick={() => !isArchivada && onVerEvidencias(f.id, f.codigo, f.nombre)}
+          >
             Ver evidencias
           </Button>
           <Button
