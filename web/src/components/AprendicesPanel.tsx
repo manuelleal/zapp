@@ -1,7 +1,10 @@
-import { useState } from "react"
-import { useQuery } from "@tanstack/react-query"
+import { useState, useRef, useEffect } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Badge } from "@/components/ui/badge"
-import { apiFetch } from "@/api/client"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Loader2, Save } from "lucide-react"
+import { apiFetch, authFetch, ApiError } from "@/api/client"
 
 type EstadoFiltro = "" | "pendiente" | "calificado" | "sin_entregar"
 
@@ -41,7 +44,18 @@ function estadoVariant(estado: string): "yellow" | "green" | "gray" {
 }
 
 export default function AprendicesPanel({ evidenciaId }: { evidenciaId: string }) {
+  const queryClient = useQueryClient()
   const [filtro, setFiltro] = useState<EstadoFiltro>("")
+  // Sprint 2.5 FIX 4: calificaciones pendientes de envio para foros (key=moodleId)
+  const [ratings, setRatings] = useState<Record<string, string>>({})
+  const [savePhase, setSavePhase] = useState<"idle" | "saving" | "error" | "success">("idle")
+  const [saveMsg, setSaveMsg]     = useState("")
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  function stopPoll() {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
+  }
+  useEffect(() => () => stopPoll(), [])
 
   const { data, isLoading, error } = useQuery<EntregasResponse>({
     queryKey: ["entregas", evidenciaId],
@@ -51,6 +65,63 @@ export default function AprendicesPanel({ evidenciaId }: { evidenciaId: string }
       ),
     staleTime: 2 * 60 * 1000,
   })
+
+  async function guardarCalificaciones() {
+    const items = Object.entries(ratings)
+      .filter(([, v]) => v !== "" && v != null)
+      .map(([moodleUserId, nota]) => ({ moodleUserId, nota: Number(nota) }))
+      .filter((r) => !Number.isNaN(r.nota))
+
+    if (items.length === 0) {
+      setSaveMsg("No hay calificaciones para enviar.")
+      setSavePhase("error")
+      return
+    }
+
+    setSavePhase("saving")
+    setSaveMsg(`Enviando ${items.length} calificacion${items.length !== 1 ? "es" : ""}...`)
+    try {
+      const { jobId } = await apiFetch<{ jobId: string }>(
+        `/api/evidencias/${encodeURIComponent(evidenciaId)}/foro/calificar`,
+        { method: "PATCH", body: JSON.stringify({ ratings: items }) }
+      )
+      stopPoll()
+      pollRef.current = setInterval(async () => {
+        try {
+          const res  = await authFetch(`/api/jobs/${encodeURIComponent(jobId)}`)
+          const d = await res.json()
+          if (!res.ok) { stopPoll(); setSavePhase("error"); setSaveMsg(d?.errorMsg || `Error ${res.status}`); return }
+          if (d.status === "done") {
+            stopPoll()
+            const r = d.resultado as { total: number; ok: number; results: Array<{ ok: boolean; error?: string; moodleUserId: string }> }
+            const fail = r.results.filter((x) => !x.ok)
+            if (fail.length === 0) {
+              setSavePhase("success")
+              setSaveMsg(`${r.ok}/${r.total} calificaciones guardadas.`)
+              setRatings({})
+            } else {
+              setSavePhase("error")
+              setSaveMsg(`${r.ok}/${r.total} ok. Errores: ${fail.slice(0,3).map((f) => `${f.moodleUserId}: ${f.error}`).join(" | ")}`)
+            }
+            queryClient.invalidateQueries({ queryKey: ["entregas", evidenciaId] })
+            queryClient.invalidateQueries({ queryKey: ["evidencias"] })
+          } else if (d.status === "error") {
+            stopPoll()
+            setSavePhase("error"); setSaveMsg(d.errorMsg || "El job fallo.")
+          } else {
+            setSaveMsg(`Guardando... ${d.progreso || 0}%`)
+          }
+        } catch (err) {
+          stopPoll()
+          setSavePhase("error")
+          setSaveMsg(err instanceof Error ? err.message : "Error de red.")
+        }
+      }, 2500)
+    } catch (e) {
+      setSavePhase("error")
+      setSaveMsg(e instanceof ApiError ? e.message : "Error al iniciar el guardado.")
+    }
+  }
 
   if (isLoading) {
     return (
@@ -113,6 +184,38 @@ export default function AprendicesPanel({ evidenciaId }: { evidenciaId: string }
         ))}
       </div>
 
+      {/* Sprint 2.5 FIX 4: barra de calificacion bulk para foros */}
+      {esForo && (
+        <div className="px-6 pb-2 flex items-center gap-2">
+          <span className="text-xs text-gray-500 mr-auto">
+            {Object.values(ratings).filter((v) => v !== "" && v != null).length > 0
+              ? `${Object.values(ratings).filter((v) => v !== "" && v != null).length} calificacion(es) pendientes de enviar`
+              : "Asigna notas en los inputs de la derecha"}
+          </span>
+          {savePhase !== "idle" && (
+            <span className={`text-xs ${
+              savePhase === "error" ? "text-red-600" :
+              savePhase === "success" ? "text-green-700" : "text-blue-600"
+            }`}>
+              {saveMsg}
+            </span>
+          )}
+          <Button
+            size="sm"
+            className="h-7 text-xs bg-sena-green hover:bg-sena-green/90 gap-1"
+            onClick={guardarCalificaciones}
+            disabled={savePhase === "saving" || Object.values(ratings).filter((v) => v !== "" && v != null).length === 0}
+          >
+            {savePhase === "saving" ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Save className="w-3.5 h-3.5" />
+            )}
+            Guardar calificaciones
+          </Button>
+        </div>
+      )}
+
       {/* List */}
       <div className="max-h-64 overflow-y-auto px-6 pb-3 space-y-0.5">
         {filtradas.length === 0 ? (
@@ -143,6 +246,24 @@ export default function AprendicesPanel({ evidenciaId }: { evidenciaId: string }
               <Badge variant={estadoVariant(e.estado)} className="text-xs shrink-0">
                 {estadoLabel(e.estado)}
               </Badge>
+              {/* Sprint 2.5 FIX 4: input de calificacion para foros (solo si el alumno publico) */}
+              {esForo && e.aprendiz.moodleId && e.estado !== "sin_entregar" && (
+                <Input
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={100}
+                  placeholder="Nota"
+                  value={ratings[e.aprendiz.moodleId] ?? ""}
+                  onChange={(ev) => {
+                    const id = e.aprendiz.moodleId!
+                    setRatings((p) => ({ ...p, [id]: ev.target.value }))
+                  }}
+                  disabled={savePhase === "saving"}
+                  className="h-7 w-16 text-xs shrink-0 px-2"
+                  aria-label={`Calificar a ${e.aprendiz.nombre}`}
+                />
+              )}
               {actId && (esForo ? (
                 <a
                   href={`${ZAJUNA_BASE}/mod/forum/view.php?id=${actId}`}

@@ -42,12 +42,14 @@ fastify.register(require("./routes/jobs"));
 fastify.register(require("./routes/evidencias"));
 fastify.register(require("./routes/archivar"));
 fastify.register(require("./routes/configEvidencias"));
+fastify.register(require("./routes/foroRating"));
 
 // ─── WORKER ──────────────────────────────────────────────────────────────────
 
 require("./workers/fichasWorker");
 require("./workers/evidenciasWorker");
 require("./workers/configWorker");
+require("./workers/foroRatingWorker");
 
 // ─── START ───────────────────────────────────────────────────────────────────
 
