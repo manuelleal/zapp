@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react"
+import { useState, useRef, useEffect, useMemo } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { RefreshCw, ChevronDown, ChevronRight, ExternalLink, Settings } from "lucide-react"
 import {
@@ -48,6 +48,26 @@ interface EvidenciasModalProps {
   fichaNombre: string
   open: boolean
   onClose: () => void
+}
+
+// Sprint 2.5 FIX 3: ordenar por nro de guia (GA1, GA2, GA3...) dentro de cada grupo (abiertas/cerradas).
+function gaNum(nombre: string): number {
+  const m = nombre.match(/GA(\d+)/i)
+  return m ? parseInt(m[1], 10) : 999
+}
+
+function sortEvidencias(list: Evidencia[]): Evidencia[] {
+  return [...list].sort((a, b) => {
+    // 1) abiertas (cerradaAt=null) primero
+    const aOpen = a.cerradaAt ? 1 : 0
+    const bOpen = b.cerradaAt ? 1 : 0
+    if (aOpen !== bOpen) return aOpen - bOpen
+    // 2) por nro de guia ascendente
+    const ga = gaNum(a.nombre) - gaNum(b.nombre)
+    if (ga !== 0) return ga
+    // 3) desempate alfabetico
+    return a.nombre.localeCompare(b.nombre, "es")
+  })
 }
 
 function computeUpdatedText(evidencias: Evidencia[]): { text: string; stale: boolean } {
@@ -237,7 +257,8 @@ export default function EvidenciasModal({
     }, 3000)
   }
 
-  const evidencias = data?.evidencias ?? []
+  const evidenciasRaw = data?.evidencias ?? []
+  const evidencias = useMemo(() => sortEvidencias(evidenciasRaw), [evidenciasRaw])
   const cerradasCount = data?.cerradasCount ?? 0
   const { text: updatedText, stale: isStale } = computeUpdatedText(evidencias)
 
