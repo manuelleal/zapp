@@ -424,6 +424,35 @@ BACKEND (opcional si el sort client-side es suficiente):
 - Si se prefiere DB sort: reemplazar por raw SQL con REGEXP_REPLACE para extraer el número GA.
   Alternativa simple: dejar el sort en frontend.
 
+══════════ FIX 4 — Calificar posts del foro desde la app ══════════
+El foro muestra un selector numérico ("Calificación máxima: 80") por cada post de alumno.
+El instructor asigna la nota directamente ahí. Implementar esto en la app:
+
+SCRAPER — nueva función calificarPostForo(page, actId, ratings):
+  ratings = [{ moodleUserId, nota }]  ← nota = número (ej: 80, 100)
+  1. page.goto(`/mod/forum/view.php?id={actId}`)
+  2. Serializar el formulario de ratings (puede haber un form por post o un form global)
+     - Buscar: form[action*="rate.php"] o form[action*="forum"]
+     - Campos: rating[{postId}], o select[name*="rating"]
+  3. Para cada post que tenga un input de rating:
+     - Identificar el autor (link profile → moodleId)
+     - Si moodleId está en ratings[] → setear el valor
+  4. Hacer POST del formulario (misma técnica serialize+POST que configEvidencias)
+  5. Verificar que no hay error en la respuesta
+
+API — nuevo endpoint:
+  PATCH /api/evidencias/:id/foro/calificar
+  Body: { ratings: [{ moodleUserId: string, nota: number }] }
+  → lanza job → retorna { jobId }
+
+FRONTEND — en AprendicesPanel.tsx cuando esForo:
+  - Por cada fila de alumno con moodleId: mostrar input numérico (o select) con la nota actual
+  - Botón "Guardar calificaciones" → PATCH bulk de todos los modificados
+  - Integrar con el polling de jobs existente
+
+NOTA: La nota puede estar limitada a valores discretos según la config del foro.
+Usar el mismo <select> del HTML para restringir opciones, o un input libre.
+
 ══════════ CONTEXTO SCREENSHOT — FORO REAL ══════════
 El foro en Zajuna se ve así (confirmado en producción):
 - Cada alumno publica UN tema de debate (discussion thread) con el código de la evidencia en el título
