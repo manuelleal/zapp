@@ -1,14 +1,14 @@
 # HANDOFF.md — Guía operativa Zajuna App
 
 > Documento maestro para continuar el desarrollo en chats nuevos.
-> Léelo PRIMERO antes de cualquier prompt. Última actualización: mayo 2026 — Sprint 1 completo.
+> Léelo PRIMERO antes de cualquier prompt. Última actualización: mayo 2026 — Sprint 2 (config-evidencias) completo.
 
 ---
 
 ## 🎯 Estado actual del proyecto
 
-- **Rama activa:** `feature/frontend-react`
-- **HEAD:** commit final Sprint 1 (ver git log)
+- **Rama activa:** `feature/config-evidencias` (branch off `feature/frontend-react`)
+- **HEAD:** commit 29abe11 — refactor scraper serialize-form+POST (ver git log)
 - **Stack:** Fastify 5 + Prisma 6 + Postgres + Redis + BullMQ + Playwright 1.59
 - **Frontend:** React 18 + Vite 5 + Tailwind 3 + shadcn/ui en `web/` — `web/dist` servido por Fastify sin flags
 - **`public/` eliminado** ✅
@@ -50,6 +50,23 @@
 - `feature/archivar-fichas-evidencias` ya era ancestro de `feature/frontend-react` (merge implícito)
 - Docs actualizados (CLAUDE.md + HANDOFF.md)
 
+### ✅ Sprint 2 — Configurar evidencias desde la app (commits b2d90ce, 29abe11) COMPLETO
+- **`scraper/configEvidencias.js`** — `leerConfigEvidencia` + `guardarConfigEvidencia`
+  - Técnica: GET form → `serializarFormulario()` (captura TODOS los campos incl. sesskey/hidden) → overlay de cambios → POST directo con `fetch` dentro del contexto del navegador
+  - Igual a la Extensión Z (no usa interacciones UI frágiles)
+  - Merge parcial: solo modifica los campos enviados
+  - Detecta errores en la respuesta HTML de Moodle
+- **Migración Prisma** `config_evidencias_audit` → tabla `ConfigAudit { userId, evidenciaId, actId, antes, despues, fecha }`
+- **`api/src/lib/queue.js`** — nueva `configQueue` (BullMQ)
+- **`api/src/workers/configWorker.js`** — operaciones `leer` y `guardar`, graba auditoría post-guardar
+- **`api/src/routes/configEvidencias.js`** — 3 endpoints:
+  - `GET  /api/evidencias/:id/config`       → job `leer`   → `{ jobId }`
+  - `PATCH /api/evidencias/:id/config`      → job `guardar` → `{ jobId }`
+  - `PATCH /api/evidencias/config/bulk`     → N jobs         → `{ jobIds }`
+- **`web/src/components/ConfigEvidenciaDialog.tsx`** — dialog con fecha apertura/entrega/límite + intentos, carga config via polling, bulk support
+- **`EvidenciasModal.tsx`** — botón ⚙ Config por fila + botón "Configurar (N)" en toolbar bulk
+- **PENDIENTE smoke test real** con actId de Moodle en producción
+
 ### 📂 Documentación crítica (leer en este orden)
 1. `CLAUDE.md` — contexto rápido del proyecto
 2. `ARCHITECTURE.md` — diseño completo y modelo de datos
@@ -66,10 +83,10 @@
 | **✅ 1.2** | Migrar Modal evidencias + Panel aprendices a React | Medio (~150k) | **Claude Sonnet 4.5** |
 | **✅ 1.3** | Bulk close evidencias (selección múltiple + endpoint `/bulk`) | Pequeño (~50k) | **Claude Sonnet 4.5** o Haiku |
 | **✅ 1.4** | QA + borrar `public/` legacy + merge a master | Pequeño (~30k) | **Claude Haiku 4** |
-| **2** | Bandeja de mensajes (lectura) | Grande (~250k) | Claude Sonnet 4.5 |
-| **3** | Foros (listar + drill-down) | Grande (~300k) | Claude Sonnet 4.5 |
-| **4** | Anuncios masivos | Mediano (~200k) | Claude Sonnet 4.5 |
-| **5** | Configurar evidencias en Zajuna (fechas apertura/entrega/extensión + intentos, bulk) — equivalente a la extensión Z | Grande (~300k) | Claude Sonnet 4.5 |
+| **✅ 2** | Configurar evidencias (fechas apertura/entrega/extensión + intentos, bulk) — equivalente a la extensión Z | Grande (~300k) | Claude Sonnet 4.5 |
+| **3** | Bandeja de mensajes (lectura) | Grande (~250k) | Claude Sonnet 4.5 |
+| **4** | Foros (listar + drill-down) | Grande (~300k) | Claude Sonnet 4.5 |
+| **5** | Anuncios masivos | Mediano (~200k) | Claude Sonnet 4.5 |
 
 **Regla:** un chat por paso (1.1, 1.2, 1.3, 1.4) para mantener tokens bajos.
 
