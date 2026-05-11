@@ -6,7 +6,7 @@ const { connection } = require("../lib/queue");
 const { decrypt } = require("../lib/crypto");
 const prisma = require("../db/client");
 const { login, cerrarModal, BASE_URL, TIMEOUT } = require("../../../scraper/auth");
-const { obtenerEvidencias, revisarEntregas } = require("../../../scraper/evidencias");
+const { obtenerEvidencias, revisarEntregas, revisarEntregasForo } = require("../../../scraper/evidencias");
 
 const worker = new Worker("evidencias", async (job) => {
   const { jobId, userId, fichaId, courseId, competenciaCodigo, zajunaUserEnc, zajunaPassEnc } = job.data;
@@ -35,13 +35,17 @@ const worker = new Worker("evidencias", async (job) => {
 
     for (let i = 0; i < evidencias.length; i++) {
       const ev = evidencias[i];
-      const entregas = await revisarEntregas(page, ev.actId);
 
-      // Upsert evidencia (preserva cerradaAt actual)
+      // Usar scraper apropiado según tipo de actividad
+      const entregas = ev.tipo === "forum"
+        ? await revisarEntregasForo(page, ev.actId, courseId, ev.texto)
+        : await revisarEntregas(page, ev.actId);
+
+      // Upsert evidencia (preserva cerradaAt actual, actualiza tipo real)
       const evDb = await prisma.evidencia.upsert({
         where:  { fichaId_href: { fichaId, href: ev.href } },
-        update: { nombre: ev.texto },
-        create: { fichaId, nombre: ev.texto, href: ev.href, tipo: "assign" },
+        update: { nombre: ev.texto, tipo: ev.tipo },
+        create: { fichaId, nombre: ev.texto, href: ev.href, tipo: ev.tipo },
       });
 
       let pendientes  = 0;

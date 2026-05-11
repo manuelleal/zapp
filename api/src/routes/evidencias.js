@@ -99,6 +99,7 @@ async function evidenciasRoutes(fastify) {
       evidenciaId:   ev.id,
       evidenciaNombre: ev.nombre,
       actId,
+      tipo:          ev.tipo,
       entregas: entregas.map(e => ({
         id:        e.id,
         estado:    e.estado,

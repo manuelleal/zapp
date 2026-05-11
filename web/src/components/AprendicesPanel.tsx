@@ -22,6 +22,7 @@ interface EntregasResponse {
   evidenciaId: string
   evidenciaNombre: string
   actId: string | null
+  tipo: string | null
   entregas: Entrega[]
 }
 
@@ -67,7 +68,8 @@ export default function AprendicesPanel({ evidenciaId }: { evidenciaId: string }
     )
   }
 
-  const { entregas, actId } = data
+  const { entregas, actId, tipo } = data
+  const esForo = tipo === "forum"
 
   if (entregas.length === 0) {
     return (
@@ -123,7 +125,7 @@ export default function AprendicesPanel({ evidenciaId }: { evidenciaId: string }
               key={e.id}
               className="flex items-center gap-2 py-1.5 border-b border-gray-100 last:border-0"
             >
-              {actId && e.estado === "pendiente" ? (
+              {actId && e.estado === "pendiente" && !esForo ? (
                 <a
                   href={`${ZAJUNA_BASE}/mod/assign/view.php?id=${actId}&action=grading`}
                   target="_blank"
@@ -141,7 +143,17 @@ export default function AprendicesPanel({ evidenciaId }: { evidenciaId: string }
               <Badge variant={estadoVariant(e.estado)} className="text-xs shrink-0">
                 {estadoLabel(e.estado)}
               </Badge>
-              {actId && e.aprendiz.moodleId ? (
+              {actId && (esForo ? (
+                <a
+                  href={`${ZAJUNA_BASE}/mod/forum/view.php?id=${actId}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs hover:underline shrink-0 font-medium text-blue-500"
+                  title="Abrir foro"
+                >
+                  Abrir foro
+                </a>
+              ) : e.aprendiz.moodleId ? (
                 <a
                   href={`${ZAJUNA_BASE}/mod/assign/view.php?id=${actId}&action=grader&userid=${e.aprendiz.moodleId}&useridlistid=0`}
                   target="_blank"
@@ -156,7 +168,7 @@ export default function AprendicesPanel({ evidenciaId }: { evidenciaId: string }
                 </a>
               ) : (
                 <span className="text-xs text-gray-300 shrink-0 w-[72px]" />
-              )}
+              ))}
             </div>
           ))
         )}
