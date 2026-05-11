@@ -24,6 +24,15 @@ fastify.register(require("@fastify/static"), {
   prefix: "/",
 });
 
+// SPA fallback: cualquier GET no-API que no matchee un asset estatico
+// devuelve index.html para que React Router maneje la ruta client-side.
+fastify.setNotFoundHandler((req, reply) => {
+  if (req.method !== "GET" || req.url.startsWith("/api/")) {
+    return reply.code(404).send({ error: "Not Found" });
+  }
+  return reply.sendFile("index.html");
+});
+
 // ─── AUTH HELPER ─────────────────────────────────────────────────────────────
 
 fastify.decorate("authenticate", async (req, reply) => {
