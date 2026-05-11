@@ -50,22 +50,90 @@
 - `feature/archivar-fichas-evidencias` ya era ancestro de `feature/frontend-react` (merge implícito)
 - Docs actualizados (CLAUDE.md + HANDOFF.md)
 
-### ✅ Sprint 2 — Configurar evidencias desde la app (commits b2d90ce, 29abe11) COMPLETO
+### ✅ Sprint 2 — Configurar evidencias desde la app (commits b2d90ce, 29abe11, 0335583) COMPLETO
 - **`scraper/configEvidencias.js`** — `leerConfigEvidencia` + `guardarConfigEvidencia`
   - Técnica: GET form → `serializarFormulario()` (captura TODOS los campos incl. sesskey/hidden) → overlay de cambios → POST directo con `fetch` dentro del contexto del navegador
   - Igual a la Extensión Z (no usa interacciones UI frágiles)
   - Merge parcial: solo modifica los campos enviados
-  - Detecta errores en la respuesta HTML de Moodle
 - **Migración Prisma** `config_evidencias_audit` → tabla `ConfigAudit { userId, evidenciaId, actId, antes, despues, fecha }`
-- **`api/src/lib/queue.js`** — nueva `configQueue` (BullMQ)
-- **`api/src/workers/configWorker.js`** — operaciones `leer` y `guardar`, graba auditoría post-guardar
-- **`api/src/routes/configEvidencias.js`** — 3 endpoints:
-  - `GET  /api/evidencias/:id/config`       → job `leer`   → `{ jobId }`
-  - `PATCH /api/evidencias/:id/config`      → job `guardar` → `{ jobId }`
-  - `PATCH /api/evidencias/config/bulk`     → N jobs         → `{ jobIds }`
-- **`web/src/components/ConfigEvidenciaDialog.tsx`** — dialog con fecha apertura/entrega/límite + intentos, carga config via polling, bulk support
-- **`EvidenciasModal.tsx`** — botón ⚙ Config por fila + botón "Configurar (N)" en toolbar bulk
+- **`configQueue` + `configWorker.js` + `api/src/routes/configEvidencias.js`** — 3 endpoints leer/guardar/bulk
+- **`ConfigEvidenciaDialog.tsx`** en `EvidenciasModal.tsx` — botón ⚙ por fila + bulk toolbar
 - **PENDIENTE smoke test real** con actId de Moodle en producción
+
+### ⚠️ Sprint 2.5 — FIXES CRÍTICOS (próximo chat — usar Opus)
+
+#### 1. `revisarEntregasForo` está MAL implementada → REESCRIBIR
+**Rama:** `feature/config-evidencias` — archivo: `scraper/evidencias.js`
+
+La implementación actual usa el **grade report** del curso para obtener participantes del foro. Esto está mal.
+
+**Lo que muestra el foro real en Moodle** (confirmado en producción):
+- URL: `/mod/forum/view.php?id={actId}`
+- Cada estudiante publica un **tema de debate** (discussion thread) en el foro
+- Cada post tiene un dropdown/input de calificación: `Calificación máxima: 80 (1)` con selector numérico
+- El instructor califica directamente en esa página
+- Los posts **no aparecen** si el alumno no entregó (sin_entregar)
+
+**Implementación correcta de `revisarEntregasForo(page, actId)`:**
+```
+1. page.goto(`/mod/forum/view.php?id={actId}`)
+2. Buscar todos los posts/discussions:
+   - Autores: a[href*="/user/profile.php?id="], a[href*="/user/view.php?id="]
+   - Calificación dada: input[name*="rating"], select near "Calificación máxima", o .ratinggrade
+3. Estado:
+   - Tiene calificación numérica → "calificado"
+   - Tiene post pero sin calificación → "pendiente"
+   - No aparece en la lista → "sin_entregar" (necesita cruzar con enrolled students)
+4. Para obtener todos los alumnos incluyendo los que no han publicado:
+   - Usar mod_assign_list_participants (NO es solo para assigns — usar core_enrol_get_enrolled_users)
+   - O leer la lista del grade report solo para el listado de nombres, sin buscar columna
+   - O navegar a `/grade/report/grader/index.php?id={courseId}&perpage=0` y extraer SOLO la columna de alumnos (th[scope="row"])
+```
+
+**Selectores clave del foro Moodle** (ver screenshot adjunto en commit):
+```javascript
+// Posts/discussions de la vista del foro
+'.discussion'          // Moodle 3.x — cada fila de debate
+'article.forum-post'   // Moodle 4.x
+'.author a[href*="profile"]'  // Link al perfil del autor
+'.rating select, .rating input[type="number"]' // Input de calificación
+'.ratingnum'           // Valor numérico ya asignado
+```
+
+**IMPORTANTE**: La lista SOLO muestra quienes publicaron. Los que no han publicado no aparecen. Para obtener `sin_entregar`, se necesita cruzar con la lista de enrolled students.
+
+#### 2. Configurar evidencias es muy lenta → OPTIMIZAR
+**Problema**: Cada `GET /api/evidencias/:id/config` lanza un job BullMQ que:
+  1. Inicia Playwright browser (10-15s)
+  2. Login en Moodle (10-15s)
+  3. Navega al modedit (5-10s)
+  4. Total: ~30-45 segundos por evidencia
+
+**Solución propuesta**: Cachear la última configuración leída en DB.
+- Añadir campos a `Evidencia`: `configCache Json?` + `configCacheAt DateTime?`
+- `GET /api/evidencias/:id/config`: si `configCacheAt` < 24h → devolver cache INMEDIATAMENTE (sin job)
+- `PATCH /api/evidencias/:id/config`: después de guardar, actualizar el cache
+- Añadir botón "Forzar re-lectura" en el dialog para invalidar cache manualmente
+
+**Alternativa más simple**: Devolver el cache inmediatamente Y lanzar job de refresco en background. La UI muestra el cache mientras llega el nuevo valor.
+
+#### 3. Ordenar evidencias por número de guía (GA1 → GA2 → GA3...)
+**Problema**: Las evidencias se muestran ordenadas alfabéticamente. El nombre contiene el código GA1, GA2, GA3... (Guía 1, Guía 2, etc.)
+
+**Solución**: Ordenar por el número extraído del código GA:
+- Regex para extraer: `/GA(\d+)/i` del nombre de la evidencia
+- Ordenar por: número GA **ascendente** (GA1 primero, GA2, GA3...) dentro de cada estado
+- En el frontend (`EvidenciasModal.tsx`): aplicar sort client-side antes de renderizar
+- En el backend (`GET /api/fichas/:fichaId/evidencias`): cambiar `orderBy` a ordenar por nombre considerando GA number
+
+**Ejemplo de ordenamiento esperado:**
+```
+GA1-240202501-AA1-EV01 (guía 1)
+GA1-240202501-AA1-EV02 (guía 1, evidencia 2)
+GA2-240202501-AA2-EV01 (guía 2)
+GA3-240202501-AA2-EV01 (guía 3)
+GA4-240202501-AA1-EV01 (guía 4)
+```
 
 ### 📂 Documentación crítica (leer en este orden)
 1. `CLAUDE.md` — contexto rápido del proyecto
@@ -264,6 +332,142 @@ OBJETIVO: Cierre del Sprint 1.
 7. Reportar status final
 
 NO empezar Sprint 2 en este chat.
+```
+
+---
+
+### 🔴 PROMPT 5 — Sprint 2.5: Fixes críticos foros + config + ordenamiento
+
+> **Modelo:** Claude Opus (obligatorio — lógica compleja de scraping)
+> **Rama:** `feature/config-evidencias`
+> **Chat nuevo:** sí
+
+```
+c:\zajuna, rama feature/config-evidencias. Lee HANDOFF.md y CLAUDE.md completos.
+Lee también: scraper/evidencias.js, api/src/workers/evidenciasWorker.js,
+web/src/components/EvidenciasModal.tsx, web/src/components/ConfigEvidenciaDialog.tsx
+
+CONTEXTO CRÍTICO — lee la sección "Sprint 2.5 — FIXES CRÍTICOS" del HANDOFF antes de tocar cualquier archivo.
+
+OBJETIVO: Corregir 3 problemas en rama feature/config-evidencias.
+
+══════════ FIX 1 — revisarEntregasForo (CRÍTICO) ══════════
+Archivo: scraper/evidencias.js
+La función revisarEntregasForo() usa el grade report del curso (INCORRECTO).
+
+Cómo funciona REALMENTE el foro en Zajuna/Moodle:
+- URL: /mod/forum/view.php?id={actId}
+- Cada alumno publica un "tema de debate" (discussion thread)
+- Cada post muestra: autor (link a profile.php), y un input de calificación numérica
+  junto al texto "Calificación máxima: X (1)"
+- Solo aparecen los alumnos que publicaron. Los que NO publicaron no aparecen.
+
+Reescribir revisarEntregasForo(page, actId, courseId) así:
+1. page.goto(`${BASE_URL}/mod/forum/view.php?id=${actId}`)
+2. Extraer todos los posts visibles:
+   - Autor: a[href*="profile.php?id="] o a[href*="user/view.php?id="] dentro de cada post
+   - moodleId: extraer id= del href del perfil
+   - Calificación: buscar input o select near ".rating" o text "Calificación máxima"
+   - Si tiene calificación numérica (no vacío, no "-") → "calificado"
+   - Si tiene post pero sin calificación → "pendiente"
+3. Para alumnos que NO publicaron → "sin_entregar":
+   - Navegar a /grade/report/grader/index.php?id={courseId}&perpage=0
+   - Extraer SOLO la lista de alumnos (th[scope="row"] o .userfield en tbody)
+   - Los que no están en la lista del foro → sin_entregar
+4. Retornar array unificado: [...publicaron, ...sinPublicar]
+
+Selectores a probar (ajustar según HTML real con page.content() si fallan):
+- Posts del foro: .forumpost, article.forum-post, div[data-post-id], tr.discussion
+- Autor dentro de un post: .author a, .username a, a[href*="profile.php"]
+- Rating: .rating select, .rating input, span.ratingnum, .ratinggrade
+
+══════════ FIX 2 — Cachear config evidencia (velocidad) ══════════
+Problema: leer config tarda 30-45s porque lanza Playwright cada vez.
+Solución: cache en DB con TTL de 4 horas.
+
+BACKEND:
+1. Migración Prisma: agregar a Evidencia:
+   configCache  Json?
+   configCacheAt DateTime?
+
+2. Endpoint GET /api/evidencias/:id/config:
+   - Si configCache existe y configCacheAt > hace 4h → devolver { config: ev.configCache, fromCache: true } INMEDIATAMENTE (código 200, sin job)
+   - Si cache expiró o no existe → comportamiento actual (lanzar job, devolver { jobId })
+
+3. Worker configWorker.js operación "leer":
+   - Después de leer config de Moodle → actualizar prisma.evidencia { configCache: config, configCacheAt: new Date() }
+
+4. Worker configWorker.js operación "guardar":
+   - Después de guardar exitoso → actualizar configCache con los nuevos valores
+
+FRONTEND (ConfigEvidenciaDialog.tsx):
+5. Cuando la respuesta del GET tiene { config, fromCache: true } → mostrar config INMEDIATAMENTE
+   sin polling. Agregar badge "⚡ Cache (< 4h)" junto al título.
+6. Cuando hay cache disponible → botón "Actualizar desde Moodle" que fuerza el job aunque haya cache.
+
+══════════ FIX 3 — Ordenar evidencias por número GA ══════════
+Los nombres de evidencias tienen el patrón: GA1-..., GA2-..., GA3-..., GA4-...
+"GA1" = Guía 1, "GA4" = Guía 4.
+El usuario quiere verlas ordenadas GA1 → GA2 → GA3 → GA4 (ascendente por número de guía).
+
+FRONTEND (EvidenciasModal.tsx):
+- Antes de renderizar la lista, aplicar sort:
+  function gaNum(nombre: string): number {
+    const m = nombre.match(/GA(\d+)/i)
+    return m ? parseInt(m[1]) : 999
+  }
+  Ordenar: por gaNum ASC, luego nombre ASC como desempate.
+- Aplicar DENTRO de cada grupo (abiertas / cerradas se mantienen separadas).
+
+BACKEND (opcional si el sort client-side es suficiente):
+- En GET /api/fichas/:fichaId/evidencias, el orderBy actual es [cerradaAt asc, nombre asc].
+- Si se prefiere DB sort: reemplazar por raw SQL con REGEXP_REPLACE para extraer el número GA.
+  Alternativa simple: dejar el sort en frontend.
+
+══════════ CONTEXTO SCREENSHOT — FORO REAL ══════════
+El foro en Zajuna se ve así (confirmado en producción):
+- Cada alumno publica UN tema de debate (discussion thread) con el código de la evidencia en el título
+  Ejemplo: "blog GA4-240202501-AA1-EV03." o "Blog GA4-240202501-AA1-EV03"
+- Debajo del contenido de cada post aparece: "Calificación máxima: 80 (1)" con un <select> numérico
+  donde el instructor elige la nota (80, 100, etc.)
+- Hay alumnos que ya tienen calificación (el select muestra el valor) y otros sin calificar
+- Al final del foro aparece un banner: "Se ha alcanzado la fecha límite para publicar"
+- El botón principal es "Añadir un nuevo tema de debate"
+- Los posts están en una tabla o lista; cada fila tiene: avatar, nombre del alumno (link),
+  título del post, fecha, y en la parte inferior el área de rating
+- Usar page.content() para ver el HTML real y ajustar selectores antes de implementar
+
+══════════ ERROR CONOCIDO — config (NO usar selectores UI) ══════════
+El enfoque ANTIGUO de configEvidencias.js usaba selectores Playwright como:
+  locator('#id_allowsubmissionsfromdateenabled').check()
+Esto fallaba con:
+  "locator.check: Timeout 30000ms exceeded.
+   waiting for locator('#id_allowsubmissionsfromdateenabled')"
+Porque el checkbox no tiene ese ID en Moodle 4.x o está en una sección colapsada.
+
+El enfoque CORRECTO (ya implementado en scraper/configEvidencias.js) es:
+  GET form → serializarFormulario() → overlay → POST con fetch()
+NO usar ningún locator.check(), selectOption() ni interacciones UI para el config.
+Si encuentras algún locator en configEvidencias.js → ELIMINARLO y reemplazar por el enfoque POST.
+
+══════════ REGLA DE ORO ══════════
+⚠️ ANTES DE ESCRIBIR CÓDIGO: muéstrame tu plan con los selectores que vas a usar.
+⚠️ Si un selector falla en runtime → muéstrame el HTML (page.content()) y propón 2-3 alternativas ANTES de implementar.
+⚠️ NO hagas commits sin confirmarme que el smoke test pasó.
+⚠️ Trabaja un fix a la vez, confirma antes de pasar al siguiente.
+
+══════════ REGLAS TÉCNICAS ══════════
+- Rama: feature/config-evidencias (ya existe)
+- Tests: smoke test de revisarEntregasForo con un foro real (actId conocido)
+- Commit por fix: 3 commits separados
+- NO tocar funcionalidad de Sprint 1 o 2 que ya funciona
+- Si un selector del foro no existe en el HTML real → loguear page.content() y ajustar
+
+ENTREGABLES
+- revisarEntregasForo reescrita y probada con smoke test
+- Config con cache (GET < 100ms si hay cache)
+- Evidencias ordenadas por GA1, GA2, GA3...
+- 3 commits + HANDOFF.md actualizado
 ```
 
 ---
