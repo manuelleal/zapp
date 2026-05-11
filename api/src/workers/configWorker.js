@@ -36,6 +36,12 @@ const worker = new Worker("config", async (job) => {
 
     if (operation === "leer") {
       const configActual = await leerConfigEvidencia(page, actId);
+      // Persistir cache (Sprint 2.5 FIX 2)
+      await prisma.evidencia.update({
+        where: { id: evidenciaId },
+        data:  { configCache: configActual, configCacheAt: new Date() },
+      }).catch((e) => console.error(`[configWorker] no se pudo cachear leer: ${e.message}`));
+
       await prisma.job.update({
         where: { id: jobId },
         data:  { status: "done", progreso: 100, resultado: { config: configActual } },
@@ -57,6 +63,12 @@ const worker = new Worker("config", async (job) => {
       await prisma.configAudit.create({
         data: { userId, evidenciaId, actId: String(actId), antes, despues },
       });
+
+      // Actualizar cache con el estado post-guardado (Sprint 2.5 FIX 2)
+      await prisma.evidencia.update({
+        where: { id: evidenciaId },
+        data:  { configCache: despues, configCacheAt: new Date() },
+      }).catch((e) => console.error(`[configWorker] no se pudo cachear guardar: ${e.message}`));
 
       await prisma.job.update({
         where: { id: jobId },

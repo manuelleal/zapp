@@ -8,7 +8,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Settings, Loader2, CheckCircle, AlertCircle } from "lucide-react"
+import { Settings, Loader2, CheckCircle, AlertCircle, Zap, RefreshCw } from "lucide-react"
 import { apiFetch, authFetch, ApiError } from "@/api/client"
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -31,6 +31,13 @@ interface ConfigEvidenciaDialogProps {
 }
 
 type Phase = "idle" | "loading" | "ready" | "saving" | "success" | "error"
+
+interface ConfigGetResponse {
+  config?:    Config
+  fromCache?: boolean
+  cachedAt?:  string
+  jobId?:     string
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -101,6 +108,8 @@ export default function ConfigEvidenciaDialog({
   const [phase, setPhase]   = useState<Phase>("idle")
   const [statusMsg, setStatusMsg] = useState("")
   const [form, setForm]     = useState(configToForm(emptyConfig()))
+  const [fromCache, setFromCache] = useState(false)
+  const [cachedAt, setCachedAt]   = useState<string | null>(null)
   const pollLoad = usePollJob()
   const pollSave = usePollJob()
 
@@ -110,6 +119,8 @@ export default function ConfigEvidenciaDialog({
       setPhase("idle")
       setStatusMsg("")
       setForm(configToForm(emptyConfig()))
+      setFromCache(false)
+      setCachedAt(null)
       pollLoad.stop()
       pollSave.stop()
       return
@@ -122,18 +133,40 @@ export default function ConfigEvidenciaDialog({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
-  async function loadConfig(evidenciaId: string) {
+  async function loadConfig(evidenciaId: string, force = false) {
     setPhase("loading")
-    setStatusMsg("Leyendo configuración desde Moodle...")
+    setStatusMsg(force ? "Actualizando desde Moodle..." : "Leyendo configuración...")
+    setFromCache(false)
+    setCachedAt(null)
     try {
-      const { jobId } = await apiFetch<{ jobId: string }>(
-        `/api/evidencias/${encodeURIComponent(evidenciaId)}/config`
+      const qs = force ? "?force=1" : ""
+      const resp = await apiFetch<ConfigGetResponse>(
+        `/api/evidencias/${encodeURIComponent(evidenciaId)}/config${qs}`
       )
+
+      // Respuesta sincronica del cache (Sprint 2.5 FIX 2)
+      if (resp.fromCache && resp.config) {
+        setForm(configToForm(resp.config))
+        setFromCache(true)
+        setCachedAt(resp.cachedAt ?? null)
+        setPhase("ready")
+        setStatusMsg("")
+        return
+      }
+
+      if (!resp.jobId) {
+        setPhase("error")
+        setStatusMsg("Respuesta inválida del servidor.")
+        return
+      }
+
       pollLoad.start(
-        jobId,
+        resp.jobId,
         (resultado: unknown) => {
           const r = resultado as { config: Config }
           setForm(configToForm(r.config))
+          setFromCache(false)
+          setCachedAt(new Date().toISOString())
           setPhase("ready")
           setStatusMsg("")
         },
@@ -221,6 +254,15 @@ export default function ConfigEvidenciaDialog({
               ? `Configurar ${evidenciaIds.length} evidencias`
               : "Configurar evidencia"}
           </DialogTitle>
+          {fromCache && !isBulk && (
+            <span
+              className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-800"
+              title={cachedAt ? `Cache de ${new Date(cachedAt).toLocaleString("es-CO")}` : undefined}
+            >
+              <Zap className="w-3 h-3" />
+              Cache (&lt; 4h)
+            </span>
+          )}
         </div>
         <DialogDescription className="text-xs text-gray-500 -mt-1 mb-3 truncate">
           {isBulk
@@ -371,6 +413,19 @@ export default function ConfigEvidenciaDialog({
               disabled={busy}
             >
               Reintentar lectura
+            </Button>
+          )}
+          {fromCache && !isBulk && phase === "ready" && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1"
+              onClick={() => loadConfig(evidenciaIds[0], true)}
+              disabled={busy}
+              title="Forzar lectura fresca desde Moodle (30-45s)"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              Actualizar desde Moodle
             </Button>
           )}
           <Button

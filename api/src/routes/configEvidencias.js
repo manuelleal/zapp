@@ -87,10 +87,24 @@ async function configEvidenciasRoutes(fastify) {
     return reply.code(202).send({ jobIds });
   });
 
-  // GET /api/evidencias/:id/config  → lanza job "leer", retorna jobId
+  // GET /api/evidencias/:id/config
+  //   - Si configCache existe y configCacheAt < 4h → 200 { config, fromCache: true, cachedAt }
+  //   - ?force=1 fuerza re-lectura desde Moodle
+  //   - En cualquier otro caso → 202 { jobId } (comportamiento original)
   fastify.get("/api/evidencias/:id/config", { preHandler: fastify.authenticate }, async (req, reply) => {
     const { ev, actId, error, code } = await getEvidenciaConAcceso(req.params.id, req.user.id);
     if (error) return reply.code(code).send({ error });
+
+    const force = req.query?.force === "1" || req.query?.force === "true";
+    const TTL_MS = 4 * 60 * 60 * 1000; // 4 horas
+
+    if (!force && ev.configCache && ev.configCacheAt && (Date.now() - new Date(ev.configCacheAt).getTime()) < TTL_MS) {
+      return reply.code(200).send({
+        config:    ev.configCache,
+        fromCache: true,
+        cachedAt:  ev.configCacheAt,
+      });
+    }
 
     const jobId = await encolarConfigJob(req.user.id, ev.id, actId, "leer");
     return reply.code(202).send({ jobId });
