@@ -209,9 +209,11 @@ async function extraerPostsForo(page) {
  * @returns {Promise<Array<{ moodleUserId: string, nombre: string }>>}
  */
 async function obtenerMatriculados(page, courseId) {
-  const url = `${BASE_URL}/grade/report/grader/index.php?id=${courseId}&perpage=0`;
+  // perpage=5000 evita el render "all" (perpage=0) que en cursos grandes
+  // tarda >30s. 5000 cubre cualquier ficha del SENA con margen.
+  const url = `${BASE_URL}/grade/report/grader/index.php?id=${courseId}&perpage=5000`;
   log(`[matriculados] GET ${url}`);
-  await page.goto(url, { waitUntil: "load", timeout: TIMEOUT });
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 90_000 });
   await cerrarModal(page);
   return await page.evaluate(() => {
     const links = Array.from(document.querySelectorAll(
@@ -234,7 +236,7 @@ async function obtenerMatriculados(page, courseId) {
 async function revisarEntregasForo(page, actId, courseId, matriculadosCache) {
   const viewUrl = `${BASE_URL}/mod/forum/view.php?id=${actId}`;
   log(`[foro] View: ${viewUrl}`);
-  await page.goto(viewUrl, { waitUntil: "load", timeout: TIMEOUT });
+  await page.goto(viewUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
   await cerrarModal(page);
 
   // Recolectar posts de la vista (foros tipo blog/single los muestran aquí)

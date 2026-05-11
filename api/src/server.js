@@ -26,6 +26,8 @@ fastify.register(require("@fastify/static"), {
 
 // SPA fallback: cualquier GET no-API que no matchee un asset estatico
 // devuelve index.html para que React Router maneje la ruta client-side.
+// Usamos AMBOS mecanismos (setNotFoundHandler + ruta wildcard) porque @fastify/static
+// a veces atrapa la solicitud antes del notFoundHandler.
 fastify.setNotFoundHandler((req, reply) => {
   if (req.method !== "GET" || req.url.startsWith("/api/")) {
     return reply.code(404).send({ error: "Not Found" });
