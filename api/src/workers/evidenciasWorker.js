@@ -6,7 +6,7 @@ const { connection } = require("../lib/queue");
 const { decrypt } = require("../lib/crypto");
 const prisma = require("../db/client");
 const { login, cerrarModal, BASE_URL, TIMEOUT } = require("../../../scraper/auth");
-const { obtenerEvidencias, revisarEntregas, revisarEntregasForo, obtenerMatriculados } = require("../../../scraper/evidencias");
+const { obtenerEvidencias, revisarEntregas, revisarEntregasForo, revisarEntregasQuiz, obtenerMatriculados } = require("../../../scraper/evidencias");
 
 const worker = new Worker("evidencias", async (job) => {
   const { jobId, userId, fichaId, courseId, competenciaCodigo, zajunaUserEnc, zajunaPassEnc } = job.data;
@@ -34,8 +34,8 @@ const worker = new Worker("evidencias", async (job) => {
     // Sprint 2.6 FIX E: si hay >=1 foro, fetchear matriculados UNA sola vez y reusar
     // en cada llamada a revisarEntregasForo. Ahorra ~5s por cada foro adicional.
     let matriculadosCache = null;
-    const tieneForos = evidencias.some((e) => e.tipo === "forum");
-    if (tieneForos) {
+    const necesitaMatriculados = evidencias.some((e) => e.tipo === "forum" || e.tipo === "quiz");
+    if (necesitaMatriculados) {
       try {
         matriculadosCache = await obtenerMatriculados(page, courseId);
       } catch (e) {
@@ -48,10 +48,15 @@ const worker = new Worker("evidencias", async (job) => {
     for (let i = 0; i < evidencias.length; i++) {
       const ev = evidencias[i];
 
-      // Usar scraper apropiado según tipo de actividad
-      const entregas = ev.tipo === "forum"
-        ? await revisarEntregasForo(page, ev.actId, courseId, matriculadosCache)
-        : await revisarEntregas(page, ev.actId);
+      // Sprint 2.6 FIX F: dispatch por tipo (assign/forum/quiz).
+      let entregas;
+      if (ev.tipo === "forum") {
+        entregas = await revisarEntregasForo(page, ev.actId, courseId, matriculadosCache);
+      } else if (ev.tipo === "quiz") {
+        entregas = await revisarEntregasQuiz(page, ev.actId, courseId, matriculadosCache);
+      } else {
+        entregas = await revisarEntregas(page, ev.actId);
+      }
 
       // Upsert evidencia (preserva cerradaAt actual, actualiza tipo real)
       const evDb = await prisma.evidencia.upsert({

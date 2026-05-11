@@ -20,6 +20,8 @@ async function obtenerEvidencias(page, competenciaCodigo) {
     }
   }
 
+  // Sprint 2.6 FIX F: incluir /mod/quiz/ (cuestionarios) que antes se excluian.
+  // El curso de ingles tiene 6 quizzes adicionales => 24 evidencias totales.
   const links = await page.$$eval(
     "a",
     (as, codigo) =>
@@ -27,17 +29,17 @@ async function obtenerEvidencias(page, competenciaCodigo) {
         .filter(a => {
           const href = a.href || "";
           const txt  = (a.textContent || "").trim();
-          const esActividad = href.includes("/mod/assign/") || href.includes("/mod/forum/");
-          return (
-            esActividad &&
-            txt.includes(codigo) &&
-            !/cuestionario|quiz/i.test(txt) &&
-            !/borrador|draft/i.test(txt)
-          );
+          const esActividad =
+            href.includes("/mod/assign/") ||
+            href.includes("/mod/forum/")  ||
+            href.includes("/mod/quiz/");
+          return esActividad && txt.includes(codigo);
         })
         .map(a => {
-          const m    = a.href.match(/[?&]id=(\d+)/);
-          const tipo = a.href.includes("/mod/forum/") ? "forum" : "assign";
+          const m  = a.href.match(/[?&]id=(\d+)/);
+          let tipo = "assign";
+          if (a.href.includes("/mod/forum/")) tipo = "forum";
+          else if (a.href.includes("/mod/quiz/")) tipo = "quiz";
           return {
             texto: (a.textContent || "").replace(/\s+/g, " ").trim(),
             href:  a.href,
@@ -309,4 +311,35 @@ async function revisarEntregasForo(page, actId, courseId, matriculadosCache) {
   return result;
 }
 
-module.exports = { obtenerEvidencias, revisarEntregas, revisarEntregasForo, extraerPostsForo, obtenerMatriculados };
+/**
+ * Revisa entregas de un cuestionario (quiz) — Sprint 2.6 FIX F (basico).
+ *
+ * NOTA: por ahora solo lista matriculados como `sin_entregar`. El scrape
+ * real de intentos requiere /mod/quiz/report.php?id=X&mode=overview o el
+ * Web Service mod_quiz_get_user_attempts; queda para un sprint posterior.
+ * Esto permite que la evidencia aparezca en la app y se pueda configurar
+ * sus fechas (ya soportado por configEvidencias.js + FIELD_MAPS quiz).
+ *
+ * @param {import('playwright').Page} page
+ * @param {string|number} _actId
+ * @param {string|number} courseId
+ * @param {Array} [matriculadosCache]
+ */
+async function revisarEntregasQuiz(page, _actId, courseId, matriculadosCache) {
+  let matriculados;
+  if (Array.isArray(matriculadosCache) && matriculadosCache.length > 0) {
+    matriculados = matriculadosCache;
+    log(`[quiz] Matriculados desde cache: ${matriculados.length}`);
+  } else {
+    matriculados = await obtenerMatriculados(page, courseId);
+    log(`[quiz] Matriculados detectados: ${matriculados.length}`);
+  }
+  // TODO: scrapear /mod/quiz/report.php para detectar quien lo presento y la nota.
+  return matriculados.map((m) => ({
+    nombre:           m.nombre,
+    aprendizMoodleId: m.moodleUserId,
+    estado:           "sin_entregar",
+  }));
+}
+
+module.exports = { obtenerEvidencias, revisarEntregas, revisarEntregasForo, revisarEntregasQuiz, extraerPostsForo, obtenerMatriculados };
