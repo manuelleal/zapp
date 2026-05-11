@@ -1,14 +1,14 @@
 # HANDOFF.md — Guía operativa Zajuna App
 
 > Documento maestro para continuar el desarrollo en chats nuevos.
-> Léelo PRIMERO antes de cualquier prompt. Última actualización: mayo 2026 — Sprint 2.5 (fixes críticos) completo.
+> Léelo PRIMERO antes de cualquier prompt. Última actualización: mayo 2026 — Sprint 2.6 cerrado con 1 bug abierto.
 
 ---
 
 ## 🎯 Estado actual del proyecto
 
 - **Rama activa:** `feature/config-evidencias` (branch off `feature/frontend-react`)
-- **HEAD:** commit 2636b52 — feat(foro): calificar posts del foro desde la app (Sprint 2.5 FIX 4)
+- **HEAD:** commit `dab1003` — fix(scraper): resilient nav (Sprint 2.6 timeout fix)
 - **Stack:** Fastify 5 + Prisma 6 + Postgres + Redis + BullMQ + Playwright 1.59
 - **Frontend:** React 18 + Vite 5 + Tailwind 3 + shadcn/ui en `web/` — `web/dist` servido por Fastify sin flags
 - **`public/` eliminado** ✅
@@ -73,6 +73,61 @@
 - FIX 2: abrir `ConfigEvidenciaDialog` 2 veces; 2ª debería traer cache instantáneo.
 - FIX 3: visual con varias evidencias GA1..GA6 mezcladas.
 - FIX 4: poner una nota a un post real del foro 3615995 y verificar en Moodle.
+
+---
+
+### ✅ Sprint 2.6 — Multi-tipo + UX + perf (rama `feature/config-evidencias`)
+
+| # | Commit   | Cambio |
+|---|----------|--------|
+| D | `7a9b5a2` | `configWorker concurrency: 2 → 1`. Causa: Zajuna invalida sesiones paralelas del mismo usuario; bulk de 3+ disparaba "Formulario modedit no encontrado" porque la 2ª sesión expulsaba a la 1ª y `/course/modedit.php` redirigía al login. Mensaje de error ahora distingue redirect-a-login vs cmId inválido. |
+| B | `7a9b5a2` | `scraper/configEvidencias.js`: detecta tipo por `body.classList` (`path-mod-assign|forum|quiz`) y usa `FIELD_MAPS` replicando extensión Z: **forum** `duedate→apertura, cutoffdate→entrega`; **quiz** `timeopen→apertura, timeclose→entrega`; **assign** 3 fechas + `maxattempts`. Config retornado incluye `tipo`. Dialog adaptativo oculta cutoff/intentos cuando no aplica (también en bulk mixto). |
+| C | `7a9b5a2` | Validación inline `cutoff ≥ entrega ≥ apertura` antes de POST (Moodle rechaza). |
+| A | `7a9b5a2` | Evidencias agrupadas por GA con headers colapsables (`groupByGA`, chevron + folder + contador), checkbox por grupo (`toggleGroupSelect`). Solución a "evidencias escondidas" en cursos largos. |
+| E | `7a9b5a2` | Extraída `obtenerMatriculados(page, courseId)`. Worker la llama 1 sola vez por scan y la pasa como cache a cada `revisarEntregasForo` y `revisarEntregasQuiz`. ~5s ahorrados × N forums/quizzes. |
+| F | `e6fb2ba` | `obtenerEvidencias` incluye `/mod/quiz/` (antes excluía explícitamente con regex `cuestionario|quiz`). Causa de "18/24" en inglés (6 cuestionarios faltaban). Tipo `"quiz"` despachado a `revisarEntregasQuiz` (básico: lista matriculados como `sin_entregar`; scrape real de attempts queda para Sprint 2.7). |
+| G | `dab1003` | Timeout fix: `obtenerMatriculados` usa `perpage=5000` (no `0`), `domcontentloaded`, 90s. Forum view 60s. |
+| — | `ff26a3c` | `setNotFoundHandler` + `sendFile("index.html")` para SPA fallback (`/dashboard` ya no 404). |
+
+### 🔴 Bug abierto — verificar mañana tras restart completo
+
+**Síntoma:** "Formulario modedit no encontrado" sigue saliendo al guardar config (reportado tras Sprint 2.6).
+
+**Hipótesis ordenadas por probabilidad:**
+1. **Más probable:** worker no fue reiniciado tras `7a9b5a2`. `concurrency` se lee al instanciar `new Worker(...)`. Hay que matar todos los `node.exe` y relanzar `node api/src/server.js`. Verificación: el log debería mostrar `[configWorker]` 1 sola vez por bulk en lugar de en paralelo.
+2. Sesión de Zajuna del usuario expira entre el `leer` (auditoría antes) y el `guardar`. Solución: hacer leer+guardar en una sola navegación (no doble `goto modedit`).
+3. cmId enviado al worker no corresponde a una actividad editable por ese usuario (permisos). Solución: log de `page.url()` después del `goto` para confirmar redirect.
+
+**Próximos pasos para mañana:**
+1. **Verificar bug**: `Get-Process node | Stop-Process -Force` → `node api/src/server.js` → reproducir bulk de 3 evidencias mismo tipo. Capturar log completo (tiene `[config] GET ...` y `[config] Formulario no visible. URL=...`).
+2. **Si persiste**: refactorizar `guardarConfigEvidencia` para aceptar el form ya serializado de `leerConfigEvidencia`, eliminando el segundo `navegarFormulario`.
+
+---
+
+### 🚀 Sprint 2.7 propuesto — Migrar a Moodle Web Services API
+
+**Idea validada del usuario:** la extensión Z (`root.PiOpq-8m.js`) es 50-100× más rápida porque NO usa scraping; usa Moodle WS:
+- `mod_assign_get_assignments` (1 POST por curso → todas las assigns con fechas + ids)
+- `mod_forum_get_forums_by_courses`
+- `mod_quiz_get_quizzes_by_courses`
+- `mod_assign_get_submissions` (estados de entrega masivos)
+- `core_enrol_get_enrolled_users` (matriculados)
+
+**Tiempo estimado:** scan completo de un curso pasa de **~10 min → ~5-15s**.
+
+**Requisito previo:** obtener `wstoken` del usuario y guardarlo cifrado igual que `zajunaUserEnc`. Dos opciones:
+- (a) Login UI: el usuario lo pega manualmente desde `/zajuna/user/managetoken.php`.
+- (b) Scraper hace login web y luego navega a `/admin/tool/mobile/launch.php?service=moodle_mobile_app&...` para extraer el token automáticamente.
+
+**Plan:**
+1. Schema: `User.zajunaTokenEnc String?`.
+2. `scraper/moodleWS.js` con helpers `wsCall(token, fn, params)`.
+3. Reemplazar `obtenerEvidencias`/`revisarEntregas`/`revisarEntregasForo`/`revisarEntregasQuiz` por equivalentes WS. Mantener fallback Playwright si no hay token.
+4. UI: input "Token Moodle" en perfil/setup.
+
+**Otras mejoras pendientes (orden):**
+- Scrape real de quiz attempts (`/mod/quiz/report.php?id=X&mode=overview`) para detectar quién presentó y la nota — si Sprint 2.7 se hace, viene gratis con `mod_quiz_get_user_attempts`.
+- HANDOFF: actualizar prompts viejos cuando Sprint 2.7 esté.
 
 **Scripts diagnóstico** (en `scripts/`, no committeados — `scripts/` está en .gitignore):
 - `inspect-foro.js` — vuelca HTML de un foro real (usar para debug de selectores)
