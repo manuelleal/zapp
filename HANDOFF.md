@@ -1,14 +1,14 @@
 # HANDOFF.md — Guía operativa Zajuna App
 
 > Documento maestro para continuar el desarrollo en chats nuevos.
-> Léelo PRIMERO antes de cualquier prompt. Última actualización: mayo 2026 — Sprint 2 (config-evidencias) completo.
+> Léelo PRIMERO antes de cualquier prompt. Última actualización: mayo 2026 — Sprint 2.5 (fixes críticos) completo.
 
 ---
 
 ## 🎯 Estado actual del proyecto
 
 - **Rama activa:** `feature/config-evidencias` (branch off `feature/frontend-react`)
-- **HEAD:** commit 29abe11 — refactor scraper serialize-form+POST (ver git log)
+- **HEAD:** commit 2636b52 — feat(foro): calificar posts del foro desde la app (Sprint 2.5 FIX 4)
 - **Stack:** Fastify 5 + Prisma 6 + Postgres + Redis + BullMQ + Playwright 1.59
 - **Frontend:** React 18 + Vite 5 + Tailwind 3 + shadcn/ui en `web/` — `web/dist` servido por Fastify sin flags
 - **`public/` eliminado** ✅
@@ -60,9 +60,53 @@
 - **`ConfigEvidenciaDialog.tsx`** en `EvidenciasModal.tsx` — botón ⚙ por fila + bulk toolbar
 - **PENDIENTE smoke test real** con actId de Moodle en producción
 
-### ⚠️ Sprint 2.5 — FIXES CRÍTICOS (próximo chat — usar Opus)
+### ✅ Sprint 2.5 — FIXES CRÍTICOS (rama `feature/config-evidencias`) COMPLETO
 
-#### 1. `revisarEntregasForo` está MAL implementada → REESCRIBIR
+| # | Commit   | Cambio |
+|---|----------|--------|
+| 1 | `10f88df` | `revisarEntregasForo` lee `form.postratingform` (vista del foro tipo blog o iterando `discuss.php` para tipo general). Cruza con grade report para `sin_entregar`. Smoke: 52 aprendices en 5.8s (actId=3615995, courseId=51083). También `borrador`/`reabierto` → `pendiente` (opción B). |
+| 2 | `6d0e535` | `Evidencia.configCache Json?` + `configCacheAt DateTime?`. `GET /api/evidencias/:id/config` devuelve 200 + `fromCache:true` si TTL<4h, sino 202 + jobId. `?force=1` salta cache. Worker persiste cache tras leer/guardar. Dialog muestra badge "Cache (<4h)" + botón "Actualizar desde Moodle". |
+| 3 | `8d98505` | Helper `gaNum()` + `sortEvidencias()` en `EvidenciasModal` (useMemo). Orden: abiertas primero, luego por nº GA ASC, luego nombre. |
+| 4 | `2636b52` | `scraper/foroRating.js` + `foroRatingQueue` + `foroRatingWorker.js` + `PATCH /api/evidencias/:id/foro/calificar` + input numérico por fila en `AprendicesPanel`. POST a `/rating/rate.php` con sesskey/itemid/scaleid/etc. del form serializado. |
+
+**Smoke tests pendientes (manual):**
+- FIX 2: abrir `ConfigEvidenciaDialog` 2 veces; 2ª debería traer cache instantáneo.
+- FIX 3: visual con varias evidencias GA1..GA6 mezcladas.
+- FIX 4: poner una nota a un post real del foro 3615995 y verificar en Moodle.
+
+**Scripts diagnóstico** (en `scripts/`, no committeados — `scripts/` está en .gitignore):
+- `inspect-foro.js` — vuelca HTML de un foro real (usar para debug de selectores)
+- `smoke-foro.js` — corre `revisarEntregasForo` standalone con un actId/courseId
+
+---
+
+### Sprint 2.5 — Notas técnicas (foro Moodle)
+
+**Tipos de foro detectados:**
+- `forumtype-blog` / `forumtype-single`: posts visibles en `/mod/forum/view.php` directamente. Los `form.postratingform` aparecen ahí.
+- `forumtype-general`: la vista solo lista discussions. Hay que entrar a cada `/mod/forum/discuss.php?d=X` para ver posts + ratings.
+
+**Form `form.postratingform` (golden form — sirve para leer Y calificar):**
+```
+action = /rating/rate.php
+hidden fields:
+  contextid, component=mod_forum, ratingarea=post,
+  itemid={postId}, scaleid, rateduserid={moodleUserId},
+  aggregation=3, sesskey, returnurl
+control:
+  <select name="rating">  (valor "-999" = "Calificar...")
+```
+
+**Estados resultantes en `revisarEntregasForo`:**
+- `calificado`: `select[name=rating].value` ≠ `-999` y ≠ `""` y ≠ `-1`
+- `pendiente`: el alumno publicó pero `select.value` = `-999`/`""`
+- `sin_entregar`: matriculado en el curso pero no figura en ningún form de rating
+
+---
+
+### 🔭 Sprints anteriores (referencia rápida)
+
+#### 1. `revisarEntregasForo` está MAL implementada → REESCRIBIR (HISTÓRICO — ya hecho en FIX 1 de 2.5)
 **Rama:** `feature/config-evidencias` — archivo: `scraper/evidencias.js`
 
 La implementación actual usa el **grade report** del curso para obtener participantes del foro. Esto está mal.
