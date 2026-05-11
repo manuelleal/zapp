@@ -38,7 +38,7 @@ const worker = new Worker("evidencias", async (job) => {
 
       // Usar scraper apropiado según tipo de actividad
       const entregas = ev.tipo === "forum"
-        ? await revisarEntregasForo(page, ev.actId, courseId, ev.texto)
+        ? await revisarEntregasForo(page, ev.actId, courseId)
         : await revisarEntregas(page, ev.actId);
 
       // Upsert evidencia (preserva cerradaAt actual, actualiza tipo real)

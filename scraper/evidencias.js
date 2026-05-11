@@ -104,11 +104,13 @@ async function revisarEntregas(page, actId) {
 
     const estadoTexto = cols[5] || "";
     let estado = "desconocido";
-    if (/sin entrega|no submission|no entregado|no ha entregado|reabierto|reopened/i.test(estadoTexto)) {
+    if (/sin entrega|no submission|no entregado|no ha entregado/i.test(estadoTexto)) {
       estado = "sin_entregar";
     } else if (/calificado|graded/i.test(estadoTexto) && !/sin calificar|not graded/i.test(estadoTexto)) {
       estado = "calificado";
-    } else if (/enviado|entregado|submitted|para calificar/i.test(estadoTexto)) {
+    } else if (/borrador|draft|reabierto|reopened|enviado|entregado|submitted|para calificar/i.test(estadoTexto)) {
+      // Sprint 2.5 opción B: 'borrador (no enviado)' y 'reabierto' caen como pendiente
+      // (atención del instructor) en lugar de sin_entregar.
       estado = "pendiente";
     }
 
@@ -120,91 +122,172 @@ async function revisarEntregas(page, actId) {
 }
 
 /**
- * Obtiene la lista de participantes/calificaciones de un FORO desde el grade report del curso.
- * Equivalente a revisarEntregas() pero para mod_forum.
- * @param {import('playwright').Page} page
- * @param {string} actId   — cmId del foro
- * @param {number|string} courseId
- * @param {string} nombreForo  — nombre de la evidencia (para fallback de búsqueda de columna)
+ * Extrae datos de posts (autor + rating) en la página actual.
+ * Funciona tanto en /mod/forum/view.php (foros tipo blog) como en
+ * /mod/forum/discuss.php (cualquier tipo).
+ *
+ * @returns {Promise<Array<{moodleUserId: string, nombre: string, ratingVal: string|null, ratingText: string|null, postId: string|null}>>}
  */
-async function revisarEntregasForo(page, actId, courseId, nombreForo) {
-  const url = `${BASE_URL}/grade/report/grader/index.php?id=${courseId}&perpage=0`;
-  log(`[foro] Grade report: ${url}`);
-  await page.goto(url, { waitUntil: "load", timeout: TIMEOUT });
+async function extraerPostsForo(page) {
+  return await page.evaluate(() => {
+    const out = [];
+    const seen = new Set();
+    const forms = Array.from(document.querySelectorAll('form.postratingform, form[id^="postrating"]'));
+
+    for (const form of forms) {
+      const rateduserid = form.querySelector('input[name="rateduserid"]')?.value || null;
+      if (!rateduserid || seen.has(rateduserid)) continue;
+      seen.add(rateduserid);
+
+      const itemid = form.querySelector('input[name="itemid"]')?.value || null;
+
+      // Selector de calificación (puede ser <select> o <input>)
+      const ratingEl = form.querySelector('select[name="rating"], input[name="rating"]');
+      let ratingVal  = null;
+      let ratingText = null;
+      if (ratingEl) {
+        ratingVal = ratingEl.value;
+        if (ratingEl.tagName === "SELECT" && ratingEl.selectedIndex >= 0) {
+          ratingText = (ratingEl.options[ratingEl.selectedIndex].textContent || "").trim();
+        }
+      }
+
+      // Autor: buscar en el <article> contenedor del post (puede o no contener el form)
+      let nombre = null;
+      const article =
+        form.closest('article[data-post-id], .forumpost, [data-region="post"]') ||
+        (itemid ? document.querySelector(`article[data-post-id="${itemid}"], #p${itemid}`) : null);
+      if (article) {
+        const a = article.querySelector(
+          `a[href*="/user/view.php?id=${rateduserid}"], a[href*="/user/profile.php?id=${rateduserid}"]`
+        ) || article.querySelector('header a[href*="/user/view.php"], header a[href*="/user/profile"]');
+        if (a) nombre = (a.textContent || "").replace(/\s+/g, " ").trim();
+      }
+      // Fallback global por id en el href
+      if (!nombre) {
+        const a = document.querySelector(
+          `a[href*="/user/view.php?id=${rateduserid}"], a[href*="/user/profile.php?id=${rateduserid}"]`
+        );
+        if (a) nombre = (a.textContent || "").replace(/\s+/g, " ").trim();
+      }
+
+      out.push({ moodleUserId: rateduserid, nombre, ratingVal, ratingText, postId: itemid });
+    }
+
+    return out;
+  });
+}
+
+/**
+ * Revisa entregas de un foro de Moodle (Sprint 2.5).
+ *
+ * Estrategia:
+ *  1. Ir a /mod/forum/view.php?id={actId}.
+ *  2. Si la vista contiene forms `postratingform` (foros tipo blog / single)
+ *     → extraer posts+ratings directamente.
+ *  3. Si no, iterar cada discussion (`discuss.php?d=X`) y agregar sus posts.
+ *  4. Cruzar con los matriculados (grade report) para marcar `sin_entregar`.
+ *
+ * Estados:
+ *  - `calificado`: el <select name="rating"> tiene valor numerico (no `-999`).
+ *  - `pendiente`:  el alumno publicó pero sin calificación (valor `-999` o vacío).
+ *  - `sin_entregar`: matriculado en el curso pero sin post.
+ *
+ * @param {import('playwright').Page} page
+ * @param {string|number} actId    — cmId del foro
+ * @param {string|number} courseId
+ * @returns {Promise<Array<{nombre: string, aprendizMoodleId: string, estado: string}>>}
+ */
+async function revisarEntregasForo(page, actId, courseId) {
+  const viewUrl = `${BASE_URL}/mod/forum/view.php?id=${actId}`;
+  log(`[foro] View: ${viewUrl}`);
+  await page.goto(viewUrl, { waitUntil: "load", timeout: TIMEOUT });
   await cerrarModal(page);
 
-  const resultado = await page.evaluate((actId, nombreForo) => {
-    // ─── Paso 1: encontrar el grade item ID de este foro ───────────────────────
-    // Los encabezados de columna tienen id="c{gradeItemId}" y un <a> con href al foro
-    let gradeItemId = null;
+  // Recolectar posts de la vista (foros tipo blog/single los muestran aquí)
+  let posts = await extraerPostsForo(page);
+  log(`[foro] Posts en view.php: ${posts.length}`);
 
-    const thHeaders = Array.from(document.querySelectorAll("th[id]"));
-    for (const th of thHeaders) {
-      if (!/^c\d+$/.test(th.id)) continue; // solo columnas de items de calificación
-      const link = th.querySelector("a[href]");
-      if (link && link.href.includes(`/mod/forum/`) && link.href.includes(`id=${actId}`)) {
-        gradeItemId = th.id.slice(1); // quitar la "c" inicial
-        break;
-      }
-      // Fallback: comparar por nombre de actividad
-      if (!gradeItemId && nombreForo) {
-        const textoTh = (th.textContent || "").replace(/\s+/g, " ").trim();
-        if (textoTh && nombreForo.startsWith(textoTh.substring(0, 25))) {
-          gradeItemId = th.id.slice(1);
+  // Si no hay posts en la vista, iterar cada discussion
+  if (posts.length === 0) {
+    const discussIds = await page.evaluate(() => {
+      const ids = new Set();
+      document.querySelectorAll('a[href*="/mod/forum/discuss.php?d="]').forEach((a) => {
+        const m = a.href.match(/[?&]d=(\d+)/);
+        if (m) ids.add(m[1]);
+      });
+      return Array.from(ids);
+    });
+    log(`[foro] Discussions detectadas: ${discussIds.length}`);
+
+    const vistos = new Set();
+    for (const d of discussIds) {
+      await page.goto(`${BASE_URL}/mod/forum/discuss.php?d=${d}`, { waitUntil: "load", timeout: TIMEOUT });
+      await cerrarModal(page);
+      const local = await extraerPostsForo(page);
+      for (const p of local) {
+        if (p.moodleUserId && !vistos.has(p.moodleUserId)) {
+          vistos.add(p.moodleUserId);
+          posts.push(p);
         }
       }
     }
-
-    if (!gradeItemId) {
-      return { error: `Columna para foro actId=${actId} no encontrada en grade report`, entregas: [] };
-    }
-
-    // ─── Paso 2: extraer calificaciones por estudiante ─────────────────────────
-    // Las celdas tienen id="u{moodleUserId}c{gradeItemId}"
-    const entregas = [];
-    const pattern  = new RegExp(`^u(\\d+)c${gradeItemId}$`);
-
-    const celdas = Array.from(document.querySelectorAll(`td[id]`));
-    for (const td of celdas) {
-      const m = td.id.match(pattern);
-      if (!m) continue;
-      const moodleUserId = m[1];
-
-      const row = td.closest("tr");
-      if (!row) continue;
-
-      // Nombre del aprendiz: en el th[scope="row"] de la misma fila
-      const nameTh = row.querySelector('th[scope="row"], th.userfield');
-      if (!nameTh) continue;
-      const nombre = (nameTh.textContent || "").replace(/\s+/g, " ").trim();
-      if (nombre.length < 3) continue;
-
-      // Calificación: span.gradevalue, input, o texto directo
-      const gradeSpan = td.querySelector(".gradevalue, .grade");
-      const inputEl   = td.querySelector("input[name^='grade[']");
-      let gradeText = "";
-      if (inputEl)   gradeText = (inputEl.value || "").trim();
-      else if (gradeSpan) gradeText = (gradeSpan.textContent || "").trim();
-      else gradeText = (td.textContent || "").trim();
-
-      // Mapear al sistema A/D/vacío → calificado / sin_entregar
-      // No hay "pendiente" en foros: o tiene calificación o no
-      const calificado = gradeText && gradeText !== "-" && gradeText !== "" && gradeText !== " ";
-      const estado     = calificado ? "calificado" : "sin_entregar";
-
-      entregas.push({ nombre, aprendizMoodleId: moodleUserId, estado });
-    }
-
-    return { entregas, gradeItemId };
-  }, actId, nombreForo);
-
-  if (resultado.error) {
-    log(`[foro] ⚠️  ${resultado.error}`);
-    return [];
+    log(`[foro] Posts agregados desde discussions: ${posts.length}`);
   }
 
-  log(`[foro] ${resultado.entregas.length} aprendices (gradeItemId=${resultado.gradeItemId})`);
-  return resultado.entregas;
+  // Matriculados del curso (para detectar sin_entregar)
+  const gradeUrl = `${BASE_URL}/grade/report/grader/index.php?id=${courseId}&perpage=0`;
+  log(`[foro] Grade report (matriculados): ${gradeUrl}`);
+  await page.goto(gradeUrl, { waitUntil: "load", timeout: TIMEOUT });
+  await cerrarModal(page);
+  const matriculados = await page.evaluate(() => {
+    const links = Array.from(document.querySelectorAll(
+      'th[scope="row"] a[href*="/user/view.php?id="], th.userfield a[href*="/user/view.php?id="], th[scope="row"] a[href*="/user/profile.php?id="]'
+    ));
+    const map = new Map();
+    for (const a of links) {
+      const m = a.href.match(/[?&]id=(\d+)/);
+      if (!m) continue;
+      const id = m[1];
+      if (map.has(id)) continue;
+      const nombre = (a.textContent || "").replace(/\s+/g, " ").trim();
+      if (nombre.length < 3) continue;
+      map.set(id, { moodleUserId: id, nombre });
+    }
+    return Array.from(map.values());
+  });
+  log(`[foro] Matriculados detectados: ${matriculados.length}`);
+
+  // Construir resultado unificado
+  const result = [];
+  const idsPostearon = new Set();
+
+  for (const p of posts) {
+    if (!p.moodleUserId) continue;
+    idsPostearon.add(p.moodleUserId);
+
+    // Calificación: "-999" / "" / null → pendiente; cualquier otro valor → calificado.
+    const v = p.ratingVal;
+    const calificado = v != null && v !== "" && v !== "-999" && v !== "-1";
+    result.push({
+      nombre: p.nombre || `Aprendiz ${p.moodleUserId}`,
+      aprendizMoodleId: p.moodleUserId,
+      estado: calificado ? "calificado" : "pendiente",
+    });
+  }
+
+  for (const m of matriculados) {
+    if (!idsPostearon.has(m.moodleUserId)) {
+      result.push({
+        nombre: m.nombre,
+        aprendizMoodleId: m.moodleUserId,
+        estado: "sin_entregar",
+      });
+    }
+  }
+
+  log(`[foro] Total: ${result.length} (publicaron=${idsPostearon.size}, sin_entregar=${result.length - idsPostearon.size})`);
+  return result;
 }
 
-module.exports = { obtenerEvidencias, revisarEntregas, revisarEntregasForo };
+module.exports = { obtenerEvidencias, revisarEntregas, revisarEntregasForo, extraerPostsForo };
