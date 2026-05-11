@@ -41,11 +41,13 @@ fastify.register(require("./routes/fichas"));
 fastify.register(require("./routes/jobs"));
 fastify.register(require("./routes/evidencias"));
 fastify.register(require("./routes/archivar"));
+fastify.register(require("./routes/configEvidencias"));
 
 // ─── WORKER ──────────────────────────────────────────────────────────────────
 
 require("./workers/fichasWorker");
 require("./workers/evidenciasWorker");
+require("./workers/configWorker");
 
 // ─── START ───────────────────────────────────────────────────────────────────
 

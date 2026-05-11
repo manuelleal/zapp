@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { RefreshCw, ChevronDown, ChevronRight, ExternalLink } from "lucide-react"
+import { RefreshCw, ChevronDown, ChevronRight, ExternalLink, Settings } from "lucide-react"
 import {
   Dialog,
   DialogContent,
@@ -15,6 +15,7 @@ import { Label } from "@/components/ui/label"
 import { apiFetch, authFetch, ApiError } from "@/api/client"
 import { tiempoRelativo } from "@/lib/utils"
 import AprendicesPanel from "@/components/AprendicesPanel"
+import ConfigEvidenciaDialog from "@/components/ConfigEvidenciaDialog"
 
 interface Evidencia {
   id: string
@@ -82,6 +83,7 @@ export default function EvidenciasModal({
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [confirmBulkClose, setConfirmBulkClose] = useState(false)
+  const [configDialog, setConfigDialog] = useState<{ ids: string[]; nombre?: string } | null>(null)
 
   function stopPoll() {
     if (pollRef.current) {
@@ -102,6 +104,7 @@ export default function EvidenciasModal({
       setExpandedId(null)
       setSelectedIds(new Set())
       setConfirmBulkClose(false)
+      setConfigDialog(null)
     }
   }, [open])
 
@@ -304,6 +307,7 @@ export default function EvidenciasModal({
                   onCerrar={(cerrada) =>
                     cerrarMutation.mutate({ evidenciaId: ev.id, cerrada })
                   }
+                  onConfig={() => setConfigDialog({ ids: [ev.id], nombre: ev.nombre })}
                   selected={selectedIds.has(ev.id)}
                   onSelect={() => toggleSelect(ev.id)}
                 />
@@ -334,6 +338,16 @@ export default function EvidenciasModal({
               disabled={bulkMutation.isPending}
             >
               Reabrir ({selectedIds.size})
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="text-xs h-7 gap-1"
+              onClick={() => setConfigDialog({ ids: [...selectedIds] })}
+              disabled={bulkMutation.isPending}
+            >
+              <Settings className="w-3 h-3" />
+              Configurar ({selectedIds.size})
             </Button>
             <Button
               size="sm"
@@ -385,6 +399,15 @@ export default function EvidenciasModal({
       </DialogContent>
     </Dialog>
 
+    {configDialog && (
+      <ConfigEvidenciaDialog
+        open={true}
+        onClose={() => setConfigDialog(null)}
+        evidenciaIds={configDialog.ids}
+        evidenciaNombre={configDialog.nombre}
+      />
+    )}
+
     <Dialog open={confirmBulkClose} onOpenChange={(v) => { if (!v) setConfirmBulkClose(false) }}>
       <DialogContent className="max-w-sm">
         <DialogTitle>¿Cerrar {selectedIds.size} evidencias?</DialogTitle>
@@ -416,6 +439,7 @@ interface EvidenciaRowProps {
   expanded: boolean
   onToggleExpand: () => void
   onCerrar: (cerrada: boolean) => void
+  onConfig: () => void
   selected: boolean
   onSelect: () => void
 }
@@ -425,6 +449,7 @@ function EvidenciaRow({
   expanded,
   onToggleExpand,
   onCerrar,
+  onConfig,
   selected,
   onSelect,
 }: EvidenciaRowProps) {
@@ -489,6 +514,16 @@ function EvidenciaRow({
               </a>
             </Button>
           )}
+
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-xs h-7 px-2 gap-1"
+            onClick={onConfig}
+          >
+            <Settings className="w-3.5 h-3.5" />
+            Config
+          </Button>
 
           <Button
             variant="ghost"

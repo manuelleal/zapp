@@ -48,6 +48,7 @@ model User {
   createdAt         DateTime     @default(now())
   fichas            Ficha[]
   jobs              Job[]
+  configAudits      ConfigAudit[]
   competencia       Competencia? @relation(fields: [competenciaId], references: [id])
 }
 
@@ -69,14 +70,15 @@ model Ficha {
 }
 
 model Evidencia {
-  id        String    @id @default(cuid())
-  fichaId   String
-  nombre    String
-  href      String
-  tipo      String    @default("assign")
-  cerradaAt DateTime?
-  ficha     Ficha     @relation(fields: [fichaId], references: [id])
-  entregas  Entrega[]
+  id           String        @id @default(cuid())
+  fichaId      String
+  nombre       String
+  href         String
+  tipo         String        @default("assign")
+  cerradaAt    DateTime?
+  ficha        Ficha         @relation(fields: [fichaId], references: [id])
+  entregas     Entrega[]
+  configAudits ConfigAudit[]
 
   @@unique([fichaId, href])
 }
@@ -138,4 +140,16 @@ model Job {
   resultado Json?
   creadoAt  DateTime @default(now())
   user      User     @relation(fields: [userId], references: [id])
+}
+
+model ConfigAudit {
+  id          String    @id @default(cuid())
+  userId      String
+  evidenciaId String
+  actId       String
+  antes       Json
+  despues     Json
+  fecha       DateTime  @default(now())
+  user        User      @relation(fields: [userId], references: [id])
+  evidencia   Evidencia @relation(fields: [evidenciaId], references: [id])
 }
