@@ -83,7 +83,10 @@ const worker = new Worker("config", async (job) => {
     await browser.close();
   }
 
-}, { connection, concurrency: 2 });
+// Sprint 2.6 FIX D: concurrency=1 — Zajuna invalida sesiones paralelas
+// del mismo usuario. Si dos jobs corren a la vez, el segundo login expulsa
+// al primero y su navegacion a /course/modedit.php redirige al login.
+}, { connection, concurrency: 1 });
 
 worker.on("failed", async (job, err) => {
   if (job?.data?.jobId) {

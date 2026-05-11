@@ -12,7 +12,51 @@
 
 const { BASE_URL, TIMEOUT, log, cerrarModal } = require("./auth");
 
-// ─── HELPERS ─────────────────────────────────────────────────────────────────
+// ─── FIELD MAPS POR TIPO (Sprint 2.6 FIX B) ─────────────────────────────────
+// Mapping replica el de la Extensión Z (root.PiOpq-8m.js):
+//   forum.duedate     → apertura  (en forum, duedate es la fecha visible al alumno)
+//   forum.cutoffdate  → entrega   (cutoff = bloqueo de posts)
+//   quiz.timeopen     → apertura
+//   quiz.timeclose    → entrega
+//   assign.allowsubmissionsfromdate → apertura
+//   assign.duedate    → entrega
+//   assign.cutoffdate → limite (extensión)
+const FIELD_MAPS = {
+  assign: {
+    abrir:    "allowsubmissionsfromdate",
+    entrega:  "duedate",
+    limite:   "cutoffdate",
+    intentos: { name: "maxattempts", unlimitedValue: "-1" },
+  },
+  forum: {
+    abrir:    "duedate",
+    entrega:  "cutoffdate",
+    limite:   null,
+    intentos: null,
+  },
+  quiz: {
+    abrir:    "timeopen",
+    entrega:  "timeclose",
+    limite:   null,
+    intentos: null,
+  },
+};
+
+// ─── HELPERS ──────────────────────────────────────────────────────────────────────────
+
+/**
+ * Detecta el tipo de modulo desde body.classList (path-mod-assign / path-mod-forum / path-mod-quiz).
+ * Fallback: "assign".
+ */
+async function detectarTipo(page) {
+  return await page.evaluate(() => {
+    const cls = document.body.className || "";
+    if (cls.includes("path-mod-forum")) return "forum";
+    if (cls.includes("path-mod-quiz"))  return "quiz";
+    if (cls.includes("path-mod-assign")) return "assign";
+    return "assign";
+  });
+}
 
 /**
  * Navega al formulario modedit y verifica que cargó correctamente.
@@ -30,10 +74,15 @@ async function navegarFormulario(page, actId) {
     .catch(() => false);
 
   if (!formOk) {
+    // Detectar redirect a login (sesión expulsada por concurrencia)
+    const url   = page.url();
+    const isLogin = /\/login|loginindex/i.test(url);
     const html = await page.content();
-    log(`[config] Formulario no visible. HTML snippet:\n${html.substring(0, 800)}`);
+    log(`[config] Formulario no visible. URL=${url}. HTML snippet:\n${html.substring(0, 800)}`);
     throw new Error(
-      "Formulario modedit no encontrado — verifica que actId sea correcto y que el usuario tenga permiso de edición"
+      isLogin
+        ? "La sesion fue expulsada (otro login concurrente). Vuelve a intentar en unos segundos."
+        : "Formulario modedit no encontrado — verifica que actId sea correcto y que el usuario tenga permiso de edición"
     );
   }
 }
@@ -129,32 +178,43 @@ function aplicarFecha(d, prefix, fecha, hora) {
 // ─── EXPORTS ─────────────────────────────────────────────────────────────────
 
 /**
- * Lee la configuración actual de una evidencia (assign) desde el formulario modedit.
+ * Lee la configuracion actual de una evidencia desde el formulario modedit.
+ * Detecta tipo (assign/forum/quiz) y usa el FIELD_MAP correspondiente.
+ *
  * @param {import('playwright').Page} page
  * @param {string|number} actId  — course module ID
- * @returns {{ nombre, abrirFecha, abrirHora, entregaFecha, entregaHora, limiteFecha, limiteHora, intentos }}
+ * @returns {{
+ *   tipo, nombre,
+ *   abrirFecha, abrirHora, entregaFecha, entregaHora,
+ *   limiteFecha, limiteHora,    // null para forum/quiz
+ *   intentos,                    // null si el tipo no soporta intentos
+ * }}
  */
 async function leerConfigEvidencia(page, actId) {
   await navegarFormulario(page, actId);
+
+  const tipo = await detectarTipo(page);
+  const map  = FIELD_MAPS[tipo] || FIELD_MAPS.assign;
 
   const form = await serializarFormulario(page);
   if (!form) throw new Error("No se pudo serializar el formulario modedit");
 
   const d = form.data;
 
-  const apertura = extraerFecha(d, "allowsubmissionsfromdate");
-  const entrega  = extraerFecha(d, "duedate");
-  const limite   = extraerFecha(d, "cutoffdate");
+  const apertura = map.abrir   ? extraerFecha(d, map.abrir)   : { fecha: null, hora: null };
+  const entrega  = map.entrega ? extraerFecha(d, map.entrega) : { fecha: null, hora: null };
+  const limite   = map.limite  ? extraerFecha(d, map.limite)  : { fecha: null, hora: null };
 
-  const intentosRaw = d["maxattempts"];
-  const intentos =
-    intentosRaw === undefined || intentosRaw === null
-      ? null
-      : intentosRaw === "-1"
-      ? "Ilimitado"
-      : parseInt(intentosRaw, 10);
+  let intentos = null;
+  if (map.intentos && map.intentos.name) {
+    const raw = d[map.intentos.name];
+    if (raw !== undefined && raw !== null) {
+      intentos = raw === map.intentos.unlimitedValue ? "Ilimitado" : parseInt(raw, 10);
+    }
+  }
 
   const config = {
+    tipo,
     nombre:       d["name"] || "",
     abrirFecha:   apertura.fecha,
     abrirHora:    apertura.hora,
@@ -165,7 +225,7 @@ async function leerConfigEvidencia(page, actId) {
     intentos,
   };
 
-  log(`[config] Leído: ${JSON.stringify(config)}`);
+  log(`[config] Leido tipo=${tipo}: ${JSON.stringify(config)}`);
   return config;
 }
 
@@ -180,26 +240,31 @@ async function leerConfigEvidencia(page, actId) {
 async function guardarConfigEvidencia(page, actId, config) {
   await navegarFormulario(page, actId);
 
+  const tipo = await detectarTipo(page);
+  const map  = FIELD_MAPS[tipo] || FIELD_MAPS.assign;
+
   const form = await serializarFormulario(page);
   if (!form) throw new Error("No se pudo serializar el formulario modedit");
 
   // Copia mutable del formulario completo (incluye sesskey y todos los campos ocultos)
   const d = { ...form.data };
 
-  // Aplicar solo los campos enviados
-  if (config.abrirFecha !== undefined) {
-    aplicarFecha(d, "allowsubmissionsfromdate", config.abrirFecha, config.abrirHora || "00:00");
+  // Aplicar solo los campos enviados, respetando el field map del tipo.
+  if (config.abrirFecha !== undefined && map.abrir) {
+    aplicarFecha(d, map.abrir, config.abrirFecha, config.abrirHora || "00:00");
   }
-  if (config.entregaFecha !== undefined) {
-    aplicarFecha(d, "duedate", config.entregaFecha, config.entregaHora || "23:55");
+  if (config.entregaFecha !== undefined && map.entrega) {
+    aplicarFecha(d, map.entrega, config.entregaFecha, config.entregaHora || "23:55");
   }
-  if (config.limiteFecha !== undefined) {
-    aplicarFecha(d, "cutoffdate", config.limiteFecha, config.limiteHora || "23:55");
+  if (config.limiteFecha !== undefined && map.limite) {
+    aplicarFecha(d, map.limite, config.limiteFecha, config.limiteHora || "23:55");
+  } else if (config.limiteFecha !== undefined && !map.limite) {
+    log(`[config] tipo=${tipo} no soporta fecha limite; ignorando`);
   }
-  if (config.intentos !== undefined && config.intentos !== null) {
-    d["maxattempts"] =
+  if (config.intentos !== undefined && config.intentos !== null && map.intentos) {
+    d[map.intentos.name] =
       config.intentos === "Ilimitado" || config.intentos === -1
-        ? "-1"
+        ? map.intentos.unlimitedValue
         : String(config.intentos);
   }
 

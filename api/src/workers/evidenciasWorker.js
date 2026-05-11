@@ -6,7 +6,7 @@ const { connection } = require("../lib/queue");
 const { decrypt } = require("../lib/crypto");
 const prisma = require("../db/client");
 const { login, cerrarModal, BASE_URL, TIMEOUT } = require("../../../scraper/auth");
-const { obtenerEvidencias, revisarEntregas, revisarEntregasForo } = require("../../../scraper/evidencias");
+const { obtenerEvidencias, revisarEntregas, revisarEntregasForo, obtenerMatriculados } = require("../../../scraper/evidencias");
 
 const worker = new Worker("evidencias", async (job) => {
   const { jobId, userId, fichaId, courseId, competenciaCodigo, zajunaUserEnc, zajunaPassEnc } = job.data;
@@ -31,6 +31,18 @@ const worker = new Worker("evidencias", async (job) => {
     const evidencias = await obtenerEvidencias(page, competenciaCodigo);
     await prisma.job.update({ where: { id: jobId }, data: { progreso: 50 } });
 
+    // Sprint 2.6 FIX E: si hay >=1 foro, fetchear matriculados UNA sola vez y reusar
+    // en cada llamada a revisarEntregasForo. Ahorra ~5s por cada foro adicional.
+    let matriculadosCache = null;
+    const tieneForos = evidencias.some((e) => e.tipo === "forum");
+    if (tieneForos) {
+      try {
+        matriculadosCache = await obtenerMatriculados(page, courseId);
+      } catch (e) {
+        console.error(`[evidenciasWorker] no se pudo precachear matriculados: ${e.message}`);
+      }
+    }
+
     const resumen = [];
 
     for (let i = 0; i < evidencias.length; i++) {
@@ -38,7 +50,7 @@ const worker = new Worker("evidencias", async (job) => {
 
       // Usar scraper apropiado según tipo de actividad
       const entregas = ev.tipo === "forum"
-        ? await revisarEntregasForo(page, ev.actId, courseId)
+        ? await revisarEntregasForo(page, ev.actId, courseId, matriculadosCache)
         : await revisarEntregas(page, ev.actId);
 
       // Upsert evidencia (preserva cerradaAt actual, actualiza tipo real)

@@ -198,7 +198,38 @@ async function extraerPostsForo(page) {
  * @param {string|number} courseId
  * @returns {Promise<Array<{nombre: string, aprendizMoodleId: string, estado: string}>>}
  */
-async function revisarEntregasForo(page, actId, courseId) {
+/**
+ * Lee la lista de matriculados del curso desde el grade report.
+ * Sprint 2.6 FIX E: util independiente para cachear entre evidencias del mismo scan.
+ *
+ * @param {import('playwright').Page} page
+ * @param {string|number} courseId
+ * @returns {Promise<Array<{ moodleUserId: string, nombre: string }>>}
+ */
+async function obtenerMatriculados(page, courseId) {
+  const url = `${BASE_URL}/grade/report/grader/index.php?id=${courseId}&perpage=0`;
+  log(`[matriculados] GET ${url}`);
+  await page.goto(url, { waitUntil: "load", timeout: TIMEOUT });
+  await cerrarModal(page);
+  return await page.evaluate(() => {
+    const links = Array.from(document.querySelectorAll(
+      'th[scope="row"] a[href*="/user/view.php?id="], th.userfield a[href*="/user/view.php?id="], th[scope="row"] a[href*="/user/profile.php?id="]'
+    ));
+    const map = new Map();
+    for (const a of links) {
+      const m = a.href.match(/[?&]id=(\d+)/);
+      if (!m) continue;
+      const id = m[1];
+      if (map.has(id)) continue;
+      const nombre = (a.textContent || "").replace(/\s+/g, " ").trim();
+      if (nombre.length < 3) continue;
+      map.set(id, { moodleUserId: id, nombre });
+    }
+    return Array.from(map.values());
+  });
+}
+
+async function revisarEntregasForo(page, actId, courseId, matriculadosCache) {
   const viewUrl = `${BASE_URL}/mod/forum/view.php?id=${actId}`;
   log(`[foro] View: ${viewUrl}`);
   await page.goto(viewUrl, { waitUntil: "load", timeout: TIMEOUT });
@@ -235,28 +266,16 @@ async function revisarEntregasForo(page, actId, courseId) {
     log(`[foro] Posts agregados desde discussions: ${posts.length}`);
   }
 
-  // Matriculados del curso (para detectar sin_entregar)
-  const gradeUrl = `${BASE_URL}/grade/report/grader/index.php?id=${courseId}&perpage=0`;
-  log(`[foro] Grade report (matriculados): ${gradeUrl}`);
-  await page.goto(gradeUrl, { waitUntil: "load", timeout: TIMEOUT });
-  await cerrarModal(page);
-  const matriculados = await page.evaluate(() => {
-    const links = Array.from(document.querySelectorAll(
-      'th[scope="row"] a[href*="/user/view.php?id="], th.userfield a[href*="/user/view.php?id="], th[scope="row"] a[href*="/user/profile.php?id="]'
-    ));
-    const map = new Map();
-    for (const a of links) {
-      const m = a.href.match(/[?&]id=(\d+)/);
-      if (!m) continue;
-      const id = m[1];
-      if (map.has(id)) continue;
-      const nombre = (a.textContent || "").replace(/\s+/g, " ").trim();
-      if (nombre.length < 3) continue;
-      map.set(id, { moodleUserId: id, nombre });
-    }
-    return Array.from(map.values());
-  });
-  log(`[foro] Matriculados detectados: ${matriculados.length}`);
+  // Matriculados del curso. Sprint 2.6 FIX E: si el caller pasa la lista (cache
+  // por scan), saltamos la navegacion al grade report (~5s ahorrados x cada foro).
+  let matriculados;
+  if (Array.isArray(matriculadosCache) && matriculadosCache.length > 0) {
+    matriculados = matriculadosCache;
+    log(`[foro] Matriculados desde cache: ${matriculados.length}`);
+  } else {
+    matriculados = await obtenerMatriculados(page, courseId);
+    log(`[foro] Matriculados detectados: ${matriculados.length}`);
+  }
 
   // Construir resultado unificado
   const result = [];
@@ -290,4 +309,4 @@ async function revisarEntregasForo(page, actId, courseId) {
   return result;
 }
 
-module.exports = { obtenerEvidencias, revisarEntregas, revisarEntregasForo, extraerPostsForo };
+module.exports = { obtenerEvidencias, revisarEntregas, revisarEntregasForo, extraerPostsForo, obtenerMatriculados };

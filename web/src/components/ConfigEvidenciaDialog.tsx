@@ -28,12 +28,14 @@ interface ConfigEvidenciaDialogProps {
   onClose:         () => void
   evidenciaIds:    string[]
   evidenciaNombre?: string
+  /** Tipos de las evidencias seleccionadas (assign/forum/quiz). Sprint 2.6 FIX B. */
+  tipos?:           string[]
 }
 
 type Phase = "idle" | "loading" | "ready" | "saving" | "success" | "error"
 
 interface ConfigGetResponse {
-  config?:    Config
+  config?:    Config & { tipo?: string }
   fromCache?: boolean
   cachedAt?:  string
   jobId?:     string
@@ -103,6 +105,7 @@ export default function ConfigEvidenciaDialog({
   onClose,
   evidenciaIds,
   evidenciaNombre,
+  tipos = [],
 }: ConfigEvidenciaDialogProps) {
   const isBulk = evidenciaIds.length > 1
   const [phase, setPhase]   = useState<Phase>("idle")
@@ -110,8 +113,18 @@ export default function ConfigEvidenciaDialog({
   const [form, setForm]     = useState(configToForm(emptyConfig()))
   const [fromCache, setFromCache] = useState(false)
   const [cachedAt, setCachedAt]   = useState<string | null>(null)
+  // Tipo detectado tras leer (single mode); para bulk se infiere de la prop tipos.
+  const [tipoLeido, setTipoLeido] = useState<string | null>(null)
   const pollLoad = usePollJob()
   const pollSave = usePollJob()
+
+  // Sprint 2.6 FIX B: decidir que campos mostrar segun tipo(s).
+  // Solo assign tiene cutoff y maxattempts. Si la seleccion bulk mezcla tipos,
+  // ocultamos cutoff/intentos para evitar errores en foros/quices.
+  const tiposEfectivos = tipoLeido && !isBulk ? [tipoLeido] : tipos
+  const todosAssign  = tiposEfectivos.length > 0 && tiposEfectivos.every((t) => t === "assign")
+  const showCutoff   = todosAssign
+  const showIntentos = todosAssign
 
   // Load config when single evidencia opens
   useEffect(() => {
@@ -147,6 +160,7 @@ export default function ConfigEvidenciaDialog({
       // Respuesta sincronica del cache (Sprint 2.5 FIX 2)
       if (resp.fromCache && resp.config) {
         setForm(configToForm(resp.config))
+        setTipoLeido(resp.config.tipo ?? null)
         setFromCache(true)
         setCachedAt(resp.cachedAt ?? null)
         setPhase("ready")
@@ -163,8 +177,9 @@ export default function ConfigEvidenciaDialog({
       pollLoad.start(
         resp.jobId,
         (resultado: unknown) => {
-          const r = resultado as { config: Config }
+          const r = resultado as { config: Config & { tipo?: string } }
           setForm(configToForm(r.config))
+          setTipoLeido(r.config.tipo ?? null)
           setFromCache(false)
           setCachedAt(new Date().toISOString())
           setPhase("ready")
@@ -200,10 +215,34 @@ export default function ConfigEvidenciaDialog({
     return body as Partial<Config>
   }
 
+  // Sprint 2.6 FIX C: validar que cutoff >= entrega (Moodle rechaza lo contrario).
+  function validarFechas(): string | null {
+    if (!showCutoff) return null
+    if (!form.entregaFecha || !form.limiteFecha) return null
+    const entrega = new Date(`${form.entregaFecha}T${form.entregaHora || "23:55"}`)
+    const limite  = new Date(`${form.limiteFecha}T${form.limiteHora || "23:55"}`)
+    if (limite < entrega) {
+      return "La fecha limite no puede ser anterior a la fecha de entrega."
+    }
+    if (form.abrirFecha && form.entregaFecha) {
+      const apertura = new Date(`${form.abrirFecha}T${form.abrirHora || "00:00"}`)
+      if (entrega < apertura) return "La fecha de entrega no puede ser anterior a la apertura."
+    }
+    return null
+  }
+
   async function handleSave() {
     const config = buildConfigBody()
     if (Object.keys(config).length === 0) {
       setStatusMsg("No hay campos para guardar.")
+      setPhase("error")
+      return
+    }
+
+    const errMsg = validarFechas()
+    if (errMsg) {
+      setPhase("error")
+      setStatusMsg(errMsg)
       return
     }
 
@@ -352,52 +391,63 @@ export default function ConfigEvidenciaDialog({
             </div>
           </fieldset>
 
-          {/* Límite */}
-          <fieldset className="border border-gray-200 rounded-md p-3">
-            <legend className="text-xs font-medium text-gray-600 px-1">Fecha límite (cutoff)</legend>
-            <div className="flex gap-2">
-              <div className="flex-1">
-                <Label className="text-xs text-gray-500">Fecha</Label>
-                <Input
-                  type="date"
-                  value={form.limiteFecha}
-                  onChange={(e) => setField("limiteFecha", e.target.value)}
-                  disabled={busy}
-                  className="mt-1 h-8 text-sm"
-                />
+          {/* Límite (solo assign — Sprint 2.6 FIX B) */}
+          {showCutoff && (
+            <fieldset className="border border-gray-200 rounded-md p-3">
+              <legend className="text-xs font-medium text-gray-600 px-1">Fecha límite (cutoff)</legend>
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <Label className="text-xs text-gray-500">Fecha</Label>
+                  <Input
+                    type="date"
+                    value={form.limiteFecha}
+                    onChange={(e) => setField("limiteFecha", e.target.value)}
+                    disabled={busy}
+                    className="mt-1 h-8 text-sm"
+                  />
+                </div>
+                <div className="w-28">
+                  <Label className="text-xs text-gray-500">Hora</Label>
+                  <Input
+                    type="time"
+                    value={form.limiteHora}
+                    onChange={(e) => setField("limiteHora", e.target.value)}
+                    disabled={busy}
+                    className="mt-1 h-8 text-sm"
+                  />
+                </div>
               </div>
-              <div className="w-28">
-                <Label className="text-xs text-gray-500">Hora</Label>
-                <Input
-                  type="time"
-                  value={form.limiteHora}
-                  onChange={(e) => setField("limiteHora", e.target.value)}
-                  disabled={busy}
-                  className="mt-1 h-8 text-sm"
-                />
-              </div>
-            </div>
-          </fieldset>
+            </fieldset>
+          )}
+          {!showCutoff && tiposEfectivos.length > 0 && (
+            <p className="text-[11px] text-gray-500 italic px-1 -mt-1">
+              {tiposEfectivos.includes("forum") || tiposEfectivos.includes("quiz")
+                ? "Los foros y cuestionarios solo aceptan apertura y entrega (no fecha límite)."
+                : ""}
+            </p>
+          )}
 
-          {/* Intentos */}
-          <div>
-            <Label htmlFor="cfg-intentos" className="text-xs text-gray-600">
-              Intentos permitidos
-            </Label>
-            <select
-              id="cfg-intentos"
-              value={form.intentos}
-              onChange={(e) => setField("intentos", e.target.value)}
-              disabled={busy}
-              className="mt-1 w-full h-8 rounded-md border border-input bg-background px-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
-            >
-              <option value="">— sin cambio —</option>
-              <option value="-1">Ilimitado</option>
-              {[1,2,3,4,5,6,7,8,9,10].map((n) => (
-                <option key={n} value={String(n)}>{n}</option>
-              ))}
-            </select>
-          </div>
+          {/* Intentos (solo assign) */}
+          {showIntentos && (
+            <div>
+              <Label htmlFor="cfg-intentos" className="text-xs text-gray-600">
+                Intentos permitidos
+              </Label>
+              <select
+                id="cfg-intentos"
+                value={form.intentos}
+                onChange={(e) => setField("intentos", e.target.value)}
+                disabled={busy}
+                className="mt-1 w-full h-8 rounded-md border border-input bg-background px-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+              >
+                <option value="">— sin cambio —</option>
+                <option value="-1">Ilimitado</option>
+                {[1,2,3,4,5,6,7,8,9,10].map((n) => (
+                  <option key={n} value={String(n)}>{n}</option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
 
         {/* Actions */}

@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { RefreshCw, ChevronDown, ChevronRight, ExternalLink, Settings } from "lucide-react"
+import { RefreshCw, ChevronDown, ChevronRight, ExternalLink, Settings, FolderOpen } from "lucide-react"
 import {
   Dialog,
   DialogContent,
@@ -56,6 +56,11 @@ function gaNum(nombre: string): number {
   return m ? parseInt(m[1], 10) : 999
 }
 
+function gaLabel(nombre: string): string {
+  const m = nombre.match(/GA(\d+)/i)
+  return m ? `Guía de aprendizaje ${m[1]}` : "Sin guía"
+}
+
 function sortEvidencias(list: Evidencia[]): Evidencia[] {
   return [...list].sort((a, b) => {
     // 1) abiertas (cerradaAt=null) primero
@@ -68,6 +73,28 @@ function sortEvidencias(list: Evidencia[]): Evidencia[] {
     // 3) desempate alfabetico
     return a.nombre.localeCompare(b.nombre, "es")
   })
+}
+
+// Sprint 2.6 FIX A: agrupar evidencias por GA. Devuelve grupos en orden visible.
+interface EvidenciaGroup {
+  key:    string  // ej. "GA1" o "NA"
+  label:  string
+  num:    number
+  items:  Evidencia[]
+}
+function groupByGA(list: Evidencia[]): EvidenciaGroup[] {
+  const map = new Map<string, EvidenciaGroup>()
+  for (const ev of list) {
+    const num = gaNum(ev.nombre)
+    const key = num === 999 ? "NA" : `GA${num}`
+    let g = map.get(key)
+    if (!g) {
+      g = { key, label: gaLabel(ev.nombre), num, items: [] }
+      map.set(key, g)
+    }
+    g.items.push(ev)
+  }
+  return Array.from(map.values()).sort((a, b) => a.num - b.num)
 }
 
 function computeUpdatedText(evidencias: Evidencia[]): { text: string; stale: boolean } {
@@ -103,7 +130,24 @@ export default function EvidenciasModal({
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [confirmBulkClose, setConfirmBulkClose] = useState(false)
-  const [configDialog, setConfigDialog] = useState<{ ids: string[]; nombre?: string } | null>(null)
+  const [configDialog, setConfigDialog] = useState<{ ids: string[]; nombre?: string; tipos: string[] } | null>(null)
+  // Sprint 2.6 FIX A: grupos por GA. Default: todos expandidos.
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
+  function toggleGroupCollapsed(key: string) {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key); else next.add(key)
+      return next
+    })
+  }
+  function toggleGroupSelect(ids: string[], allSelected: boolean) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (allSelected) ids.forEach((id) => next.delete(id))
+      else             ids.forEach((id) => next.add(id))
+      return next
+    })
+  }
 
   function stopPoll() {
     if (pollRef.current) {
@@ -259,6 +303,7 @@ export default function EvidenciasModal({
 
   const evidenciasRaw = data?.evidencias ?? []
   const evidencias = useMemo(() => sortEvidencias(evidenciasRaw), [evidenciasRaw])
+  const grupos     = useMemo(() => groupByGA(evidencias), [evidencias])
   const cerradasCount = data?.cerradasCount ?? 0
   const { text: updatedText, stale: isStale } = computeUpdatedText(evidencias)
 
@@ -316,23 +361,59 @@ export default function EvidenciasModal({
                     ? `${selectedIds.size} seleccionada${selectedIds.size !== 1 ? "s" : ""}`
                     : "Seleccionar todo"}
                 </span>
+                <span className="ml-auto text-[11px] text-gray-400 select-none">
+                  {grupos.length} guía{grupos.length !== 1 ? "s" : ""} · {evidencias.length} evidencias
+                </span>
               </div>
-              {evidencias.map((ev) => (
-                <EvidenciaRow
-                  key={ev.id}
-                  evidencia={ev}
-                  expanded={expandedId === ev.id}
-                  onToggleExpand={() =>
-                    setExpandedId(expandedId === ev.id ? null : ev.id)
-                  }
-                  onCerrar={(cerrada) =>
-                    cerrarMutation.mutate({ evidenciaId: ev.id, cerrada })
-                  }
-                  onConfig={() => setConfigDialog({ ids: [ev.id], nombre: ev.nombre })}
-                  selected={selectedIds.has(ev.id)}
-                  onSelect={() => toggleSelect(ev.id)}
-                />
-              ))}
+              {grupos.map((g) => {
+                const expanded = !collapsedGroups.has(g.key)
+                const groupIds = g.items.map((e) => e.id)
+                const allSelected = groupIds.every((id) => selectedIds.has(id))
+                const someSelected = !allSelected && groupIds.some((id) => selectedIds.has(id))
+                return (
+                  <div key={g.key}>
+                    <div className="px-6 py-2 flex items-center gap-2 bg-gray-100/60 border-b border-gray-200 sticky top-0 z-[1]">
+                      <Checkbox
+                        checked={allSelected ? true : someSelected ? "indeterminate" : false}
+                        onCheckedChange={() => toggleGroupSelect(groupIds, allSelected)}
+                        aria-label={`Seleccionar ${g.label}`}
+                      />
+                      <button
+                        onClick={() => toggleGroupCollapsed(g.key)}
+                        className="flex-1 flex items-center gap-1.5 text-left text-xs font-semibold text-gray-700 hover:text-sena-green"
+                        aria-expanded={expanded}
+                      >
+                        {expanded ? (
+                          <ChevronDown className="w-3.5 h-3.5" />
+                        ) : (
+                          <ChevronRight className="w-3.5 h-3.5" />
+                        )}
+                        <FolderOpen className="w-3.5 h-3.5 text-amber-600" />
+                        <span>{g.label}</span>
+                        <Badge variant="gray" className="text-[10px] h-4 px-1.5">
+                          {g.items.length}
+                        </Badge>
+                      </button>
+                    </div>
+                    {expanded && g.items.map((ev) => (
+                      <EvidenciaRow
+                        key={ev.id}
+                        evidencia={ev}
+                        expanded={expandedId === ev.id}
+                        onToggleExpand={() =>
+                          setExpandedId(expandedId === ev.id ? null : ev.id)
+                        }
+                        onCerrar={(cerrada) =>
+                          cerrarMutation.mutate({ evidenciaId: ev.id, cerrada })
+                        }
+                        onConfig={() => setConfigDialog({ ids: [ev.id], nombre: ev.nombre, tipos: [ev.tipo || "assign"] })}
+                        selected={selectedIds.has(ev.id)}
+                        onSelect={() => toggleSelect(ev.id)}
+                      />
+                    ))}
+                  </div>
+                )
+              })}
             </div>
           )}
         </div>
@@ -364,7 +445,12 @@ export default function EvidenciasModal({
               size="sm"
               variant="outline"
               className="text-xs h-7 gap-1"
-              onClick={() => setConfigDialog({ ids: [...selectedIds] })}
+              onClick={() => {
+                const tipos = evidencias
+                  .filter((e) => selectedIds.has(e.id))
+                  .map((e) => e.tipo || "assign")
+                setConfigDialog({ ids: [...selectedIds], tipos })
+              }}
               disabled={bulkMutation.isPending}
             >
               <Settings className="w-3 h-3" />
@@ -426,6 +512,7 @@ export default function EvidenciasModal({
         onClose={() => setConfigDialog(null)}
         evidenciaIds={configDialog.ids}
         evidenciaNombre={configDialog.nombre}
+        tipos={configDialog.tipos}
       />
     )}
 
