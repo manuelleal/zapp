@@ -310,7 +310,11 @@ export default function EvidenciasModal({
   return (
     <>
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="flex flex-col p-0 gap-0 overflow-hidden max-h-[90vh]">
+      <DialogContent
+        className="flex flex-col p-0 gap-0 overflow-hidden max-h-[90vh]"
+        onInteractOutside={(e) => e.preventDefault()}
+        onEscapeKeyDown={(e) => e.preventDefault()}
+      >
         {/* Header */}
         <div className="px-6 pt-5 pb-4 border-b border-gray-200 shrink-0">
           <DialogTitle className="text-base font-semibold text-gray-900">

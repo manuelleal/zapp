@@ -284,7 +284,11 @@ export default function ConfigEvidenciaDialog({
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-lg">
+      <DialogContent
+        className="max-w-lg"
+        onInteractOutside={(e) => e.preventDefault()}
+        onEscapeKeyDown={(e) => { if (busy) e.preventDefault() }}
+      >
         {/* Header */}
         <div className="flex items-center gap-2 mb-1">
           <Settings className="w-4 h-4 text-gray-500 shrink-0" />

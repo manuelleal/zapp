@@ -228,13 +228,17 @@ export default function AprendicesPanel({ evidenciaId }: { evidenciaId: string }
               key={e.id}
               className="flex items-center gap-2 py-1.5 border-b border-gray-100 last:border-0"
             >
-              {actId && e.estado === "pendiente" && !esForo ? (
+              {actId ? (
                 <a
-                  href={`${ZAJUNA_BASE}/mod/assign/view.php?id=${actId}&action=grading`}
+                  href={
+                    esForo
+                      ? `${ZAJUNA_BASE}/mod/forum/view.php?id=${actId}`
+                      : `${ZAJUNA_BASE}/mod/assign/view.php?id=${actId}&action=grading`
+                  }
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex-1 text-sm text-gray-800 font-medium min-w-0 truncate hover:underline hover:text-sena-green"
-                  title="Ver tabla de entregas"
+                  title={esForo ? "Abrir foro" : "Ver tabla de entregas"}
                 >
                   {e.aprendiz.nombre}
                 </a>
@@ -288,7 +292,16 @@ export default function AprendicesPanel({ evidenciaId }: { evidenciaId: string }
                   {e.estado === "pendiente" ? "Calificar" : "Ver entrega"}
                 </a>
               ) : (
-                <span className="text-xs text-gray-300 shrink-0 w-[72px]" />
+                // B3: sin moodleId → fallback a la tabla de búsqueda (action=grading)
+                <a
+                  href={`${ZAJUNA_BASE}/mod/assign/view.php?id=${actId}&action=grading`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs hover:underline shrink-0 font-medium text-gray-500"
+                  title="No se detectó moodleId; abre la tabla de entregas para buscar al aprendiz"
+                >
+                  Buscar
+                </a>
               ))}
             </div>
           ))
