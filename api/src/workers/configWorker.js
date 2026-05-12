@@ -6,7 +6,7 @@ const { connection } = require("../lib/queue");
 const { decrypt } = require("../lib/crypto");
 const prisma = require("../db/client");
 const { login } = require("../../../scraper/auth");
-const { leerConfigEvidencia, guardarConfigEvidencia } = require("../../../scraper/configEvidencias");
+const { leerConfigEvidencia, guardarConfigEvidencia, enableEditMode } = require("../../../scraper/configEvidencias");
 
 const worker = new Worker("config", async (job) => {
   const {
@@ -32,6 +32,18 @@ const worker = new Worker("config", async (job) => {
 
   try {
     await login(page, zajunaUser, zajunaPass);
+    await prisma.job.update({ where: { id: jobId }, data: { progreso: 20 } });
+
+    // Sprint 2.6 fix: Moodle requiere modo edición ON para que /course/modedit.php
+    // renderice el formulario. La sesion Playwright es fresca → toggle explicito.
+    const ev = await prisma.evidencia.findUnique({
+      where: { id: evidenciaId },
+      include: { ficha: { select: { courseId: true } } },
+    });
+    const courseId = ev?.ficha?.courseId;
+    if (courseId) {
+      await enableEditMode(page, courseId);
+    }
     await prisma.job.update({ where: { id: jobId }, data: { progreso: 30 } });
 
     if (operation === "leer") {

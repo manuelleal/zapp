@@ -90,7 +90,12 @@ async function revisarEntregas(page, actId) {
       .map(row => {
         const cols = Array.from(row.querySelectorAll("td.cell"))
           .map(td => (td.textContent || "").replace(/\s+/g, " ").trim());
-        const profileLink = row.querySelector('a[href*="/user/profile.php?id="]');
+        // Moodle 4.x mezcla /user/profile.php y /user/view.php segun tema/rol.
+        // Si solo miramos profile.php perdemos moodleId en filas que usan view.php
+        // -> el aprendiz aparece sin boton "Ver entrega" / "Calificar" (bug img 1, img 3).
+        const profileLink = row.querySelector(
+          'a[href*="/user/view.php?id="], a[href*="/user/profile.php?id="]'
+        );
         const aprendizMoodleId = profileLink
           ? ((profileLink.href.match(/[?&]id=(\d+)/) || [])[1] || null)
           : null;

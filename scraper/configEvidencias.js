@@ -59,6 +59,63 @@ async function detectarTipo(page) {
 }
 
 /**
+ * Activa el modo edición del curso para esta sesión.
+ *
+ * Por qué: la extensión Z corre en el navegador del instructor que YA tiene
+ * el modo edición activo (toggle visible arriba en la UI de Zajuna, ver
+ * "Modo de edición" en la barra superior). Nuestra sesión Playwright es
+ * fresca y Moodle puede redirigir /course/modedit.php?update=X cuando el
+ * modo edición está OFF, devolviendo HTML sin el formulario y disparando
+ * "Formulario modedit no encontrado".
+ *
+ * Solución: visitar /course/view.php?id={courseId}&edit=on&sesskey={X}
+ * antes de cualquier navegación a modedit. Idempotente.
+ */
+async function enableEditMode(page, courseId) {
+  if (!courseId) {
+    log("[editmode] courseId ausente; saltando toggle edit=on");
+    return;
+  }
+  // Aterrizar en una página del curso para tener M.cfg.sesskey disponible.
+  await page.goto(
+    `${BASE_URL}/course/view.php?id=${courseId}`,
+    { waitUntil: "domcontentloaded", timeout: TIMEOUT }
+  );
+  await cerrarModal(page);
+
+  const sesskey = await page.evaluate(() => {
+    // 1) M.cfg (más confiable en Moodle 4.x)
+    if (typeof window.M !== "undefined" && window.M.cfg && window.M.cfg.sesskey) {
+      return window.M.cfg.sesskey;
+    }
+    // 2) input[name=sesskey] de cualquier form de la página
+    const input = document.querySelector('input[name="sesskey"]');
+    if (input && input.value) return input.value;
+    // 3) link de logout (igual fallback que usa la extensión Z)
+    const logout = document.querySelector(
+      'a[href*="logout.php"], a[data-title="logout,moodle"]'
+    );
+    if (logout) {
+      const m = (logout.href || "").match(/sesskey=([^&]+)/);
+      if (m) return m[1];
+    }
+    return null;
+  });
+
+  if (!sesskey) {
+    log("[editmode] No se pudo obtener sesskey; modo edición no se activará");
+    return;
+  }
+
+  await page.goto(
+    `${BASE_URL}/course/view.php?id=${courseId}&edit=on&sesskey=${encodeURIComponent(sesskey)}`,
+    { waitUntil: "domcontentloaded", timeout: TIMEOUT }
+  );
+  await cerrarModal(page);
+  log(`[editmode] edit=on activado (curso ${courseId})`);
+}
+
+/**
  * Navega al formulario modedit y verifica que cargó correctamente.
  */
 async function navegarFormulario(page, actId) {
@@ -318,4 +375,4 @@ async function guardarConfigEvidencia(page, actId, config) {
   return { ok: true };
 }
 
-module.exports = { leerConfigEvidencia, guardarConfigEvidencia };
+module.exports = { leerConfigEvidencia, guardarConfigEvidencia, enableEditMode };

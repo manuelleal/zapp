@@ -228,17 +228,16 @@ export default function AprendicesPanel({ evidenciaId }: { evidenciaId: string }
               key={e.id}
               className="flex items-center gap-2 py-1.5 border-b border-gray-100 last:border-0"
             >
-              {actId ? (
+              {/* Para foros el nombre es texto plano (Abrir foro vive a la derecha y
+                  llevaria al mismo URL). Para assigns el nombre va a action=grading
+                  (tabla de busqueda) en cualquier estado. */}
+              {actId && !esForo ? (
                 <a
-                  href={
-                    esForo
-                      ? `${ZAJUNA_BASE}/mod/forum/view.php?id=${actId}`
-                      : `${ZAJUNA_BASE}/mod/assign/view.php?id=${actId}&action=grading`
-                  }
+                  href={`${ZAJUNA_BASE}/mod/assign/view.php?id=${actId}&action=grading`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex-1 text-sm text-gray-800 font-medium min-w-0 truncate hover:underline hover:text-sena-green"
-                  title={esForo ? "Abrir foro" : "Ver tabla de entregas"}
+                  title="Ver tabla de entregas"
                 >
                   {e.aprendiz.nombre}
                 </a>
@@ -292,15 +291,17 @@ export default function AprendicesPanel({ evidenciaId }: { evidenciaId: string }
                   {e.estado === "pendiente" ? "Calificar" : "Ver entrega"}
                 </a>
               ) : (
-                // B3: sin moodleId → fallback a la tabla de búsqueda (action=grading)
+                // Sin moodleId en BD (scan viejo o selector que falló).
+                // Tras el fix del selector (scraper/evidencias.js) refrescar la
+                // ficha repobla este campo y desaparece este fallback.
                 <a
                   href={`${ZAJUNA_BASE}/mod/assign/view.php?id=${actId}&action=grading`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-xs hover:underline shrink-0 font-medium text-gray-500"
-                  title="No se detectó moodleId; abre la tabla de entregas para buscar al aprendiz"
+                  className="text-xs hover:underline shrink-0 font-medium text-gray-400 italic"
+                  title="Sin ID Moodle en cache. Refresca esta ficha para repoblarlo."
                 >
-                  Buscar
+                  Sin ID · ir a tabla
                 </a>
               ))}
             </div>
