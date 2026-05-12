@@ -129,6 +129,28 @@
 - Scrape real de quiz attempts (`/mod/quiz/report.php?id=X&mode=overview`) para detectar quién presentó y la nota — si Sprint 2.7 se hace, viene gratis con `mod_quiz_get_user_attempts`.
 - HANDOFF: actualizar prompts viejos cuando Sprint 2.7 esté.
 
+### 🧭 UX confirmada del panel Aprendices (referencia para Sprint 2.7)
+
+Comportamiento deseado, ya implementado parcialmente en `AprendicesPanel.tsx`:
+
+| Click en | Estado del aprendiz | Va a |
+|---|---|---|
+| **Nombre** | `pendiente` (assign) | `/mod/assign/view.php?id={cmId}&action=grading` → tabla de entregas (búsqueda) |
+| **Nombre** | otros estados | actualmente NO clickable → **bug menor**: extender a todos los estados |
+| **Calificar** (botón verde) | `pendiente` + tiene `moodleId` | `?action=grader&userid={X}&useridlistid=0` → calificador directo |
+| **Ver entrega** (azul) | `calificado` / `sin_entregar` + tiene `moodleId` | mismo `action=grader` |
+| (nada) | sin `moodleId` | bug: queda sin acción |
+
+### 🐛 Caso pendiente: aprendiz sin `moodleId`
+
+**Síntoma:** badge "Pendiente" o "Sin entregar" sin botón Calificar/Ver entrega (visto el 12-may en datos cacheados de hace 1 día).
+
+**Causa:** el scraper de assigns no siempre captura `moodleId` (los datos viejos pre-fix quedan con `aprendiz.moodleId = null` en BD). Confirmado en `@c:\zajuna\web\src\components\AprendicesPanel.tsx:277-291` (sin moodleId → `<span ... />` vacío).
+
+**Workaround temporal:** Refrescar la evidencia (`prisma.aprendiz.upsert` actualiza `moodleId` si el scan nuevo lo trae — ver `@c:\zajuna\api\src\workers\evidenciasWorker.js:67-71`).
+
+**Fix definitivo:** Sprint 2.7 con `core_enrol_get_enrolled_users` traerá `moodleId` garantizado para todo aprendiz matriculado. Mientras tanto, agregar fallback en UI: si `moodleId == null`, mostrar link al **nombre** (no botón) a `action=grading` para que el instructor busque manualmente.
+
 **Scripts diagnóstico** (en `scripts/`, no committeados — `scripts/` está en .gitignore):
 - `inspect-foro.js` — vuelca HTML de un foro real (usar para debug de selectores)
 - `smoke-foro.js` — corre `revisarEntregasForo` standalone con un actId/courseId
@@ -596,6 +618,123 @@ ENTREGABLES
 - Config con cache (GET < 100ms si hay cache)
 - Evidencias ordenadas por GA1, GA2, GA3...
 - 3 commits + HANDOFF.md actualizado
+```
+
+---
+
+### 🔴 PROMPT 6 — Sprint 2.7: Migración a Moodle Web Services API
+
+> **Modelo:** Claude Opus (obligatorio — diseño + auth + reescritura de 4 scrapers)
+> **Rama:** `feature/moodle-ws` (crear desde `feature/config-evidencias`)
+> **Chat nuevo:** sí
+> **Pre-requisito:** servidor levantado (ver `START.md`)
+
+```
+c:\zajuna, branch nueva feature/moodle-ws desde feature/config-evidencias.
+Lee HANDOFF.md y START.md completos antes de hacer NADA.
+Lee tambien estos archivos clave:
+- scraper/auth.js
+- scraper/evidencias.js  (4 scrapers actuales con Playwright)
+- scraper/configEvidencias.js
+- api/src/workers/evidenciasWorker.js
+- api/src/workers/configWorker.js
+- prisma/schema.prisma  (modelos User, Aprendiz, Evidencia, Entrega)
+- web/src/components/AprendicesPanel.tsx  (UX confirmada, secciones nombre/Calificar)
+
+CONTEXTO — lee la seccion "Sprint 2.7 propuesto" + "UX confirmada del panel
+Aprendices" + "Caso pendiente: aprendiz sin moodleId" del HANDOFF.
+
+OBJETIVO: reducir el scan completo de un curso de ~10 min a ~5-15s usando
+Moodle Web Services (la extension Z lo hace asi). Mantener Playwright como
+fallback automatico si el usuario no tiene token configurado.
+
+══════════ FASE 0 — Reconocimiento (NO escribir codigo aun) ══════════
+1. Probar manualmente que estos endpoints de Zajuna funcionan con un token
+   de prueba (yo te paso uno en chat). Endpoint base:
+   https://zajuna.sena.edu.co/zajuna/webservice/rest/server.php
+   Funciones a validar (formato: POST application/x-www-form-urlencoded):
+   - core_webservice_get_site_info        (test rapido del token)
+   - mod_assign_get_assignments(courseids[])
+   - mod_forum_get_forums_by_courses(courseids[])
+   - mod_quiz_get_quizzes_by_courses(courseids[])
+   - mod_assign_get_submissions(assignmentids[])
+   - mod_forum_get_forum_discussions(forumid)
+   - mod_forum_get_discussion_posts(discussionid)
+   - mod_quiz_get_user_attempts(quizid, userid)
+   - core_enrol_get_enrolled_users(courseid)
+   - gradereport_user_get_grade_items(courseid)
+
+   Reportar al usuario: cuales devuelven datos utiles, cuales dan
+   "accessexception" (no habilitadas para el rol instructor), tamaño
+   del JSON tipico.
+
+══════════ FASE 1 — Capa de WS ══════════
+Archivo nuevo: scraper/moodleWS.js
+  - exporta wsCall(token, fnName, params) que hace POST y maneja errores
+    (token expirado, accessexception, throttle). Devuelve JSON parseado.
+  - exporta wrappers tipados: getAssignments, getForums, getQuizzes,
+    getAssignSubmissions, getForumPosts, getQuizAttempts, getEnrolled.
+  - log con [ws] prefix.
+
+══════════ FASE 2 — Token storage ══════════
+1. Migracion Prisma: agregar a User -> zajunaTokenEnc String? (cifrado AES-GCM
+   con el mismo helper crypto.js que zajunaUserEnc/zajunaPassEnc).
+2. Endpoint PUT /api/auth/token  body { token } -> valida con
+   core_webservice_get_site_info, cifra y guarda. Devuelve { ok, fullname }.
+3. UI: pagina/seccion "Perfil" con input de token + boton "Validar y guardar".
+   Muestra estado: "No configurado" / "Valido (usuario X)".
+
+══════════ FASE 3 — Reemplazar scrapers ══════════
+Reescribir 4 funciones manteniendo SU MISMA FIRMA y FORMATO DE SALIDA
+para no romper el worker actual:
+
+- obtenerEvidencias(page|token, competenciaCodigo, courseId)
+  -> usar getAssignments + getForums + getQuizzes en paralelo (Promise.all),
+     mergear, filtrar por nombre.includes(competenciaCodigo), devolver
+     [{ texto, href, actId (cmid), tipo }]
+  
+- revisarEntregas(token, assignCmId)  (assign)
+  -> getAssignSubmissions, cruzar con getEnrolled para detectar sin_entregar.
+  
+- revisarEntregasForo(token, forumCmId, courseId, matriculadosCache)
+  -> getForumDiscussions + getForumPosts por discussion. Cruzar con
+     enrolled. Devolver mismo shape que la version actual.
+
+- revisarEntregasQuiz(token, quizCmId, courseId)
+  -> getQuizAttempts por usuario (loop sobre enrolled). Estado:
+     "calificado" si attempt.sumgrades != null, "pendiente" si attempt
+     existe pero no calificado, "sin_entregar" si no hay attempt.
+
+══════════ FASE 4 — Dispatch en el worker ══════════
+evidenciasWorker.js:
+- Si user.zajunaTokenEnc esta seteado -> usar ruta WS (sin Playwright!).
+- Si no -> ruta Playwright actual (no romper retro-compat).
+- El job actual de "evidencias" debe ser ~50-100x mas rapido cuando hay token.
+- moodleId de cada aprendiz viene de core_enrol_get_enrolled_users:
+  garantizado != null -> SOLUCIONA el bug "aprendiz sin moodleId" sin
+  mas cambios.
+
+══════════ FASE 5 — UX gap menor ══════════
+En AprendicesPanel.tsx, extender el link del nombre a TODOS los estados
+(no solo "pendiente" + assign). Asi click-en-nombre siempre lleva a la
+tabla de busqueda. Cambio chico, ya hay if/else en linea ~231.
+
+══════════ REGLA DE ORO ══════════
+⚠️ ANTES DE FASE 1: confirmar conmigo los resultados de FASE 0 (que
+   endpoints estan disponibles). Si mod_assign_get_submissions da
+   accessexception para instructor -> hay que negociar alternativa.
+⚠️ Mantener Playwright funcional como fallback. NUNCA borrarlo.
+⚠️ 1 commit por FASE, mensajes claros.
+⚠️ Smoke test al final: scan completo con token vs sin token, comparar
+   tiempos y consistencia de datos.
+
+ENTREGABLES
+- scraper/moodleWS.js con 8+ helpers tipados
+- Migracion + endpoint /api/auth/token + UI perfil
+- 4 scrapers con nueva ruta WS + fallback Playwright
+- moodleId siempre poblado (bug resuelto)
+- Nombre clickable para todos los estados
+- HANDOFF.md actualizado con seccion "Sprint 2.7 completo"
 ```
 
 ---
