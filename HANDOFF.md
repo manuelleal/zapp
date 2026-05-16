@@ -1,17 +1,19 @@
 # HANDOFF.md — Guía operativa Zajuna App
 
 > Documento maestro para continuar el desarrollo en chats nuevos.
-> Léelo PRIMERO antes de cualquier prompt. Última actualización: **16 mayo 2026 — Módulo 1 fixes aplicados + Módulo 2 código completo.**
+> Léelo PRIMERO antes de cualquier prompt. Última actualización: **16 mayo 2026 — Módulos 1-3 completos, M4+M5+M6 en build por agentes paralelos.**
 
 ---
 
 ## 🎯 Estado actual del proyecto
 
-- **Rama activa:** `feature/config-evs-2-batch-duedate` (branch off `feature/config-evs-1-lectura`)
-- **HEAD:** commit `9ecb8ed` — feat(módulo-2): cambio masivo de fecha de cierre
+- **Rama activa:** `feature/config-evs-3-batch-config` (branch off M2)
+- **HEAD:** commit `1513812` — feat(módulo-3): cambio masivo de configuración completa
 - **Stack:** Fastify 5 + Prisma 6 + Postgres + Redis + BullMQ + Playwright 1.59
 - **Frontend:** React 18 + Vite 5 + Tailwind 3 + shadcn/ui en `web/` — `web/dist` servido por Fastify sin flags
 - **`public/` eliminado** ✅
+- **M4+M5 en build** (agente en background — branch `feature/config-evs-4-raps`)
+- **M6 en build** (agente en background — branch `feature/config-evs-6-matching-ia`)
 
 ---
 
@@ -22,11 +24,10 @@ Plan de 6 módulos independientes en branches separadas. Regla: **NO empezar N+1
 | # | Branch | Estado | Smoke test |
 |---|--------|--------|------------|
 | **1** | `feature/config-evs-1-lectura` | ✅ Código completo + fixes UX | ⏳ Pendiente usuario |
-| **2** | `feature/config-evs-2-batch-duedate` | ✅ Código completo | ⏳ Pendiente smoke test |
-| **3** | `feature/config-evs-3-batch-config` | 🔲 No iniciado | — |
-| **4** | `feature/config-evs-4-raps` | 🔲 No iniciado | — |
-| **5** | `feature/config-evs-5-raps-io` | 🔲 No iniciado | — |
-| **6** | `feature/config-evs-6-matching-ia` | 🔲 No iniciado | — |
+| **2** | `feature/config-evs-2-batch-duedate` | ✅ Código completo (commits `9ecb8ed`+`30ef5fd`) | ⏳ Pendiente smoke test |
+| **3** | `feature/config-evs-3-batch-config` | ✅ Código completo (commit `1513812`) | ⏳ Pendiente smoke test |
+| **4+5** | `feature/config-evs-4-raps` | 🔄 En build (agente background) | — |
+| **6** | `feature/config-evs-6-matching-ia` | 🔄 En build (agente background) | — |
 
 ### ✅ MÓDULO 1 — Lectura de configuración actual (commit `e469cfc`)
 
@@ -148,18 +149,35 @@ web/src/components/EvidenciasModal.tsx        ← botón "Ver config" → readOn
 
 ---
 
-### 🔲 MÓDULO 3 — Cambio masivo otras fechas y flags (pendiente)
+### ✅ MÓDULO 3 — Cambio masivo de configuración completa (commit `1513812`)
 
-**Pre-requisito:** Módulo 2 ✅
+**Pre-requisito:** Módulo 2 ✅ **Branch:** `feature/config-evs-3-batch-config`
 
-**Spec técnica:**
-- Generalizar `cambiarFechaWorker.js` → `cambiarConfigEvidenciaWorker.js` (recibe map de campos)
-- **Endpoint:** `POST /api/evidencias/batch/config`
-  - Body: `{ evidenciaIds: [], cambios: { duedate?, openDate?, cutoffDate?, notify?, drafts?, maxAttempts? } }`
-- Validación backend: `openDate > duedate` → rechazar antes de tocar Zajuna
-- **Frontend:** modal "Configurar evidencias seleccionadas" con campos opcionales (solo aplica los llenados)
+| Componente | Archivo | Descripción |
+|---|---|---|
+| Worker | `cambiarConfigWorker.js` | Genérico — acepta cualquier combinación de abrirFecha/Hora, entregaFecha/Hora, limiteFecha/Hora, intentos |
+| Cola BullMQ | `cambiarConfigQueue` | Queue "cambiarConfig", attempts:1 |
+| Endpoint POST | `POST /api/evidencias/batch/config` | Body: `{ evidenciaIds, cambios }`. Valida apertura<entrega, redondea mins |
+| Endpoint GET | `GET /api/evidencias/batch/config/:id` | Polling de ConfigChangeJob |
+| Componente | `BatchConfigModal.tsx` | Modal con 3 pares fecha/hora + selector intentos + confirmación con resumen |
+| Frontend | `EvidenciasConfig.tsx` | Botón "Config avanzada" en barra flotante → abre BatchConfigModal |
 
-**Branch:** `feature/config-evs-3-batch-config`
+**Campos soportados en `cambios`:**
+- `entregaFecha` / `entregaHora` — duedate (fecha de entrega)
+- `abrirFecha` / `abrirHora` — allowsubmissionsfromdate (apertura)
+- `limiteFecha` / `limiteHora` — cutoffdate (fecha límite/extensión)
+- `intentos` — `"Ilimitado"` o número (1, 2, 3, 5, 10)
+
+**Reglas:**
+- Solo se aplican los campos no-vacíos (`undefined` o `""` se ignoran)
+- Si `abrirFecha > entregaFecha`: HTTP 422 antes de tocar Zajuna
+- Minutos se redondean al múltiplo de 5 más cercano
+
+**Smoke test pendiente:**
+1. Seleccionar 2+ evidencias → barra flotante → "Config avanzada"
+2. Poner solo fecha de apertura y fecha de entrega → Confirmar
+3. Verificar en Zajuna modedit.php que ambas fechas quedaron correctas
+4. Probar con intentos=3 → verificar campo maxattempts en Zajuna
 
 ---
 
