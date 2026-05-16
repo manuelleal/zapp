@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react"
 import { useNavigate } from "react-router-dom"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { RefreshCw } from "lucide-react"
+import { RefreshCw, ChevronDown, ChevronRight } from "lucide-react"
 import Layout from "@/components/Layout"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -62,9 +62,14 @@ export default function Dashboard() {
   const navigate    = useNavigate()
   const { jwt, user, clearAuth, setAuth } = useAuthStore()
   const queryClient = useQueryClient()
-  const [expandedEv, setExpandedEv] = useState<string | null>(null)
-  const [scanStatus, setScanStatus] = useState("")
-  const [scanLoading, setScanLoading] = useState(false)
+  const [expandedEv, setExpandedEv]           = useState<string | null>(null)
+  const [collapsedFichas, setCollapsedFichas] = useState<Record<string, boolean>>({})
+  const [scanStatus, setScanStatus]           = useState("")
+  const [scanLoading, setScanLoading]         = useState(false)
+
+  function toggleFicha(fichaId: string) {
+    setCollapsedFichas(c => ({ ...c, [fichaId]: !c[fichaId] }))
+  }
 
   useEffect(() => {
     const storedJwt = localStorage.getItem("zajuna_jwt")
@@ -176,15 +181,26 @@ export default function Dashboard() {
         ) : (
           <div className="space-y-3">
             {fichas.map(f => {
-              const evOrdenadas = [...f.evidencias].sort((a, b) => gaNum(a.nombre) - gaNum(b.nombre) || a.nombre.localeCompare(b.nombre))
+              const evOrdenadas  = [...f.evidencias].sort((a, b) => gaNum(a.nombre) - gaNum(b.nombre) || a.nombre.localeCompare(b.nombre))
+              const isCollapsed  = !!collapsedFichas[f.id]
+              const pendFicha    = f.evidencias.reduce((s, ev) => s + ev.pendientes, 0)
               return (
                 <div key={f.id} className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-                  <div className="px-4 py-2.5 border-b border-gray-100 bg-gray-50 flex items-center gap-2">
+                  {/* Header ficha — clickable para colapsar */}
+                  <div
+                    className="px-4 py-2.5 border-b border-gray-100 bg-gray-50 flex items-center gap-2 cursor-pointer select-none hover:bg-gray-100 transition-colors"
+                    onClick={() => toggleFicha(f.id)}
+                  >
+                    {isCollapsed
+                      ? <ChevronRight className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+                      : <ChevronDown  className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />}
                     <span className="font-mono text-xs font-semibold text-gray-700">{f.codigo}</span>
-                    {f.nombre && <span className="text-xs text-gray-500 truncate">{f.nombre}</span>}
+                    {f.nombre && <span className="text-xs text-gray-500 truncate flex-1">{f.nombre}</span>}
+                    <span className="text-xs text-gray-400 flex-shrink-0">{evOrdenadas.length} ev.</span>
+                    {pendFicha > 0 && <Badge variant="yellow" className="text-xs flex-shrink-0">{pendFicha} pend.</Badge>}
                   </div>
 
-                  <div className="divide-y divide-gray-50">
+                  {!isCollapsed && <div className="divide-y divide-gray-50">
                     {evOrdenadas.map(ev => {
                       const actIdMatch = ev.href.match(/[?&]id=(\d+)/)
                       const actId = actIdMatch ? actIdMatch[1] : null
@@ -240,7 +256,7 @@ export default function Dashboard() {
                         </div>
                       )
                     })}
-                  </div>
+                  </div>}
                 </div>
               )
             })}

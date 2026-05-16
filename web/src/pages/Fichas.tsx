@@ -1,13 +1,12 @@
 import { useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Plus, Search, Pencil, Archive, ArchiveRestore, Trash2 } from "lucide-react"
+import { Plus, Search, Pencil, Archive, ArchiveRestore, Trash2, ChevronDown, ChevronRight } from "lucide-react"
 import Layout from "@/components/Layout"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Switch } from "@/components/ui/switch"
 import { apiFetch, ApiError } from "@/api/client"
 import { useAuthStore } from "@/store/auth"
 import { useNavigate } from "react-router-dom"
@@ -33,7 +32,7 @@ export default function Fichas() {
   const navigate        = useNavigate()
   const { jwt, user, clearAuth, setAuth } = useAuthStore()
   const queryClient     = useQueryClient()
-  const [verArchivadas, setVerArchivadas] = useState(false)
+  const [mostrarArchivadas, setMostrarArchivadas] = useState(false)
   const [modal, setModal]   = useState<ModalMode>(null)
   const [editTarget, setEditTarget] = useState<Ficha | null>(null)
   const [form, setForm] = useState({ codigo: "", courseId: "", nombre: "", programa: "" })
@@ -52,35 +51,36 @@ export default function Fichas() {
     }
   }, [])
 
+  // Siempre traemos todas (incluidas archivadas) y separamos client-side
   const { data, isLoading } = useQuery<FichasResponse>({
-    queryKey: ["fichas", verArchivadas],
-    queryFn:  () => apiFetch<FichasResponse>(`/api/fichas${verArchivadas ? "?incluirArchivadas=1" : ""}`),
+    queryKey: ["fichas-all"],
+    queryFn:  () => apiFetch<FichasResponse>("/api/fichas?incluirArchivadas=1"),
     enabled:  !!jwt,
     retry:    false,
   })
 
   const crearMutation = useMutation({
     mutationFn: (body: object) => apiFetch("/api/fichas", { method: "POST", body: JSON.stringify(body) }),
-    onSuccess:  () => { queryClient.invalidateQueries({ queryKey: ["fichas"] }); closeModal() },
+    onSuccess:  () => { queryClient.invalidateQueries({ queryKey: ["fichas-all"] }); closeModal() },
     onError:    (err: ApiError) => setError(err.message),
   })
 
   const editarMutation = useMutation({
     mutationFn: ({ id, body }: { id: string; body: object }) =>
       apiFetch(`/api/fichas/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(body) }),
-    onSuccess:  () => { queryClient.invalidateQueries({ queryKey: ["fichas"] }); closeModal() },
+    onSuccess:  () => { queryClient.invalidateQueries({ queryKey: ["fichas-all"] }); closeModal() },
     onError:    (err: ApiError) => setError(err.message),
   })
 
   const archivarMutation = useMutation({
     mutationFn: ({ id, archivada }: { id: string; archivada: boolean }) =>
       apiFetch(`/api/fichas/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ archivada }) }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["fichas"] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["fichas-all"] }),
   })
 
   const eliminarMutation = useMutation({
     mutationFn: (id: string) => apiFetch(`/api/fichas/${encodeURIComponent(id)}`, { method: "DELETE" }),
-    onSuccess:  () => queryClient.invalidateQueries({ queryKey: ["fichas"] }),
+    onSuccess:  () => queryClient.invalidateQueries({ queryKey: ["fichas-all"] }),
     onError:    (err: ApiError) => setError(err.message),
   })
 
@@ -104,7 +104,7 @@ export default function Fichas() {
           clearInterval(timer)
           setScanStatus("Fichas actualizadas.")
           setScanLoading(false)
-          queryClient.invalidateQueries({ queryKey: ["fichas"] })
+          queryClient.invalidateQueries({ queryKey: ["fichas-all"] })
         } else if (job.status === "error") {
           clearInterval(timer)
           setScanStatus(job.errorMsg || "Error en el escaneo.")
@@ -131,7 +131,57 @@ export default function Fichas() {
     }
   }
 
-  const fichas = data?.fichas ?? []
+  const todasFichas = data?.fichas ?? []
+  const activas     = todasFichas.filter(f => !f.archivedAt).sort((a, b) => a.codigo.localeCompare(b.codigo))
+  const archivadas  = todasFichas.filter(f =>  f.archivedAt).sort((a, b) => a.codigo.localeCompare(b.codigo))
+
+  function FichaRow({ f }: { f: Ficha }) {
+    return (
+      <tr className="border-b border-gray-100 last:border-0 hover:bg-gray-50">
+        <td className="px-5 py-3"><span className="font-mono text-sm font-medium">{f.codigo}</span></td>
+        <td className="px-5 py-3">
+          {f.programa ? <Badge variant="green" className="font-mono text-xs">{f.programa}</Badge> : <span className="text-gray-400">—</span>}
+        </td>
+        <td className="px-5 py-3 text-gray-700 max-w-xs truncate" title={f.nombre}>{f.nombre || <span className="text-gray-400">Sin nombre</span>}</td>
+        <td className="px-5 py-3">
+          <div className="flex items-center gap-1">
+            <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => openEditar(f)} title="Editar">
+              <Pencil className="w-3.5 h-3.5" />
+            </Button>
+            <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => archivarMutation.mutate({ id: f.id, archivada: !f.archivedAt })} title={f.archivedAt ? "Restaurar" : "Archivar"}>
+              {f.archivedAt ? <ArchiveRestore className="w-3.5 h-3.5 text-sena-green" /> : <Archive className="w-3.5 h-3.5" />}
+            </Button>
+            <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-red-500 hover:text-red-700 hover:bg-red-50" onClick={() => { if (confirm(`¿Eliminar ficha ${f.codigo}?`)) eliminarMutation.mutate(f.id) }} title="Eliminar">
+              <Trash2 className="w-3.5 h-3.5" />
+            </Button>
+          </div>
+        </td>
+      </tr>
+    )
+  }
+
+  function TablaFichas({ rows, titulo }: { rows: Ficha[]; titulo: string }) {
+    return (
+      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <div className="px-5 py-3 border-b border-gray-100">
+          <h2 className="font-semibold text-gray-800 text-sm">{titulo}</h2>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-100 bg-gray-50">
+                <th className="text-left px-5 py-2.5 font-medium text-gray-600">Código</th>
+                <th className="text-left px-5 py-2.5 font-medium text-gray-600">Programa</th>
+                <th className="text-left px-5 py-2.5 font-medium text-gray-600">Nombre del curso</th>
+                <th className="text-left px-5 py-2.5 font-medium text-gray-600">Acciones</th>
+              </tr>
+            </thead>
+            <tbody>{rows.map(f => <FichaRow key={f.id} f={f} />)}</tbody>
+          </table>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <Layout>
@@ -146,68 +196,49 @@ export default function Fichas() {
             {scanLoading ? "Buscando..." : "Buscar en Zajuna"}
           </Button>
           {scanStatus && <span className="text-sm text-gray-600">{scanStatus}</span>}
-          <div className="ml-auto flex items-center gap-2">
-            <Switch id="archivadas" checked={verArchivadas} onCheckedChange={setVerArchivadas} />
-            <Label htmlFor="archivadas" className="text-sm text-gray-600 cursor-pointer">Ver archivadas</Label>
-          </div>
         </div>
 
-        {/* Tabla */}
+        {/* Fichas activas */}
         {isLoading ? (
           <div className="bg-white rounded-lg border p-8 text-center text-gray-500 text-sm">Cargando fichas...</div>
-        ) : fichas.length === 0 ? (
+        ) : activas.length === 0 && archivadas.length === 0 ? (
           <div className="bg-white rounded-lg border p-12 text-center">
             <div className="text-4xl mb-3">📭</div>
             <p className="text-gray-600 text-sm">No hay fichas. Crea una o búscalas en Zajuna.</p>
           </div>
         ) : (
-          <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-            <div className="px-5 py-3 border-b border-gray-100">
-              <h2 className="font-semibold text-gray-800">📋 Fichas ({fichas.length})</h2>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-gray-100 bg-gray-50">
-                    <th className="text-left px-5 py-3 font-medium text-gray-600">Código</th>
-                    <th className="text-left px-5 py-3 font-medium text-gray-600">Programa</th>
-                    <th className="text-left px-5 py-3 font-medium text-gray-600">Nombre</th>
-                    <th className="text-left px-5 py-3 font-medium text-gray-600">Estado</th>
-                    <th className="text-left px-5 py-3 font-medium text-gray-600">Acciones</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {fichas.map(f => (
-                    <tr key={f.id} className={`border-b border-gray-100 last:border-0 hover:bg-gray-50 ${f.archivedAt ? "opacity-60" : ""}`}>
-                      <td className="px-5 py-3"><span className="font-mono text-sm font-medium">{f.codigo}</span></td>
-                      <td className="px-5 py-3">
-                        {f.programa ? <Badge variant="green" className="font-mono text-xs">{f.programa}</Badge> : <span className="text-gray-400">—</span>}
-                      </td>
-                      <td className="px-5 py-3 text-gray-700 max-w-xs truncate" title={f.nombre}>{f.nombre || <span className="text-gray-400">Sin nombre</span>}</td>
-                      <td className="px-5 py-3">
-                        {f.archivedAt
-                          ? <Badge variant="gray" className="text-xs">Archivada</Badge>
-                          : <Badge variant="green" className="text-xs">Activa</Badge>}
-                      </td>
-                      <td className="px-5 py-3">
-                        <div className="flex items-center gap-1">
-                          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => openEditar(f)} title="Editar">
-                            <Pencil className="w-3.5 h-3.5" />
-                          </Button>
-                          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => archivarMutation.mutate({ id: f.id, archivada: !f.archivedAt })} title={f.archivedAt ? "Restaurar" : "Archivar"}>
-                            {f.archivedAt ? <ArchiveRestore className="w-3.5 h-3.5" /> : <Archive className="w-3.5 h-3.5" />}
-                          </Button>
-                          <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-red-500 hover:text-red-700 hover:bg-red-50" onClick={() => { if (confirm(`¿Eliminar ficha ${f.codigo}?`)) eliminarMutation.mutate(f.id) }} title="Eliminar">
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
+          <>
+            {activas.length > 0 && <TablaFichas rows={activas} titulo={`📋 Fichas activas (${activas.length})`} />}
+
+            {/* Archivadas — colapsadas por defecto al fondo */}
+            {archivadas.length > 0 && (
+              <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                <button
+                  className="w-full px-5 py-3 flex items-center gap-2 text-sm font-medium text-gray-500 hover:bg-gray-50 transition-colors"
+                  onClick={() => setMostrarArchivadas(v => !v)}
+                >
+                  {mostrarArchivadas ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                  <Archive className="w-3.5 h-3.5" />
+                  Archivadas ({archivadas.length})
+                </button>
+                {mostrarArchivadas && (
+                  <div className="border-t border-gray-100 overflow-x-auto opacity-70">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-gray-100 bg-gray-50">
+                          <th className="text-left px-5 py-2.5 font-medium text-gray-500">Código</th>
+                          <th className="text-left px-5 py-2.5 font-medium text-gray-500">Programa</th>
+                          <th className="text-left px-5 py-2.5 font-medium text-gray-500">Nombre del curso</th>
+                          <th className="text-left px-5 py-2.5 font-medium text-gray-500">Acciones</th>
+                        </tr>
+                      </thead>
+                      <tbody>{archivadas.map(f => <FichaRow key={f.id} f={f} />)}</tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+          </>
         )}
       </div>
 
