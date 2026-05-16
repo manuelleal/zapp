@@ -7,10 +7,10 @@ const { decrypt } = require("../lib/crypto");
 const { saveSession, loadSession } = require("../lib/sessionStore");
 const prisma = require("../db/client");
 const { login, cerrarModal, BASE_URL, log } = require("../../../scraper/auth");
-const { descubrirFichas } = require("../../../scraper/fichas");
+const { calificarPostsForo } = require("../../../scraper/foroRating");
 
-const worker = new Worker("fichas", async (job) => {
-  const { jobId, userId, zajunaUserEnc, zajunaPassEnc, competenciaCodigo } = job.data;
+const worker = new Worker("foroRating", async (job) => {
+  const { jobId, userId, evidenciaId, actId, ratings, zajunaUserEnc, zajunaPassEnc } = job.data;
 
   await prisma.job.update({ where: { id: jobId }, data: { status: "running", progreso: 5 } });
 
@@ -33,7 +33,7 @@ const worker = new Worker("fichas", async (job) => {
       await page.goto(`${BASE_URL}/my/`, { waitUntil: "domcontentloaded", timeout: 30_000 });
       await cerrarModal(page);
       sessionValida = !page.url().includes("/login") && page.url().includes("zajuna.sena.edu.co");
-      if (!sessionValida) log("[fichasWorker] Sesión expirada, login fresco");
+      if (!sessionValida) log("[foroRatingWorker] Sesión expirada, login fresco");
     }
     if (!sessionValida) {
       try {
@@ -43,31 +43,50 @@ const worker = new Worker("fichas", async (job) => {
         throw err;
       }
       const state = await ctx.storageState();
-      await saveSession(userId, state).catch(e => log(`[fichasWorker] no se pudo guardar sesión: ${e.message}`));
+      await saveSession(userId, state).catch(e => log(`[foroRatingWorker] no se pudo guardar sesión: ${e.message}`));
     }
     await prisma.job.update({ where: { id: jobId }, data: { progreso: 30 } });
 
-    const { fichas } = await descubrirFichas(page, competenciaCodigo);
-    await prisma.job.update({ where: { id: jobId }, data: { progreso: 70 } });
+    const results = await calificarPostsForo(page, actId, ratings);
 
-    for (const f of fichas) {
-      await prisma.ficha.upsert({
-        where:  { userId_codigo: { userId, codigo: f.codigo } },
-        update: { programa: f.programa, courseId: f.courseId, nombre: f.nombre },
-        create: { userId, codigo: f.codigo, programa: f.programa, courseId: f.courseId, nombre: f.nombre },
-      });
+    // Si hubo cambios exitosos, invalidar la cache de entregas actualizando los estados:
+    // marcamos cada entrega correspondiente como "calificado" para reflejar en la UI sin re-scrapeo.
+    const okIds = results.filter((r) => r.ok).map((r) => String(r.moodleUserId));
+    if (okIds.length > 0) {
+      // Buscar aprendices por moodleId y actualizar el estado de su entrega en esta evidencia
+      const ev = await prisma.evidencia.findUnique({ where: { id: evidenciaId }, select: { fichaId: true } });
+      if (ev) {
+        const aprendices = await prisma.aprendiz.findMany({
+          where: { fichaId: ev.fichaId, moodleId: { in: okIds } },
+          select: { id: true, moodleId: true },
+        });
+        for (const a of aprendices) {
+          await prisma.entrega.updateMany({
+            where: { evidenciaId, aprendizId: a.id },
+            data:  { estado: "calificado", fechaScan: new Date() },
+          });
+        }
+      }
     }
 
     await prisma.job.update({
       where: { id: jobId },
-      data:  { status: "done", progreso: 100, resultado: { fichas } },
+      data:  {
+        status: "done",
+        progreso: 100,
+        resultado: {
+          total: results.length,
+          ok:    results.filter((r) => r.ok).length,
+          results,
+        },
+      },
     });
 
   } finally {
     await browser.close();
   }
 
-}, { connection, concurrency: 5 });
+}, { connection, concurrency: 2 });
 
 worker.on("failed", async (job, err) => {
   if (job?.data?.jobId) {

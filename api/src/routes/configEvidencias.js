@@ -1,0 +1,133 @@
+const prisma = require("../db/client");
+const { configQueue } = require("../lib/queue");
+const { encrypt } = require("../lib/crypto");
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
+
+function actIdFromHref(href) {
+  if (!href) return null;
+  const m = href.match(/[?&]id=(\d+)/);
+  return m ? m[1] : null;
+}
+
+async function getEvidenciaConAcceso(evidenciaId, userId) {
+  const ev = await prisma.evidencia.findUnique({
+    where:   { id: evidenciaId },
+    include: { ficha: { select: { userId: true } } },
+  });
+  if (!ev) return { ev: null, error: "Evidencia no encontrada.", code: 404 };
+  if (ev.ficha.userId !== userId) return { ev: null, error: "Sin acceso.", code: 403 };
+  const actId = actIdFromHref(ev.href);
+  if (!actId) return { ev: null, error: "Esta evidencia no tiene actId (href inválido).", code: 422 };
+  return { ev, actId, error: null };
+}
+
+async function encolarConfigJob(userId, evidenciaId, actId, operation, config = null) {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+
+  const job = await prisma.job.create({
+    data: { userId, tipo: `config-${operation}`, status: "queued" },
+  });
+
+  await configQueue.add("config", {
+    jobId:         job.id,
+    userId,
+    evidenciaId,
+    actId,
+    operation,
+    config,
+    zajunaUserEnc: user.zajunaUserEnc,
+    zajunaPassEnc: user.zajunaPassEnc,
+  });
+
+  return job.id;
+}
+
+// ─── ROUTES ──────────────────────────────────────────────────────────────────
+
+async function configEvidenciasRoutes(fastify) {
+
+  // PATCH /api/evidencias/config/bulk
+  // Body: { ids: string[], config: { abrirFecha?, abrirHora?, entregaFecha?, entregaHora?, limiteFecha?, limiteHora?, intentos? } }
+  // IMPORTANT: register this before /:id/config to avoid param clash
+  fastify.patch("/api/evidencias/config/bulk", { preHandler: fastify.authenticate }, async (req, reply) => {
+    const { ids, config } = req.body || {};
+
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return reply.code(400).send({ error: "Campo 'ids' (array no vacío) requerido." });
+    }
+    if (!config || typeof config !== "object" || Array.isArray(config)) {
+      return reply.code(400).send({ error: "Campo 'config' (objeto) requerido." });
+    }
+
+    const evs = await prisma.evidencia.findMany({
+      where:   { id: { in: ids } },
+      include: { ficha: { select: { userId: true } } },
+    });
+
+    if (evs.length !== ids.length) {
+      return reply.code(404).send({ error: "Una o más evidencias no encontradas." });
+    }
+    if (evs.some((ev) => ev.ficha.userId !== req.user.id)) {
+      return reply.code(403).send({ error: "Sin acceso a una o más evidencias." });
+    }
+
+    const sinActId = evs.filter((ev) => !actIdFromHref(ev.href));
+    if (sinActId.length > 0) {
+      return reply.code(422).send({ error: `${sinActId.length} evidencia(s) sin actId válido.` });
+    }
+
+    const jobIds = [];
+    for (const ev of evs) {
+      const actId = actIdFromHref(ev.href);
+      const jobId = await encolarConfigJob(req.user.id, ev.id, actId, "guardar", config);
+      jobIds.push(jobId);
+    }
+
+    return reply.code(202).send({ jobIds });
+  });
+
+  // GET /api/evidencias/:id/config
+  //   - Si configCache existe y configCacheAt < 4h → 200 { config, fromCache: true, cachedAt }
+  //   - ?force=1 fuerza re-lectura desde Moodle
+  //   - En cualquier otro caso → 202 { jobId } (comportamiento original)
+  fastify.get("/api/evidencias/:id/config", { preHandler: fastify.authenticate }, async (req, reply) => {
+    const { ev, actId, error, code } = await getEvidenciaConAcceso(req.params.id, req.user.id);
+    if (error) return reply.code(code).send({ error });
+
+    const force = req.query?.force === "1" || req.query?.force === "true";
+    const TTL_MS = 4 * 60 * 60 * 1000; // 4 horas
+
+    if (!force && ev.configCache && ev.configCacheAt && (Date.now() - new Date(ev.configCacheAt).getTime()) < TTL_MS) {
+      return reply.code(200).send({
+        config:    ev.configCache,
+        fromCache: true,
+        cachedAt:  ev.configCacheAt,
+      });
+    }
+
+    const jobId = await encolarConfigJob(req.user.id, ev.id, actId, "leer");
+    return reply.code(202).send({ jobId });
+  });
+
+  // PATCH /api/evidencias/:id/config
+  // Body: { abrirFecha?, abrirHora?, entregaFecha?, entregaHora?, limiteFecha?, limiteHora?, intentos? }
+  fastify.patch("/api/evidencias/:id/config", { preHandler: fastify.authenticate }, async (req, reply) => {
+    const { ev, actId, error, code } = await getEvidenciaConAcceso(req.params.id, req.user.id);
+    if (error) return reply.code(code).send({ error });
+
+    const config = req.body || {};
+    const camposPermitidos = ["abrirFecha", "abrirHora", "entregaFecha", "entregaHora", "limiteFecha", "limiteHora", "intentos"];
+    const camposEnviados   = Object.keys(config).filter((k) => camposPermitidos.includes(k));
+
+    if (camposEnviados.length === 0) {
+      return reply.code(400).send({ error: "Debe enviar al menos un campo de configuración." });
+    }
+
+    const configFiltrada = Object.fromEntries(camposEnviados.map((k) => [k, config[k]]));
+    const jobId = await encolarConfigJob(req.user.id, ev.id, actId, "guardar", configFiltrada);
+    return reply.code(202).send({ jobId });
+  });
+}
+
+module.exports = configEvidenciasRoutes;

@@ -48,6 +48,7 @@ model User {
   createdAt         DateTime     @default(now())
   fichas            Ficha[]
   jobs              Job[]
+  configAudits      ConfigAudit[]
   competencia       Competencia? @relation(fields: [competenciaId], references: [id])
 }
 
@@ -60,6 +61,7 @@ model Ficha {
   nombre     String     @default("")
   createdAt  DateTime   @default(now())
   updatedAt  DateTime   @updatedAt
+  archivedAt DateTime?
   user       User       @relation(fields: [userId], references: [id])
   evidencias Evidencia[]
   aprendices Aprendiz[]
@@ -68,37 +70,44 @@ model Ficha {
 }
 
 model Evidencia {
-  id       String    @id @default(cuid())
-  fichaId  String
-  nombre   String
-  href     String
-  tipo     String    @default("assign")
-  ficha    Ficha     @relation(fields: [fichaId], references: [id])
-  entregas Entrega[]
+  id            String        @id @default(cuid())
+  fichaId       String
+  nombre        String
+  href          String
+  tipo          String        @default("assign")
+  cerradaAt     DateTime?
+  configCache   Json?
+  configCacheAt DateTime?
+  ficha         Ficha         @relation(fields: [fichaId], references: [id])
+  entregas      Entrega[]
+  configAudits  ConfigAudit[]
 
   @@unique([fichaId, href])
 }
 
 model Aprendiz {
-  id       String    @id @default(cuid())
-  fichaId  String
-  nombre   String
-  ficha    Ficha     @relation(fields: [fichaId], references: [id])
-  entregas Entrega[]
+  id        String    @id @default(cuid())
+  fichaId   String
+  nombre    String
+  moodleId  String?
+  ficha     Ficha     @relation(fields: [fichaId], references: [id])
+  entregas  Entrega[]
 
   @@unique([fichaId, nombre])
 }
 
 model Entrega {
-  id          String           @id @default(cuid())
-  evidenciaId String
-  aprendizId  String
-  estado      String
-  fechaScan   DateTime         @default(now())
-  evidencia   Evidencia        @relation(fields: [evidenciaId], references: [id])
-  aprendiz    Aprendiz         @relation(fields: [aprendizId], references: [id])
-  historial   HistorialEstado[]
-  aiFeedback  AIFeedback[]
+  id           String           @id @default(cuid())
+  evidenciaId  String
+  aprendizId   String
+  estado       String
+  fechaScan    DateTime         @default(now())
+  moodlePostId String?
+  notaActual   Float?
+  evidencia    Evidencia        @relation(fields: [evidenciaId], references: [id])
+  aprendiz     Aprendiz         @relation(fields: [aprendizId], references: [id])
+  historial    HistorialEstado[]
+  aiFeedback   AIFeedback[]
 
   @@unique([evidenciaId, aprendizId])
 }
@@ -135,4 +144,16 @@ model Job {
   resultado Json?
   creadoAt  DateTime @default(now())
   user      User     @relation(fields: [userId], references: [id])
+}
+
+model ConfigAudit {
+  id          String    @id @default(cuid())
+  userId      String
+  evidenciaId String
+  actId       String
+  antes       Json
+  despues     Json
+  fecha       DateTime  @default(now())
+  user        User      @relation(fields: [userId], references: [id])
+  evidencia   Evidencia @relation(fields: [evidenciaId], references: [id])
 }

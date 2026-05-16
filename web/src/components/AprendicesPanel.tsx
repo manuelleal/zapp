@@ -1,0 +1,395 @@
+import { useState, useRef, useEffect } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Loader2, Save } from "lucide-react"
+import { apiFetch, authFetch, ApiError } from "@/api/client"
+
+type EstadoFiltro = "" | "pendiente" | "calificado" | "sin_entregar"
+
+interface Aprendiz {
+  id: string
+  nombre: string
+  moodleId: string | null
+}
+
+interface Entrega {
+  id: string
+  estado: "pendiente" | "calificado" | "sin_entregar"
+  fechaScan: string
+  moodlePostId: string | null
+  notaActual: number | null
+  aprendiz: Aprendiz
+}
+
+interface EntregasResponse {
+  evidenciaId: string
+  evidenciaNombre: string
+  actId: string | null
+  tipo: string | null
+  entregas: Entrega[]
+}
+
+const ZAJUNA_BASE = "https://zajuna.sena.edu.co/zajuna"
+
+function estadoLabel(estado: string): string {
+  if (estado === "pendiente") return "Pendiente"
+  if (estado === "calificado") return "Calificado"
+  return "Sin entregar"
+}
+
+function estadoVariant(estado: string): "yellow" | "green" | "gray" {
+  if (estado === "pendiente") return "yellow"
+  if (estado === "calificado") return "green"
+  return "gray"
+}
+
+export default function AprendicesPanel({ evidenciaId }: { evidenciaId: string }) {
+  const queryClient = useQueryClient()
+  const [filtro, setFiltro] = useState<EstadoFiltro>("")
+  // Sprint 2.5 FIX 4: calificaciones pendientes de envio para foros (key=moodleId)
+  const [ratings, setRatings] = useState<Record<string, string>>({})
+  const [savePhase, setSavePhase] = useState<"idle" | "saving" | "error" | "success">("idle")
+  const [saveMsg, setSaveMsg]     = useState("")
+  // Sprint 2.9: cuando guardamos UNA sola calificacion (boton individual),
+  // marcamos aqui el moodleId para mostrar spinner solo en esa fila.
+  const [savingSingle, setSavingSingle] = useState<string | null>(null)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  function stopPoll() {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
+  }
+  useEffect(() => () => stopPoll(), [])
+
+  const { data, isLoading, error } = useQuery<EntregasResponse>({
+    queryKey: ["entregas", evidenciaId],
+    queryFn: () =>
+      apiFetch<EntregasResponse>(
+        `/api/evidencias/${encodeURIComponent(evidenciaId)}/entregas`
+      ),
+    staleTime: 2 * 60 * 1000,
+  })
+
+  async function guardarCalificacionIndividual(moodleId: string, nota: string) {
+    const notaNum = Number(nota)
+    if (!nota || Number.isNaN(notaNum)) return
+    setSavingSingle(moodleId)
+    setSavePhase("saving")
+    setSaveMsg("Guardando...")
+    stopPoll()
+    try {
+      const { jobId } = await apiFetch<{ jobId: string }>(
+        `/api/evidencias/${encodeURIComponent(evidenciaId)}/foro/calificar`,
+        { method: "PATCH", body: JSON.stringify({ ratings: [{ moodleUserId: moodleId, nota: notaNum }] }) }
+      )
+      pollRef.current = setInterval(async () => {
+        try {
+          const res = await authFetch(`/api/jobs/${encodeURIComponent(jobId)}`)
+          const d = await res.json()
+          if (!res.ok) { stopPoll(); setSavingSingle(null); setSavePhase("error"); setSaveMsg(d?.errorMsg || `Error ${res.status}`); return }
+          if (d.status === "done") {
+            stopPoll(); setSavingSingle(null)
+            const r = d.resultado as { total: number; ok: number; results: Array<{ ok: boolean; error?: string; moodleUserId: string }> }
+            const item = r.results.find(x => String(x.moodleUserId) === moodleId)
+            if (item?.ok) {
+              setSavePhase("success")
+              setSaveMsg("Calificación guardada.")
+              setRatings(p => { const n = {...p}; delete n[moodleId]; return n })
+              queryClient.invalidateQueries({ queryKey: ["entregas", evidenciaId] })
+              queryClient.invalidateQueries({ queryKey: ["evidencias"] })
+            } else {
+              setSavePhase("error")
+              setSaveMsg(item?.error || "Error al calificar.")
+            }
+          } else if (d.status === "error") {
+            stopPoll(); setSavingSingle(null)
+            setSavePhase("error"); setSaveMsg(d.errorMsg || "El job falló.")
+          } else {
+            setSaveMsg(`Guardando... ${d.progreso || 0}%`)
+          }
+        } catch (err) {
+          stopPoll(); setSavingSingle(null)
+          setSavePhase("error")
+          setSaveMsg(err instanceof Error ? err.message : "Error de red.")
+        }
+      }, 2500)
+    } catch (e) {
+      setSavingSingle(null); setSavePhase("error")
+      setSaveMsg(e instanceof ApiError ? e.message : "Error al iniciar el guardado.")
+    }
+  }
+
+  async function guardarCalificaciones() {
+    const items = Object.entries(ratings)
+      .filter(([, v]) => v !== "" && v != null)
+      .map(([moodleUserId, nota]) => ({ moodleUserId, nota: Number(nota) }))
+      .filter((r) => !Number.isNaN(r.nota))
+
+    if (items.length === 0) {
+      setSaveMsg("No hay calificaciones para enviar.")
+      setSavePhase("error")
+      return
+    }
+
+    setSavePhase("saving")
+    setSaveMsg(`Enviando ${items.length} calificacion${items.length !== 1 ? "es" : ""}...`)
+    try {
+      const { jobId } = await apiFetch<{ jobId: string }>(
+        `/api/evidencias/${encodeURIComponent(evidenciaId)}/foro/calificar`,
+        { method: "PATCH", body: JSON.stringify({ ratings: items }) }
+      )
+      stopPoll()
+      pollRef.current = setInterval(async () => {
+        try {
+          const res  = await authFetch(`/api/jobs/${encodeURIComponent(jobId)}`)
+          const d = await res.json()
+          if (!res.ok) { stopPoll(); setSavePhase("error"); setSaveMsg(d?.errorMsg || `Error ${res.status}`); return }
+          if (d.status === "done") {
+            stopPoll()
+            const r = d.resultado as { total: number; ok: number; results: Array<{ ok: boolean; error?: string; moodleUserId: string }> }
+            const fail = r.results.filter((x) => !x.ok)
+            if (fail.length === 0) {
+              setSavePhase("success")
+              setSaveMsg(`${r.ok}/${r.total} calificaciones guardadas.`)
+              setRatings({})
+            } else {
+              setSavePhase("error")
+              setSaveMsg(`${r.ok}/${r.total} ok. Errores: ${fail.slice(0,3).map((f) => `${f.moodleUserId}: ${f.error}`).join(" | ")}`)
+            }
+            queryClient.invalidateQueries({ queryKey: ["entregas", evidenciaId] })
+            queryClient.invalidateQueries({ queryKey: ["evidencias"] })
+          } else if (d.status === "error") {
+            stopPoll()
+            setSavePhase("error"); setSaveMsg(d.errorMsg || "El job fallo.")
+          } else {
+            setSaveMsg(`Guardando... ${d.progreso || 0}%`)
+          }
+        } catch (err) {
+          stopPoll()
+          setSavePhase("error")
+          setSaveMsg(err instanceof Error ? err.message : "Error de red.")
+        }
+      }, 2500)
+    } catch (e) {
+      setSavePhase("error")
+      setSaveMsg(e instanceof ApiError ? e.message : "Error al iniciar el guardado.")
+    }
+  }
+
+  if (isLoading) {
+    return (
+      <div className="border-t border-gray-100 bg-gray-50 px-6 py-3">
+        <p className="text-xs text-gray-500">Cargando aprendices...</p>
+      </div>
+    )
+  }
+
+  if (error || !data) {
+    return (
+      <div className="border-t border-gray-100 bg-gray-50 px-6 py-3">
+        <p className="text-xs text-red-500">Error al cargar aprendices.</p>
+      </div>
+    )
+  }
+
+  const { entregas, actId, tipo } = data
+  const esForo = tipo === "forum"
+
+  if (entregas.length === 0) {
+    return (
+      <div className="border-t border-gray-100 bg-gray-50 px-6 py-3">
+        <p className="text-xs text-gray-500">Sin entregas registradas.</p>
+      </div>
+    )
+  }
+
+  const counts = {
+    pendiente: entregas.filter((e) => e.estado === "pendiente").length,
+    calificado: entregas.filter((e) => e.estado === "calificado").length,
+    sin_entregar: entregas.filter((e) => e.estado === "sin_entregar").length,
+  }
+
+  const filtradas = filtro ? entregas.filter((e) => e.estado === filtro) : entregas
+
+  const filters: { label: string; value: EstadoFiltro }[] = [
+    { label: `Todos (${entregas.length})`, value: "" },
+    { label: `Pendientes (${counts.pendiente})`, value: "pendiente" },
+    { label: `Calificados (${counts.calificado})`, value: "calificado" },
+    { label: `Sin entregar (${counts.sin_entregar})`, value: "sin_entregar" },
+  ]
+
+  return (
+    <div className="border-t border-gray-100 bg-gray-50">
+      {/* Toolbar */}
+      <div className="flex flex-wrap gap-1.5 px-6 pt-3 pb-2">
+        {filters.map((f) => (
+          <button
+            key={f.value}
+            onClick={() => setFiltro(f.value)}
+            className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
+              filtro === f.value
+                ? "bg-sena-green text-white border-sena-green"
+                : "bg-white text-gray-600 border-gray-200 hover:border-gray-300"
+            }`}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Sprint 2.5 FIX 4: barra de calificacion bulk para foros */}
+      {esForo && (
+        <div className="px-6 pb-2 flex items-center gap-2">
+          <span className="text-xs text-gray-500 mr-auto">
+            {Object.values(ratings).filter((v) => v !== "" && v != null).length > 0
+              ? `${Object.values(ratings).filter((v) => v !== "" && v != null).length} calificacion(es) pendientes de enviar`
+              : "Asigna notas en los inputs de la derecha"}
+          </span>
+          {savePhase !== "idle" && (
+            <span className={`text-xs ${
+              savePhase === "error" ? "text-red-600" :
+              savePhase === "success" ? "text-green-700" : "text-blue-600"
+            }`}>
+              {saveMsg}
+            </span>
+          )}
+          <Button
+            size="sm"
+            className="h-7 text-xs bg-sena-green hover:bg-sena-green/90 gap-1"
+            onClick={guardarCalificaciones}
+            disabled={savePhase === "saving" || Object.values(ratings).filter((v) => v !== "" && v != null).length === 0}
+          >
+            {savePhase === "saving" ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Save className="w-3.5 h-3.5" />
+            )}
+            Guardar calificaciones
+          </Button>
+        </div>
+      )}
+
+      {/* List */}
+      <div className="max-h-64 overflow-y-auto px-6 pb-3 space-y-0.5">
+        {filtradas.length === 0 ? (
+          <p className="text-xs text-gray-500 py-2">
+            Ningún aprendiz con este filtro.
+          </p>
+        ) : (
+          filtradas.map((e) => (
+            <div
+              key={e.id}
+              className="flex items-center gap-2 py-1.5 border-b border-gray-100 last:border-0"
+            >
+              {/* Para foros el nombre es texto plano (Abrir foro vive a la derecha y
+                  llevaria al mismo URL). Para assigns el nombre va a action=grading
+                  (tabla de busqueda) en cualquier estado. */}
+              {actId && !esForo ? (
+                <a
+                  href={`${ZAJUNA_BASE}/mod/assign/view.php?id=${actId}&action=grading`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex-1 text-sm text-gray-800 font-medium min-w-0 truncate hover:underline hover:text-sena-green"
+                  title="Ver tabla de entregas"
+                >
+                  {e.aprendiz.nombre}
+                </a>
+              ) : (
+                <span className="flex-1 text-sm text-gray-700 min-w-0 truncate">
+                  {e.aprendiz.nombre}
+                </span>
+              )}
+              <Badge variant={estadoVariant(e.estado)} className="text-xs shrink-0">
+                {estadoLabel(e.estado)}
+                {e.notaActual != null && ` · ${e.notaActual}`}
+              </Badge>
+              {/* Sprint 2.5 FIX 4: input de calificacion para foros (solo si el alumno publico) */}
+              {esForo && e.aprendiz.moodleId && e.estado !== "sin_entregar" && (
+                <>
+                  <Input
+                    type="number"
+                    inputMode="numeric"
+                    min={0}
+                    max={100}
+                    placeholder="Nota"
+                    value={ratings[e.aprendiz.moodleId] ?? ""}
+                    onChange={(ev) => {
+                      const id = e.aprendiz.moodleId!
+                      setRatings((p) => ({ ...p, [id]: ev.target.value }))
+                    }}
+                    disabled={savePhase === "saving" || savingSingle !== null}
+                    className="h-7 w-16 text-xs shrink-0 px-2"
+                    aria-label={`Calificar a ${e.aprendiz.nombre}`}
+                  />
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className={`h-7 w-7 p-0 shrink-0 ${
+                      ratings[e.aprendiz.moodleId]
+                        ? "text-sena-green hover:bg-sena-green/10"
+                        : "text-gray-300"
+                    }`}
+                    onClick={() => {
+                      const mid = e.aprendiz.moodleId!
+                      guardarCalificacionIndividual(mid, ratings[mid] ?? "")
+                    }}
+                    disabled={
+                      savingSingle !== null ||
+                      savePhase === "saving" ||
+                      !ratings[e.aprendiz.moodleId]
+                    }
+                    title="Guardar esta calificación"
+                  >
+                    {savingSingle === e.aprendiz.moodleId ? (
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                    ) : (
+                      <Save className="w-3 h-3" />
+                    )}
+                  </Button>
+                </>
+              )}
+              {actId && (esForo ? (
+                <a
+                  href={`${ZAJUNA_BASE}/mod/forum/view.php?id=${actId}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs hover:underline shrink-0 font-medium text-blue-500"
+                  title="Abrir foro"
+                >
+                  Abrir foro
+                </a>
+              ) : e.aprendiz.moodleId ? (
+                <a
+                  href={`${ZAJUNA_BASE}/mod/assign/view.php?id=${actId}&action=grader&userid=${e.aprendiz.moodleId}&useridlistid=0`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={`text-xs hover:underline shrink-0 font-medium ${
+                    e.estado === "pendiente"
+                      ? "text-sena-green"
+                      : "text-blue-500"
+                  }`}
+                >
+                  {e.estado === "pendiente" ? "Calificar" : "Ver entrega"}
+                </a>
+              ) : (
+                // Sin moodleId en BD (scan viejo o selector que falló).
+                // Tras el fix del selector (scraper/evidencias.js) refrescar la
+                // ficha repobla este campo y desaparece este fallback.
+                <a
+                  href={`${ZAJUNA_BASE}/mod/assign/view.php?id=${actId}&action=grading`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs hover:underline shrink-0 font-medium text-gray-400 italic"
+                  title="Sin ID Moodle en cache. Refresca esta ficha para repoblarlo."
+                >
+                  Sin ID · ir a tabla
+                </a>
+              ))}
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  )
+}
