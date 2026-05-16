@@ -115,27 +115,36 @@ async function enableEditMode(page, courseId) {
   log(`[editmode] edit=on activado (curso ${courseId})`);
 }
 
+// Moodle 4.x usa "form.mform" — los IDs #modeditform fueron removidos en versiones recientes.
+// Selector en orden de especificidad decreciente.
+const MODEDIT_FORM_SELECTOR = [
+  "#modeditform",
+  "form[id*='modedit']",
+  "form.mform",
+  "form[method='post'][action*='modedit']",
+  "#region-main form[method='post']",
+].join(", ");
+
 /**
  * Navega al formulario modedit y verifica que cargó correctamente.
  */
 async function navegarFormulario(page, actId) {
   const url = `${BASE_URL}/course/modedit.php?update=${actId}&return=1`;
   log(`[config] GET ${url}`);
-  await page.goto(url, { waitUntil: "load", timeout: TIMEOUT });
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
   await cerrarModal(page);
 
-  // Verificar que el formulario está presente
+  // waitForSelector hace polling real — más confiable que isVisible() en Moodle 4.x
   const formOk = await page
-    .locator("#modeditform, form[id*='modedit']")
-    .isVisible({ timeout: 15_000 })
+    .waitForSelector(MODEDIT_FORM_SELECTOR, { timeout: 20_000, state: "attached" })
+    .then(() => true)
     .catch(() => false);
 
   if (!formOk) {
-    // Detectar redirect a login (sesión expulsada por concurrencia)
-    const url   = page.url();
-    const isLogin = /\/login|loginindex/i.test(url);
-    const html = await page.content();
-    log(`[config] Formulario no visible. URL=${url}. HTML snippet:\n${html.substring(0, 800)}`);
+    const finalUrl = page.url();
+    const isLogin  = /\/login|loginindex/i.test(finalUrl);
+    const html     = await page.content();
+    log(`[config] Formulario no visible. URL=${finalUrl}. HTML snippet:\n${html.substring(0, 1200)}`);
     throw new Error(
       isLogin
         ? "La sesion fue expulsada (otro login concurrente). Vuelve a intentar en unos segundos."
@@ -155,7 +164,9 @@ async function serializarFormulario(page) {
   return await page.evaluate(() => {
     const form =
       document.querySelector("#modeditform") ||
-      document.querySelector("form[method='post'][action*='modedit']");
+      document.querySelector("form[method='post'][action*='modedit']") ||
+      document.querySelector("form.mform") ||
+      document.querySelector("#region-main form[method='post']");
 
     if (!form) return null;
 
