@@ -1,14 +1,14 @@
 # HANDOFF.md — Guía operativa Zajuna App
 
 > Documento maestro para continuar el desarrollo en chats nuevos.
-> Léelo PRIMERO antes de cualquier prompt. Última actualización: **16 mayo 2026 — Plan Modular Configurador Evidencias iniciado. Módulo 1 completo, pendiente smoke test.**
+> Léelo PRIMERO antes de cualquier prompt. Última actualización: **16 mayo 2026 — Módulo 1 fixes aplicados + Módulo 2 código completo.**
 
 ---
 
 ## 🎯 Estado actual del proyecto
 
-- **Rama activa:** `feature/config-evs-1-lectura` (branch off `master`)
-- **HEAD:** commit `e469cfc` — feat(módulo-1): lectura de configuración de evidencias
+- **Rama activa:** `feature/config-evs-2-batch-duedate` (branch off `feature/config-evs-1-lectura`)
+- **HEAD:** commit `9ecb8ed` — feat(módulo-2): cambio masivo de fecha de cierre
 - **Stack:** Fastify 5 + Prisma 6 + Postgres + Redis + BullMQ + Playwright 1.59
 - **Frontend:** React 18 + Vite 5 + Tailwind 3 + shadcn/ui en `web/` — `web/dist` servido por Fastify sin flags
 - **`public/` eliminado** ✅
@@ -21,8 +21,8 @@ Plan de 6 módulos independientes en branches separadas. Regla: **NO empezar N+1
 
 | # | Branch | Estado | Smoke test |
 |---|--------|--------|------------|
-| **1** | `feature/config-evs-1-lectura` | ✅ Código completo | ⏳ Pendiente usuario |
-| **2** | `feature/config-evs-2-batch-duedate` | 🔲 No iniciado | — |
+| **1** | `feature/config-evs-1-lectura` | ✅ Código completo + fixes UX | ⏳ Pendiente usuario |
+| **2** | `feature/config-evs-2-batch-duedate` | ✅ Código completo | ⏳ Pendiente smoke test |
 | **3** | `feature/config-evs-3-batch-config` | 🔲 No iniciado | — |
 | **4** | `feature/config-evs-4-raps` | 🔲 No iniciado | — |
 | **5** | `feature/config-evs-5-raps-io` | 🔲 No iniciado | — |
@@ -75,9 +75,15 @@ web/src/components/ConfigEvidenciaDialog.tsx  ← +prop readOnly
 web/src/components/EvidenciasModal.tsx        ← botón "Ver config" → readOnly: true
 ```
 
+**Fixes adicionales aplicados (commit `a5a9168` en rama feature/config-evs-1-lectura):**
+- `EvidenciasConfig.tsx`: fichas expandidas por defecto (`?? false` en lugar de `?? true`)
+- `leerConfigEvidenciaWorker.js`: retry automático con fresh login si falla "Formulario modedit no encontrado"
+  o "sesion fue expulsada". Borra sesión Redis y abre nuevo browser con credenciales frescos.
+- `restart.sh`: script bash para matar y relanzar el servidor (`bash /c/zajuna/restart.sh`)
+
 **Smoke test a realizar (usuario):**
-1. `node api/src/server.js`
-2. Abrir 3 fichas distintas → modal evidencias
+1. `bash /c/zajuna/restart.sh` (o `node api/src/server.js`)
+2. Ir a /evidencias-config — las fichas deben aparecer **expandidas** por defecto
 3. Click **"Ver config"** en 3 evidencias diferentes
 4. Verificar que los campos coincidan con `/course/modedit.php?update={actId}` en Zajuna manual
 5. Segunda apertura del mismo modal debe ser instantánea (cache `EvidenciaConfig`)
@@ -89,22 +95,54 @@ web/src/components/EvidenciasModal.tsx        ← botón "Ver config" → readOn
 
 ---
 
-### 🔲 MÓDULO 2 — Cambio masivo de fecha de cierre (pendiente)
+### ✅ MÓDULO 2 — Cambio masivo de fecha de cierre (commit `9ecb8ed`)
 
 **Pre-requisito:** Módulo 1 smoke test ✅ + merge a master.
 
-**Spec técnica:**
-- **Tabla nueva:** `ConfigChangeJob { id, userId, fichaId, evidenciaIds[], campo, valorAntes, valorDespues, status, errorMsg }`
-- **Worker:** `cambiarFechaWorker.js` — login → por cada cmid navega a modedit → lee form completo → modifica solo `duedate[year/month/day/hour/minute]` → submit
-- **Endpoint:** `POST /api/evidencias/batch/duedate`
-  - Body: `{ evidenciaIds: [], nuevaFecha: "2026-06-15T23:59" }`
-- **Frontend:**
-  - Checkbox por fila (ya existe) + "Configurar (N)" en bulk toolbar
-  - Input `datetime-local` para la nueva fecha
-  - Confirmación obligatoria antes de aplicar
-  - Polling del job + progreso X/Y
-  - Al terminar: resumen de éxitos/fallos por evidencia
-- **Reglas:** fallo en una evidencia NO aborta el batch; audit log cada cambio con valorAntes/después
+**Arquitectura implementada:**
+
+| Componente | Archivo | Descripción |
+|---|---|---|
+| Tabla DB | `ConfigChangeJob` | Audit + progreso del job; `detalle Json` guarda resultado por evidencia |
+| Cola BullMQ | `cambiarFechaQueue` | Queue "cambiarFecha", attempts:1 (los Playwright retries son internos) |
+| Worker | `cambiarFechaWorker.js` | Secuencial (concurrency:1); retry de sesión si es expulsada entre evidencias |
+| Endpoint POST | `POST /api/evidencias/batch/duedate` | Valida IDOR, parsea datetime-local, crea Job en DB, encola |
+| Endpoint GET | `GET /api/evidencias/batch/duedate/:id` | Devuelve ConfigChangeJob para polling desde frontend |
+| Frontend | `EvidenciasConfig.tsx` | Checkbox por evidencia + select-all por ficha/guía + barra flotante + polling |
+
+**Flujo completo:**
+```
+1. Usuario selecciona N evidencias + escribe datetime-local → click "Aplicar fecha"
+2. Confirmación: "¿Cambiar fecha de N evidencias a [fecha]?"
+3. POST /api/evidencias/batch/duedate → { jobId, configChangeJobId }
+4. Frontend hace polling /api/jobs/:jobId cada 3s
+5. Worker (concurrency:1):
+   a. Login (o usa sesión Redis si sigue válida)
+   b. Por cada evidenciaId:
+      - leerConfigEvidencia (para valorAntes)
+      - guardarConfigEvidencia con solo entregaFecha/entregaHora
+      - ConfigAudit.create con antes/después
+      - Si falla: loguea error, continúa con la siguiente
+      - Si la sesión fue expulsada: reconecta (fresh login)
+   c. Actualiza progreso % en DB en cada iteración
+   d. Al terminar: status=done/done_with_errors/error + detalle completo
+6. Frontend muestra resumen: N exitosas, M con error (lista)
+```
+
+**Validaciones del endpoint:**
+- `evidenciaIds` no vacío
+- `nuevaFecha` parseable (datetime-local o ISO 8601)
+- Todas las evidencias existen y pertenecen al usuario (IDOR check)
+- Todas tienen `actId` válido en `href`
+
+**Minutos Moodle:** hora se redondea al múltiplo de 5 más cercano (ej. :58 → :55, :03 → :05).
+
+**Smoke test pendiente (usuario):**
+1. Ir a /evidencias-config → seleccionar 3 evidencias distintas (puede ser tipos distintos)
+2. En barra flotante: elegir fecha futura (ej. 2026-12-31T23:55)
+3. Confirmar → ver progreso en barra
+4. Al terminar: verificar en Zajuna `/course/modedit.php?update={actId}` que la fecha quedó correcta
+5. Revisar `ConfigChangeJob` en DB (`npx prisma studio`): detalle con `ok:true` por evidencia
 
 **Branch:** `feature/config-evs-2-batch-duedate`
 
@@ -251,6 +289,15 @@ web/src/components/EvidenciasModal.tsx        ← botón "Ver config" → readOn
 | F | `e6fb2ba` | `obtenerEvidencias` incluye `/mod/quiz/` (antes excluía explícitamente con regex `cuestionario|quiz`). Causa de "18/24" en inglés (6 cuestionarios faltaban). Tipo `"quiz"` despachado a `revisarEntregasQuiz` (básico: lista matriculados como `sin_entregar`; scrape real de attempts queda para Sprint 2.7). |
 | G | `dab1003` | Timeout fix: `obtenerMatriculados` usa `perpage=5000` (no `0`), `domcontentloaded`, 90s. Forum view 60s. |
 | — | `ff26a3c` | `setNotFoundHandler` + `sendFile("index.html")` para SPA fallback (`/dashboard` ya no 404). |
+
+### 🔧 Problemas conocidos y sus soluciones
+
+| Problema | Causa raíz | Solución implementada |
+|---|---|---|
+| "Formulario modedit no encontrado" | Sesión Playwright expirada o expulsada por login concurrente | M1: retry automático en `leerConfigEvidenciaWorker` con fresh login. M2: reconexión automática en `cambiarFechaWorker` entre evidencias |
+| Selectores Moodle 4.x distintos | Moodle 4.x eliminó `#modeditform` — usa `form.mform` | Fix en commit `743b595`: `MODEDIT_FORM_SELECTOR` en cascada con 5 selectores alternativos |
+| `npx prisma generate` falla en Windows con servidor activo | El DLL `query_engine-windows.dll.node` está bloqueado por el proceso node | Detener servidor antes de `prisma generate`; el JS client sí se actualiza aunque el rename del DLL falle |
+| Worker no respeta concurrency tras hot-reload | El `new Worker(...)` se instancia al levantar el proceso; si el proceso no se reinicia, el worker sigue con la config vieja | Siempre reiniciar el servidor tras cambios en workers (`bash /c/zajuna/restart.sh`) |
 
 ### 🔴 Bug abierto — verificar mañana tras restart completo
 
@@ -1098,6 +1145,12 @@ SMOKE TEST
   node api/src/server.js   # sirve web/dist en puerto 3000
   # Dev frontend con HMR:
   cd web && npm run dev    # puerto 5173 con proxy a 3000
+  ```
+- **Reiniciar servidor rápido:**
+  ```bash
+  bash /c/zajuna/restart.sh
+  # Mata el proceso node actual y relanza en background
+  # Log en /c/zajuna/server.log
   ```
 - **Build producción:** `cd web && npm run build` (genera `web/dist/`)
 - **DB inspector:** `npx prisma studio`
