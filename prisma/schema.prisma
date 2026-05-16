@@ -50,6 +50,7 @@ model User {
   fichas            Ficha[]
   jobs              Job[]
   configAudits      ConfigAudit[]
+  configChangeJobs  ConfigChangeJob[]
   competencia       Competencia? @relation(fields: [competenciaId], references: [id])
 }
 
@@ -168,4 +169,19 @@ model ConfigAudit {
   fecha       DateTime  @default(now())
   user        User      @relation(fields: [userId], references: [id])
   evidencia   Evidencia @relation(fields: [evidenciaId], references: [id])
+}
+
+model ConfigChangeJob {
+  id           String   @id @default(cuid())
+  userId       String
+  fichaId      String?
+  evidenciaIds Json
+  campo        String
+  valorDespues String
+  status       String   @default("queued")
+  errorMsg     String?
+  progreso     Int      @default(0)
+  detalle      Json?
+  creadoAt     DateTime @default(now())
+  user         User     @relation(fields: [userId], references: [id])
 }

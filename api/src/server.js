@@ -62,6 +62,7 @@ fastify.register(require("./routes/jobs"));
 fastify.register(require("./routes/evidencias"));
 fastify.register(require("./routes/archivar"));
 fastify.register(require("./routes/configEvidencias"));
+fastify.register(require("./routes/batchConfig"));
 fastify.register(require("./routes/foroRating"));
 fastify.register(require("./routes/scan"));
 
@@ -71,6 +72,7 @@ require("./workers/fichasWorker");
 require("./workers/evidenciasWorker");
 require("./workers/configWorker");
 require("./workers/leerConfigEvidenciaWorker");
+require("./workers/cambiarFechaWorker");
 require("./workers/foroRatingWorker");
 require("./workers/autoScanWorker");
 
