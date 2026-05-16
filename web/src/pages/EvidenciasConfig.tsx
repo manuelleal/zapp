@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { ChevronDown, ChevronRight, RefreshCw, Zap, Settings, CheckSquare, Square, Calendar, X, CheckCircle, AlertCircle, Loader2 } from "lucide-react"
+import { ChevronDown, ChevronRight, RefreshCw, Zap, Settings, CheckSquare, Square, Calendar, X, CheckCircle, AlertCircle, Loader2, SlidersHorizontal } from "lucide-react"
 import Layout from "@/components/Layout"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -10,6 +10,7 @@ import { apiFetch, authFetch, ApiError } from "@/api/client"
 import { useAuthStore } from "@/store/auth"
 import { useNavigate } from "react-router-dom"
 import ConfigEvidenciaDialog from "@/components/ConfigEvidenciaDialog"
+import BatchConfigModal, { BatchCambios } from "@/components/BatchConfigModal"
 
 interface Evidencia {
   id: string
@@ -132,6 +133,12 @@ export default function EvidenciasConfig() {
   const [batchMsg, setBatchMsg]         = useState("")
   const [batchDetalle, setBatchDetalle] = useState<{ evidenciaId: string; ok: boolean; nombre?: string; error?: string }[]>([])
   const pollBatch = usePollJob()
+
+  // ── State batch config genérico (M3) ─────────────────────────────────────
+  const [batchConfigOpen, setBatchConfigOpen]   = useState(false)
+  const [batchConfigBusy, setBatchConfigBusy]   = useState(false)
+  const [batchConfigError, setBatchConfigError] = useState("")
+  const pollBatchConfig = usePollJob()
 
   useEffect(() => {
     const storedJwt = localStorage.getItem("zajuna_jwt")
@@ -257,6 +264,37 @@ export default function EvidenciasConfig() {
     } catch (e) {
       setBatchPhase("error")
       setBatchMsg(e instanceof ApiError ? e.message : "Error al iniciar el batch.")
+    }
+  }
+
+  async function handleBatchConfig(cambios: BatchCambios) {
+    const ids = Array.from(selectedIds)
+    setBatchConfigBusy(true)
+    setBatchConfigError("")
+    try {
+      const resp = await apiFetch<{ jobId: string; total: number }>("/api/evidencias/batch/config", {
+        method: "POST",
+        body:   JSON.stringify({ evidenciaIds: ids, cambios }),
+      })
+      pollBatchConfig.start(
+        resp.jobId,
+        (resultado: unknown) => {
+          const r = resultado as { exitosas: number; fallidas: number; total: number; detalle: typeof batchDetalle }
+          setBatchConfigBusy(false)
+          setBatchConfigOpen(false)
+          setBatchPhase("done")
+          setBatchMsg(`Config aplicada: ${r.exitosas} exitosas, ${r.fallidas} con error.`)
+          setBatchDetalle(r.detalle || [])
+          setSelectedIds(new Set())
+        },
+        (msg) => {
+          setBatchConfigBusy(false)
+          setBatchConfigError(msg)
+        },
+      )
+    } catch (e) {
+      setBatchConfigBusy(false)
+      setBatchConfigError(e instanceof ApiError ? e.message : "Error al iniciar configuración batch.")
     }
   }
 
@@ -466,7 +504,7 @@ export default function EvidenciasConfig() {
                     value={nuevaFecha}
                     onChange={e => setNuevaFecha(e.target.value)}
                     className="h-8 rounded-md border border-input bg-background px-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring w-48"
-                    title="Nueva fecha de cierre"
+                    title="Nueva fecha de entrega"
                   />
                 </div>
                 <Button
@@ -478,7 +516,16 @@ export default function EvidenciasConfig() {
                   }}
                   disabled={!nuevaFecha}
                 >
-                  Aplicar fecha
+                  Fecha entrega
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1 shrink-0"
+                  onClick={() => { setBatchConfigError(""); setBatchConfigOpen(true) }}
+                >
+                  <SlidersHorizontal className="w-3.5 h-3.5" />
+                  Config avanzada
                 </Button>
               </>
             )}
@@ -552,6 +599,15 @@ export default function EvidenciasConfig() {
           readOnly={true}
         />
       )}
+
+      <BatchConfigModal
+        open={batchConfigOpen}
+        onClose={() => setBatchConfigOpen(false)}
+        evidenciaCount={selectedIds.size}
+        onSubmit={handleBatchConfig}
+        busy={batchConfigBusy}
+        error={batchConfigError}
+      />
     </Layout>
   )
 }

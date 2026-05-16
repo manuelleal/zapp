@@ -73,6 +73,7 @@ require("./workers/evidenciasWorker");
 require("./workers/configWorker");
 require("./workers/leerConfigEvidenciaWorker");
 require("./workers/cambiarFechaWorker");
+require("./workers/cambiarConfigWorker");
 require("./workers/foroRatingWorker");
 require("./workers/autoScanWorker");
 
