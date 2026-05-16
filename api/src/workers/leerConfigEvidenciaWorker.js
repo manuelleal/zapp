@@ -27,7 +27,13 @@ const worker = new Worker("leerConfig", async (job) => {
   const zajunaPass = decrypt(zajunaPassEnc);
 
   const savedSession = await loadSession(userId);
-  const browser = await chromium.launch({ headless: true });
+  let browser = await chromium.launch({ headless: true });
+  let browserClosed = false;
+
+  async function closeBrowser() {
+    if (!browserClosed) { browserClosed = true; await browser.close(); }
+  }
+
   const ctx = await browser.newContext({
     locale: "es-CO",
     timezoneId: "America/Bogota",
@@ -65,7 +71,56 @@ const worker = new Worker("leerConfig", async (job) => {
 
     await prisma.job.update({ where: { id: jobId }, data: { progreso: 40 } });
 
-    const configActual = await leerConfigEvidencia(page, actId);
+    let configActual;
+    try {
+      configActual = await leerConfigEvidencia(page, actId);
+    } catch (firstErr) {
+      // Si el formulario no se encontró, puede ser sesión expirada.
+      // Borrar sesión guardada y reintentar con login fresco (1 solo retry).
+      if (
+        firstErr.message.includes("Formulario modedit no encontrado") ||
+        firstErr.message.includes("sesion fue expulsada")
+      ) {
+        log(`[leerConfigWorker] Primer intento falló (${firstErr.message}). Borrando sesión y reintentando con login fresco.`);
+        await saveSession(userId, null).catch(() => {});
+        await closeBrowser();
+
+        const browser2 = await chromium.launch({ headless: true });
+        const ctx2     = await browser2.newContext({ locale: "es-CO", timezoneId: "America/Bogota" });
+        const page2    = await ctx2.newPage();
+        page2.setDefaultTimeout(30_000);
+        try {
+          await login(page2, zajunaUser, zajunaPass);
+          const state2 = await ctx2.storageState();
+          await saveSession(userId, state2).catch((e) => log(`[leerConfigWorker] no se pudo guardar sesión: ${e.message}`));
+          await prisma.job.update({ where: { id: jobId }, data: { progreso: 50 } });
+
+          const ev2       = await prisma.evidencia.findUnique({
+            where:   { id: evidenciaId },
+            include: { ficha: { select: { courseId: true } } },
+          });
+          const courseId2 = ev2?.ficha?.courseId;
+          if (courseId2) await enableEditMode(page2, courseId2);
+
+          await prisma.job.update({ where: { id: jobId }, data: { progreso: 65 } });
+          configActual = await leerConfigEvidencia(page2, actId);
+        } finally {
+          await browser2.close();
+        }
+        // Persist and return early from the retry path
+        await prisma.evidenciaConfig.create({ data: { evidenciaId, raw: configActual.raw ?? {} } });
+        await prisma.evidencia.update({
+          where: { id: evidenciaId },
+          data:  { configCache: configActual, configCacheAt: new Date() },
+        }).catch((e) => log(`[leerConfigWorker] no se pudo cachear: ${e.message}`));
+        await prisma.job.update({
+          where: { id: jobId },
+          data:  { status: "done", progreso: 100, resultado: { config: configActual } },
+        });
+        return;
+      }
+      throw firstErr;
+    }
 
     // Persist to dedicated EvidenciaConfig table
     await prisma.evidenciaConfig.create({
@@ -87,7 +142,7 @@ const worker = new Worker("leerConfig", async (job) => {
     });
 
   } finally {
-    await browser.close();
+    await closeBrowser();
   }
 
 }, { connection, concurrency: 1 });
