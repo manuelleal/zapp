@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { ChevronDown, ChevronRight, RefreshCw, Zap } from "lucide-react"
+import { ChevronDown, ChevronRight, RefreshCw, Zap, Settings } from "lucide-react"
 import Layout from "@/components/Layout"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -8,28 +8,25 @@ import { Switch } from "@/components/ui/switch"
 import { apiFetch, ApiError } from "@/api/client"
 import { useAuthStore } from "@/store/auth"
 import { useNavigate } from "react-router-dom"
+import ConfigEvidenciaDialog from "@/components/ConfigEvidenciaDialog"
 
 interface Evidencia {
   id: string
   nombre: string
-  href: string
   tipo: string
-  cerradaAt: string | null
   activaParaScan: boolean
-  ultimoScan: string | null
   pendientes: number
   calificados: number
   sinEntregar: number
   total: number
+  ultimoScan: string | null
 }
 
 interface FichaConEvidencias {
   id: string
   codigo: string
   nombre: string
-  archivedAt: string | null
   evidencias: Evidencia[]
-  cerradasCount: number
 }
 
 interface ScanStatus {
@@ -49,18 +46,42 @@ function tiempoRelativo(fecha: string | null): string {
   return `Hace ${Math.floor(hrs / 24)}d`
 }
 
+function gaNum(nombre: string): number {
+  const m = nombre.match(/GA(\d+)/i)
+  return m ? parseInt(m[1]) : 999
+}
+
+function agruparPorGA(evidencias: Evidencia[]): { label: string; gaKey: number; items: Evidencia[] }[] {
+  const mapa: Record<number, Evidencia[]> = {}
+  for (const ev of evidencias) {
+    const n = gaNum(ev.nombre)
+    if (!mapa[n]) mapa[n] = []
+    mapa[n].push(ev)
+  }
+  return Object.entries(mapa)
+    .map(([k, items]) => ({ gaKey: Number(k), label: Number(k) === 999 ? "Otras" : `Guía ${k}`, items }))
+    .sort((a, b) => a.gaKey - b.gaKey)
+}
+
 function tipoBadge(tipo: string) {
   const map: Record<string, string> = { assign: "Tarea", forum: "Foro", quiz: "Quiz" }
-  const colors: Record<string, string> = { assign: "blue", forum: "purple", quiz: "yellow" }
-  return <Badge variant={(colors[tipo] as "blue" | "purple" | "yellow") || "gray"} className="text-xs">{map[tipo] || tipo}</Badge>
+  const colors: Record<string, "blue" | "purple" | "yellow" | "gray"> = {
+    assign: "blue", forum: "purple", quiz: "yellow",
+  }
+  return (
+    <Badge variant={colors[tipo] ?? "gray"} className="text-xs flex-shrink-0">
+      {map[tipo] ?? tipo}
+    </Badge>
+  )
 }
 
 export default function EvidenciasConfig() {
-  const navigate = useNavigate()
+  const navigate    = useNavigate()
   const { jwt, user, clearAuth, setAuth } = useAuthStore()
   const queryClient = useQueryClient()
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
+  const [collapsed, setCollapsed]           = useState<Record<string, boolean>>({})
   const [fullScanStatus, setFullScanStatus] = useState("")
+  const [configDialog, setConfigDialog]     = useState<{ id: string; nombre: string; tipo: string } | null>(null)
 
   useEffect(() => {
     const storedJwt = localStorage.getItem("zajuna_jwt")
@@ -73,23 +94,11 @@ export default function EvidenciasConfig() {
     }
   }, [])
 
-  const { data: fichasData, isLoading } = useQuery<{ fichas: FichaConEvidencias[]; archivadasCount: number }>({
-    queryKey: ["fichas-config"],
-    queryFn:  () => apiFetch<{ fichas: FichaConEvidencias[]; archivadasCount: number }>("/api/fichas?incluirArchivadas=1").then(async (fichasRes) => {
-      // Para cada ficha activa, traer sus evidencias
-      const fichasConEv = await Promise.all(
-        fichasRes.fichas.map(async f => {
-          if (f.archivedAt) return { ...f, evidencias: [], cerradasCount: 0 }
-          const ev = await apiFetch<{ evidencias: Evidencia[]; cerradasCount: number }>(
-            `/api/fichas/${f.id}/evidencias?incluirCerradas=1`
-          ).catch(() => ({ evidencias: [], cerradasCount: 0 }))
-          return { ...f, ...ev }
-        })
-      )
-      return { fichas: fichasConEv, archivadasCount: fichasRes.fichas.filter(f => f.archivedAt).length }
-    }),
-    enabled: !!jwt,
-    retry: false,
+  const { data, isLoading } = useQuery<{ fichas: FichaConEvidencias[] }>({
+    queryKey: ["evidencias-todas"],
+    queryFn:  () => apiFetch<{ fichas: FichaConEvidencias[] }>("/api/evidencias/todas"),
+    enabled:  !!jwt,
+    retry:    false,
   })
 
   const { data: scanStatus } = useQuery<ScanStatus>({
@@ -101,15 +110,22 @@ export default function EvidenciasConfig() {
 
   const activarMutation = useMutation({
     mutationFn: ({ id, activa }: { id: string; activa: boolean }) =>
-      apiFetch(`/api/evidencias/${encodeURIComponent(id)}/activar`, { method: "PATCH", body: JSON.stringify({ activa }) }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["fichas-config"] }),
+      apiFetch(`/api/evidencias/${encodeURIComponent(id)}/activar`, {
+        method: "PATCH", body: JSON.stringify({ activa }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["evidencias-todas"] })
+      queryClient.invalidateQueries({ queryKey: ["scan-status"] })
+    },
   })
 
-  const activarBulkMutation = useMutation({
+  const bulkMutation = useMutation({
     mutationFn: ({ ids, activa }: { ids: string[]; activa: boolean }) =>
-      apiFetch("/api/evidencias/activar/bulk", { method: "PATCH", body: JSON.stringify({ ids, activa }) }),
+      apiFetch("/api/evidencias/activar/bulk", {
+        method: "PATCH", body: JSON.stringify({ ids, activa }),
+      }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["fichas-config"] })
+      queryClient.invalidateQueries({ queryKey: ["evidencias-todas"] })
       queryClient.invalidateQueries({ queryKey: ["scan-status"] })
     },
   })
@@ -119,23 +135,19 @@ export default function EvidenciasConfig() {
     setFullScanStatus("Iniciando escaneo completo...")
     try {
       await apiFetch("/api/scan/full", { method: "POST" })
-      setFullScanStatus("Escaneo completo iniciado. Puede tardar varios minutos.")
+      setFullScanStatus("Escaneo iniciado. Puede tardar varios minutos.")
       queryClient.invalidateQueries({ queryKey: ["scan-status"] })
     } catch (err) {
       setFullScanStatus(err instanceof ApiError ? err.message : "Error al iniciar escaneo.")
     }
   }
 
-  const fichas = fichasData?.fichas ?? []
-  const totalActivas = scanStatus?.activeCount ?? 0
-
   function toggleCollapse(fichaId: string) {
     setCollapsed(c => ({ ...c, [fichaId]: !c[fichaId] }))
   }
 
-  function allIdsForFicha(f: FichaConEvidencias) {
-    return f.evidencias.filter(ev => !ev.cerradaAt).map(ev => ev.id)
-  }
+  const fichas = data?.fichas ?? []
+  const totalActivas = scanStatus?.activeCount ?? 0
 
   return (
     <Layout>
@@ -149,14 +161,10 @@ export default function EvidenciasConfig() {
             </span>
           </div>
           {scanStatus?.lastAutoScanAt && (
-            <span className="text-sm text-gray-500">
-              Último scan: {tiempoRelativo(scanStatus.lastAutoScanAt)}
-            </span>
+            <span className="text-sm text-gray-500">Último scan: {tiempoRelativo(scanStatus.lastAutoScanAt)}</span>
           )}
           {scanStatus?.nextAutoScanAt && (
-            <span className="text-sm text-gray-500">
-              Próximo: {tiempoRelativo(scanStatus.nextAutoScanAt)}
-            </span>
+            <span className="text-sm text-gray-500">Próximo: {tiempoRelativo(scanStatus.nextAutoScanAt)}</span>
           )}
           <div className="ml-auto flex items-center gap-2">
             {fullScanStatus && <span className="text-sm text-gray-600">{fullScanStatus}</span>}
@@ -177,9 +185,11 @@ export default function EvidenciasConfig() {
         ) : (
           <div className="space-y-2">
             {fichas.map(f => {
-              const isCollapsed = collapsed[f.id] ?? false
-              const evActivas   = f.evidencias.filter(ev => ev.activaParaScan && !ev.cerradaAt).length
-              const evTotal     = f.evidencias.filter(ev => !ev.cerradaAt).length
+              const isCollapsed  = collapsed[f.id] ?? true
+              const evOrdenadas  = [...f.evidencias].sort((a, b) => gaNum(a.nombre) - gaNum(b.nombre) || a.nombre.localeCompare(b.nombre))
+              const evActivas    = evOrdenadas.filter(ev => ev.activaParaScan).length
+              const todosIds     = evOrdenadas.map(ev => ev.id)
+              const todasActivas = evActivas === evOrdenadas.length && evOrdenadas.length > 0
 
               return (
                 <div key={f.id} className="bg-white rounded-lg border border-gray-200 overflow-hidden">
@@ -188,50 +198,86 @@ export default function EvidenciasConfig() {
                     className="px-4 py-3 flex items-center gap-3 cursor-pointer hover:bg-gray-50 select-none"
                     onClick={() => toggleCollapse(f.id)}
                   >
-                    {isCollapsed ? <ChevronRight className="w-4 h-4 text-gray-400 flex-shrink-0" /> : <ChevronDown className="w-4 h-4 text-gray-400 flex-shrink-0" />}
+                    {isCollapsed
+                      ? <ChevronRight className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                      : <ChevronDown  className="w-4 h-4 text-gray-400 flex-shrink-0" />}
                     <span className="font-mono text-sm font-semibold text-gray-800">{f.codigo}</span>
-                    {f.nombre && <span className="text-sm text-gray-600 truncate">{f.nombre}</span>}
-                    {f.archivedAt && <Badge variant="gray" className="text-xs ml-1">Archivada</Badge>}
-                    <div className="ml-auto flex items-center gap-2">
-                      <span className="text-xs text-gray-500">{evActivas}/{evTotal} activas</span>
-                      {!f.archivedAt && evTotal > 0 && (
-                        <div className="flex gap-1" onClick={e => e.stopPropagation()}>
-                          <Button variant="outline" size="sm" className="h-6 text-xs px-2"
-                            onClick={() => activarBulkMutation.mutate({ ids: allIdsForFicha(f), activa: true })}>
-                            Activar todas
-                          </Button>
-                          <Button variant="outline" size="sm" className="h-6 text-xs px-2"
-                            onClick={() => activarBulkMutation.mutate({ ids: allIdsForFicha(f), activa: false })}>
-                            Desactivar
-                          </Button>
-                        </div>
+                    {f.nombre && <span className="text-sm text-gray-500 truncate flex-1">{f.nombre}</span>}
+                    <div className="ml-auto flex items-center gap-2 flex-shrink-0" onClick={e => e.stopPropagation()}>
+                      <span className="text-xs text-gray-400">{evActivas}/{evOrdenadas.length} activas</span>
+                      {evOrdenadas.length > 0 && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-6 text-xs px-2"
+                          onClick={() => bulkMutation.mutate({ ids: todosIds, activa: !todasActivas })}
+                          disabled={bulkMutation.isPending}
+                        >
+                          {todasActivas ? "Desactivar todas" : "Activar todas"}
+                        </Button>
                       )}
                     </div>
                   </div>
 
-                  {/* Evidencias */}
-                  {!isCollapsed && !f.archivedAt && (
+                  {/* Evidencias agrupadas por Guía */}
+                  {!isCollapsed && (
                     <div className="border-t border-gray-100">
-                      {f.evidencias.length === 0 ? (
-                        <p className="px-5 py-3 text-sm text-gray-400">Sin evidencias escaneadas aún. Haz un escaneo completo.</p>
+                      {evOrdenadas.length === 0 ? (
+                        <p className="px-5 py-4 text-sm text-gray-400">Sin evidencias escaneadas aún. Haz un escaneo completo.</p>
                       ) : (
-                        f.evidencias.filter(ev => !ev.cerradaAt).map(ev => (
-                          <div key={ev.id} className="px-5 py-2.5 flex items-center gap-3 border-b border-gray-50 last:border-0 hover:bg-gray-50">
-                            <Switch
-                              checked={ev.activaParaScan}
-                              onCheckedChange={activa => activarMutation.mutate({ id: ev.id, activa })}
-                            />
-                            <div className="flex-1 min-w-0">
-                              <p className={`text-sm truncate ${ev.activaParaScan ? "text-gray-800" : "text-gray-400"}`}>{ev.nombre}</p>
-                              <p className="text-xs text-gray-400">{tiempoRelativo(ev.ultimoScan)}</p>
-                            </div>
-                            {tipoBadge(ev.tipo)}
-                            {ev.total > 0 && (
-                              <div className="flex gap-2 text-xs text-gray-500 flex-shrink-0">
-                                {ev.pendientes > 0 && <span className="text-red-600 font-medium">{ev.pendientes} pend.</span>}
-                                {ev.calificados > 0 && <span className="text-green-600">{ev.calificados} cal.</span>}
+                        agruparPorGA(evOrdenadas).map(grupo => (
+                          <div key={grupo.gaKey}>
+                            {/* Sub-encabezado por guía */}
+                            <div className="px-5 py-1.5 bg-gray-50 border-b border-gray-100 flex items-center justify-between">
+                              <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">{grupo.label}</span>
+                              <div className="flex items-center gap-3" onClick={e => e.stopPropagation()}>
+                                <span className="text-xs text-gray-400">
+                                  {grupo.items.filter(e => e.activaParaScan).length}/{grupo.items.length} activas
+                                </span>
+                                <button
+                                  className="text-xs text-sena-green hover:underline"
+                                  onClick={() => {
+                                    const ids = grupo.items.map(e => e.id)
+                                    const allOn = grupo.items.every(e => e.activaParaScan)
+                                    bulkMutation.mutate({ ids, activa: !allOn })
+                                  }}
+                                >
+                                  {grupo.items.every(e => e.activaParaScan) ? "Desactivar" : "Activar"}
+                                </button>
                               </div>
-                            )}
+                            </div>
+                            {/* Evidencias de este grupo */}
+                            {grupo.items.map(ev => (
+                              <div key={ev.id} className="px-5 py-2.5 flex items-center gap-3 border-b border-gray-50 last:border-0 hover:bg-gray-50">
+                                <Switch
+                                  checked={ev.activaParaScan}
+                                  onCheckedChange={activa => activarMutation.mutate({ id: ev.id, activa })}
+                                />
+                                <div className="flex-1 min-w-0">
+                                  <p className={`text-sm truncate ${ev.activaParaScan ? "text-gray-800" : "text-gray-400"}`}>
+                                    {ev.nombre}
+                                  </p>
+                                  <p className="text-xs text-gray-400">{tiempoRelativo(ev.ultimoScan)}</p>
+                                </div>
+                                {tipoBadge(ev.tipo)}
+                                {ev.total > 0 && (
+                                  <div className="flex gap-2 text-xs flex-shrink-0">
+                                    {ev.pendientes > 0 && <span className="text-red-600 font-medium">{ev.pendientes} pend.</span>}
+                                    {ev.calificados > 0 && <span className="text-green-600">{ev.calificados} cal.</span>}
+                                  </div>
+                                )}
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 px-2 gap-1 text-xs text-gray-500 hover:text-gray-800 flex-shrink-0"
+                                  onClick={() => setConfigDialog({ id: ev.id, nombre: ev.nombre, tipo: ev.tipo })}
+                                  title="Ver configuración en Moodle"
+                                >
+                                  <Settings className="w-3.5 h-3.5" />
+                                  Ver config
+                                </Button>
+                              </div>
+                            ))}
                           </div>
                         ))
                       )}
@@ -243,6 +289,17 @@ export default function EvidenciasConfig() {
           </div>
         )}
       </div>
+
+      {configDialog && (
+        <ConfigEvidenciaDialog
+          open={true}
+          onClose={() => setConfigDialog(null)}
+          evidenciaIds={[configDialog.id]}
+          evidenciaNombre={configDialog.nombre}
+          tipos={[configDialog.tipo]}
+          readOnly={true}
+        />
+      )}
     </Layout>
   )
 }
