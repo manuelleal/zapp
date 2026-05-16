@@ -130,7 +130,7 @@ export default function EvidenciasModal({
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [confirmBulkClose, setConfirmBulkClose] = useState(false)
-  const [configDialog, setConfigDialog] = useState<{ ids: string[]; nombre?: string; tipos: string[] } | null>(null)
+  const [configDialog, setConfigDialog] = useState<{ ids: string[]; nombre?: string; tipos: string[]; readOnly?: boolean } | null>(null)
   // Sprint 2.6 FIX A: grupos por GA. Default: todos expandidos.
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   function toggleGroupCollapsed(key: string) {
@@ -410,7 +410,7 @@ export default function EvidenciasModal({
                         onCerrar={(cerrada) =>
                           cerrarMutation.mutate({ evidenciaId: ev.id, cerrada })
                         }
-                        onConfig={() => setConfigDialog({ ids: [ev.id], nombre: ev.nombre, tipos: [ev.tipo || "assign"] })}
+                        onConfig={() => setConfigDialog({ ids: [ev.id], nombre: ev.nombre, tipos: [ev.tipo || "assign"], readOnly: true })}
                         selected={selectedIds.has(ev.id)}
                         onSelect={() => toggleSelect(ev.id)}
                       />
@@ -517,6 +517,7 @@ export default function EvidenciasModal({
         evidenciaIds={configDialog.ids}
         evidenciaNombre={configDialog.nombre}
         tipos={configDialog.tipos}
+        readOnly={configDialog.readOnly}
       />
     )}
 
@@ -634,7 +635,7 @@ function EvidenciaRow({
             onClick={onConfig}
           >
             <Settings className="w-3.5 h-3.5" />
-            Config
+            Ver config
           </Button>
 
           <Button

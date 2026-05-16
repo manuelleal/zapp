@@ -70,6 +70,7 @@ fastify.register(require("./routes/scan"));
 require("./workers/fichasWorker");
 require("./workers/evidenciasWorker");
 require("./workers/configWorker");
+require("./workers/leerConfigEvidenciaWorker");
 require("./workers/foroRatingWorker");
 require("./workers/autoScanWorker");
 

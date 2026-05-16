@@ -71,21 +71,30 @@ model Ficha {
 }
 
 model Evidencia {
-  id             String        @id @default(cuid())
+  id             String           @id @default(cuid())
   fichaId        String
   nombre         String
   href           String
-  tipo           String        @default("assign")
+  tipo           String           @default("assign")
   cerradaAt      DateTime?
   configCache    Json?
   configCacheAt  DateTime?
-  activaParaScan Boolean       @default(false)
+  activaParaScan Boolean          @default(false)
   calificandoAt  DateTime?
-  ficha          Ficha         @relation(fields: [fichaId], references: [id])
+  ficha          Ficha            @relation(fields: [fichaId], references: [id])
   entregas       Entrega[]
   configAudits   ConfigAudit[]
+  evidenciaConfigs EvidenciaConfig[]
 
   @@unique([fichaId, href])
+}
+
+model EvidenciaConfig {
+  id          String    @id @default(cuid())
+  evidenciaId String
+  raw         Json
+  scannedAt   DateTime  @default(now())
+  evidencia   Evidencia @relation(fields: [evidenciaId], references: [id])
 }
 
 model Aprendiz {

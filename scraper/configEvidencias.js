@@ -270,6 +270,17 @@ async function leerConfigEvidencia(page, actId) {
     }
   }
 
+  // Raw Moodle field values (for EvidenciaConfig storage)
+  const raw = {
+    duedate:                    d["duedate[year]"] ? `${d["duedate[year]"]}-${d["duedate[month]"]}-${d["duedate[day]"]}` : null,
+    allowsubmissionsfromdate:   d["allowsubmissionsfromdate[year]"] ? `${d["allowsubmissionsfromdate[year]"]}-${d["allowsubmissionsfromdate[month]"]}-${d["allowsubmissionsfromdate[day]"]}` : null,
+    cutoffdate:                 d["cutoffdate[year]"] ? `${d["cutoffdate[year]"]}-${d["cutoffdate[month]"]}-${d["cutoffdate[day]"]}` : null,
+    maxattempts:                d["maxattempts"] ?? null,
+    attemptreopenmethod:        d["attemptreopenmethod"] ?? null,
+    submissiondrafts:           d["submissiondrafts"] ?? null,
+    sendnotifications:          d["sendnotifications"] ?? null,
+  };
+
   const config = {
     tipo,
     nombre:       d["name"] || "",
@@ -280,6 +291,7 @@ async function leerConfigEvidencia(page, actId) {
     limiteFecha:  limite.fecha,
     limiteHora:   limite.hora,
     intentos,
+    raw,
   };
 
   log(`[config] Leido tipo=${tipo}: ${JSON.stringify(config)}`);

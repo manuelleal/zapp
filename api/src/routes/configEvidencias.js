@@ -1,5 +1,5 @@
 const prisma = require("../db/client");
-const { configQueue } = require("../lib/queue");
+const { configQueue, leerConfigQueue } = require("../lib/queue");
 const { encrypt } = require("../lib/crypto");
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
@@ -36,6 +36,25 @@ async function encolarConfigJob(userId, evidenciaId, actId, operation, config = 
     actId,
     operation,
     config,
+    zajunaUserEnc: user.zajunaUserEnc,
+    zajunaPassEnc: user.zajunaPassEnc,
+  });
+
+  return job.id;
+}
+
+async function encolarLeerConfigJob(userId, evidenciaId, actId) {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+
+  const job = await prisma.job.create({
+    data: { userId, tipo: "config-leer", status: "queued" },
+  });
+
+  await leerConfigQueue.add("leerConfig", {
+    jobId:         job.id,
+    userId,
+    evidenciaId,
+    actId,
     zajunaUserEnc: user.zajunaUserEnc,
     zajunaPassEnc: user.zajunaPassEnc,
   });
@@ -88,25 +107,44 @@ async function configEvidenciasRoutes(fastify) {
   });
 
   // GET /api/evidencias/:id/config
-  //   - Si configCache existe y configCacheAt < 4h → 200 { config, fromCache: true, cachedAt }
-  //   - ?force=1 fuerza re-lectura desde Moodle
-  //   - En cualquier otro caso → 202 { jobId } (comportamiento original)
+  //   1. Busca EvidenciaConfig más reciente < 4h → 200 { config, raw, fromCache, scannedAt }
+  //   2. Fallback: configCache inline (legacy) < 4h
+  //   3. ?force=1 fuerza re-lectura desde Moodle
+  //   4. Sin cache → 202 { jobId } vía leerConfigQueue
   fastify.get("/api/evidencias/:id/config", { preHandler: fastify.authenticate }, async (req, reply) => {
     const { ev, actId, error, code } = await getEvidenciaConAcceso(req.params.id, req.user.id);
     if (error) return reply.code(code).send({ error });
 
     const force = req.query?.force === "1" || req.query?.force === "true";
-    const TTL_MS = 4 * 60 * 60 * 1000; // 4 horas
+    const TTL_MS = 4 * 60 * 60 * 1000;
 
-    if (!force && ev.configCache && ev.configCacheAt && (Date.now() - new Date(ev.configCacheAt).getTime()) < TTL_MS) {
-      return reply.code(200).send({
-        config:    ev.configCache,
-        fromCache: true,
-        cachedAt:  ev.configCacheAt,
+    if (!force) {
+      // Check EvidenciaConfig table first
+      const evConfig = await prisma.evidenciaConfig.findFirst({
+        where:   { evidenciaId: ev.id },
+        orderBy: { scannedAt: "desc" },
       });
+      if (evConfig && (Date.now() - new Date(evConfig.scannedAt).getTime()) < TTL_MS) {
+        return reply.code(200).send({
+          config:    ev.configCache,
+          raw:       evConfig.raw,
+          fromCache: true,
+          scannedAt: evConfig.scannedAt,
+          cachedAt:  evConfig.scannedAt,
+        });
+      }
+
+      // Fallback: inline configCache (legacy)
+      if (ev.configCache && ev.configCacheAt && (Date.now() - new Date(ev.configCacheAt).getTime()) < TTL_MS) {
+        return reply.code(200).send({
+          config:    ev.configCache,
+          fromCache: true,
+          cachedAt:  ev.configCacheAt,
+        });
+      }
     }
 
-    const jobId = await encolarConfigJob(req.user.id, ev.id, actId, "leer");
+    const jobId = await encolarLeerConfigJob(req.user.id, ev.id, actId);
     return reply.code(202).send({ jobId });
   });
 

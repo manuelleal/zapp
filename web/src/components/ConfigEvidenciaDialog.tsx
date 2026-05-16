@@ -29,7 +29,9 @@ interface ConfigEvidenciaDialogProps {
   evidenciaIds:    string[]
   evidenciaNombre?: string
   /** Tipos de las evidencias seleccionadas (assign/forum/quiz). Sprint 2.6 FIX B. */
-  tipos?:           string[]
+  tipos?:          string[]
+  /** When true: inputs disabled, no Save button — pure read-only view (Módulo 1). */
+  readOnly?:       boolean
 }
 
 type Phase = "idle" | "loading" | "ready" | "saving" | "success" | "error"
@@ -106,6 +108,7 @@ export default function ConfigEvidenciaDialog({
   evidenciaIds,
   evidenciaNombre,
   tipos = [],
+  readOnly = false,
 }: ConfigEvidenciaDialogProps) {
   const isBulk = evidenciaIds.length > 1
   const [phase, setPhase]   = useState<Phase>("idle")
@@ -281,6 +284,7 @@ export default function ConfigEvidenciaDialog({
   }
 
   const busy = phase === "loading" || phase === "saving"
+  const inputDisabled = busy || readOnly
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
@@ -293,7 +297,9 @@ export default function ConfigEvidenciaDialog({
         <div className="flex items-center gap-2 mb-1">
           <Settings className="w-4 h-4 text-gray-500 shrink-0" />
           <DialogTitle className="text-base font-semibold">
-            {isBulk
+            {readOnly
+              ? "Ver configuración"
+              : isBulk
               ? `Configurar ${evidenciaIds.length} evidencias`
               : "Configurar evidencia"}
           </DialogTitle>
@@ -351,7 +357,7 @@ export default function ConfigEvidenciaDialog({
                   type="date"
                   value={form.abrirFecha}
                   onChange={(e) => setField("abrirFecha", e.target.value)}
-                  disabled={busy}
+                  disabled={inputDisabled}
                   className="mt-1 h-8 text-sm"
                 />
               </div>
@@ -361,7 +367,7 @@ export default function ConfigEvidenciaDialog({
                   type="time"
                   value={form.abrirHora}
                   onChange={(e) => setField("abrirHora", e.target.value)}
-                  disabled={busy}
+                  disabled={inputDisabled}
                   className="mt-1 h-8 text-sm"
                 />
               </div>
@@ -378,7 +384,7 @@ export default function ConfigEvidenciaDialog({
                   type="date"
                   value={form.entregaFecha}
                   onChange={(e) => setField("entregaFecha", e.target.value)}
-                  disabled={busy}
+                  disabled={inputDisabled}
                   className="mt-1 h-8 text-sm"
                 />
               </div>
@@ -388,7 +394,7 @@ export default function ConfigEvidenciaDialog({
                   type="time"
                   value={form.entregaHora}
                   onChange={(e) => setField("entregaHora", e.target.value)}
-                  disabled={busy}
+                  disabled={inputDisabled}
                   className="mt-1 h-8 text-sm"
                 />
               </div>
@@ -441,7 +447,7 @@ export default function ConfigEvidenciaDialog({
                 id="cfg-intentos"
                 value={form.intentos}
                 onChange={(e) => setField("intentos", e.target.value)}
-                disabled={busy}
+                disabled={inputDisabled}
                 className="mt-1 w-full h-8 rounded-md border border-input bg-background px-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
               >
                 <option value="">— sin cambio —</option>
@@ -482,18 +488,20 @@ export default function ConfigEvidenciaDialog({
               Actualizar desde Moodle
             </Button>
           )}
-          <Button
-            size="sm"
-            className="bg-sena-green hover:bg-sena-green/90"
-            onClick={handleSave}
-            disabled={busy || phase === "success"}
-          >
-            {phase === "saving" ? (
-              <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />Guardando…</>
-            ) : (
-              "Guardar"
-            )}
-          </Button>
+          {!readOnly && (
+            <Button
+              size="sm"
+              className="bg-sena-green hover:bg-sena-green/90"
+              onClick={handleSave}
+              disabled={busy || phase === "success"}
+            >
+              {phase === "saving" ? (
+                <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />Guardando…</>
+              ) : (
+                "Guardar"
+              )}
+            </Button>
+          )}
         </div>
       </DialogContent>
     </Dialog>
