@@ -70,6 +70,48 @@ async function evidenciasRoutes(fastify) {
     };
   });
 
+  // GET /api/evidencias/todas — todas las fichas activas con sus evidencias (para módulo config)
+  fastify.get("/api/evidencias/todas", { preHandler: fastify.authenticate }, async (req) => {
+    const fichas = await prisma.ficha.findMany({
+      where:   { userId: req.user.id, archivedAt: null },
+      orderBy: { codigo: "asc" },
+      include: {
+        evidencias: {
+          where:   { cerradaAt: null },
+          include: { entregas: { select: { estado: true, fechaScan: true } } },
+          orderBy: { nombre: "asc" },
+        },
+      },
+    });
+
+    return {
+      fichas: fichas.map(f => ({
+        id:     f.id,
+        codigo: f.codigo,
+        nombre: f.nombre,
+        evidencias: f.evidencias.map(ev => {
+          const pendientes  = ev.entregas.filter(e => e.estado === "pendiente").length;
+          const calificados = ev.entregas.filter(e => e.estado === "calificado").length;
+          const sinEntregar = ev.entregas.filter(e => e.estado === "sin_entregar").length;
+          const ultimoScan  = ev.entregas.length
+            ? ev.entregas.reduce((max, e) => (e.fechaScan > max ? e.fechaScan : max), ev.entregas[0].fechaScan)
+            : null;
+          return {
+            id:             ev.id,
+            nombre:         ev.nombre,
+            tipo:           ev.tipo,
+            activaParaScan: ev.activaParaScan,
+            pendientes,
+            calificados,
+            sinEntregar,
+            total:          ev.entregas.length,
+            ultimoScan,
+          };
+        }),
+      })),
+    };
+  });
+
   // GET /api/evidencias/activas — evidencias activas del usuario agrupadas por ficha (para el dashboard)
   fastify.get("/api/evidencias/activas", { preHandler: fastify.authenticate }, async (req) => {
     const fichas = await prisma.ficha.findMany({

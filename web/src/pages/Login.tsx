@@ -33,8 +33,15 @@ export default function Login() {
   const [regZajunaUser, setRegZajunaUser] = useState("")
   const [regZajunaPass, setRegZajunaPass] = useState("")
   const [regCompetencia, setRegCompetencia] = useState("")
+  const [regCodigoManual, setRegCodigoManual] = useState("")
   const [regError, setRegError] = useState("")
   const [regLoading, setRegLoading] = useState(false)
+
+  const competenciaEsOtra = regCompetencia === "otra"
+  const codigoFinal = competenciaEsOtra ? regCodigoManual.trim() : regCompetencia
+  const nombreFinal = competenciaEsOtra
+    ? (regCodigoManual.trim() || "Otra")
+    : (COMPETENCIAS.find(c => c.codigo === regCompetencia)?.nombre || "")
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault()
@@ -64,7 +71,6 @@ export default function Login() {
     e.preventDefault()
     setRegError("")
     setRegLoading(true)
-    const comp = COMPETENCIAS.find((c) => c.codigo === regCompetencia)
     try {
       const res = await fetch("/api/auth/register", {
         method: "POST",
@@ -75,8 +81,8 @@ export default function Login() {
           password: regPass,
           zajunaUser: regZajunaUser,
           zajunaPass: regZajunaPass,
-          competenciaCodigo: regCompetencia,
-          competenciaNombre: comp?.nombre || "",
+          competenciaCodigo: codigoFinal,
+          competenciaNombre: nombreFinal,
         }),
       })
       const data = await res.json()
@@ -249,7 +255,17 @@ export default function Login() {
                         {c.nombre} ({c.codigo})
                       </option>
                     ))}
+                    <option value="otra">Otra (ingresar código manual)</option>
                   </select>
+                  {competenciaEsOtra && (
+                    <Input
+                      className="mt-2"
+                      placeholder="Código de competencia ej: 220501043"
+                      value={regCodigoManual}
+                      onChange={e => setRegCodigoManual(e.target.value)}
+                      required
+                    />
+                  )}
                 </div>
                 {regError && (
                   <p className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded-md">{regError}</p>
