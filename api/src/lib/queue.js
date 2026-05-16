@@ -15,5 +15,12 @@ const fichasQueueEvents = new QueueEvents("fichas", { connection });
 const evidenciasQueue   = new Queue("evidencias", { connection, defaultJobOptions: retryOpts });
 const configQueue       = new Queue("config",     { connection, defaultJobOptions: { ...retryOpts, attempts: 2 } });
 const foroRatingQueue   = new Queue("foroRating", { connection, defaultJobOptions: retryOpts });
+const autoScanQueue     = new Queue("autoScan",   { connection, defaultJobOptions: { removeOnComplete: 20, removeOnFail: 10 } });
 
-module.exports = { fichasQueue, fichasQueueEvents, evidenciasQueue, configQueue, foroRatingQueue, connection };
+// Repeatable global cada 3 horas. Idempotente: BullMQ deduplica por nombre+pattern.
+autoScanQueue.add("auto-scan-all", {}, {
+  repeat: { pattern: "0 */3 * * *" },
+}).then(() => console.log("[autoScan] repeatable job registered (cada 3h)"))
+  .catch(e => console.error("[autoScan] no se pudo registrar repeatable job:", e.message));
+
+module.exports = { fichasQueue, fichasQueueEvents, evidenciasQueue, configQueue, foroRatingQueue, autoScanQueue, connection };

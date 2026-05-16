@@ -1,392 +1,252 @@
 import { useState, useEffect } from "react"
 import { useNavigate } from "react-router-dom"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Search, LogOut } from "lucide-react"
+import { RefreshCw } from "lucide-react"
+import Layout from "@/components/Layout"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Switch } from "@/components/ui/switch"
-import { Label } from "@/components/ui/label"
+import { apiFetch, ApiError } from "@/api/client"
 import { useAuthStore } from "@/store/auth"
-import { authFetch, apiFetch, ApiError } from "@/api/client"
-import EvidenciasModal from "@/components/EvidenciasModal"
+import AprendicesPanel from "@/components/AprendicesPanel"
 
-interface Ficha {
+interface EvidenciaActiva {
+  id: string
+  nombre: string
+  href: string
+  tipo: string
+  pendientes: number
+  calificados: number
+  sinEntregar: number
+  total: number
+  ultimoScan: string | null
+  calificandoAt: string | null
+}
+
+interface FichaActiva {
   id: string
   codigo: string
-  programa: string
   nombre: string
-  archivedAt: string | null
-  pendientes: number | null
-  calificados: number | null
-  sinEntregar: number | null
+  evidencias: EvidenciaActiva[]
 }
 
-interface FichasResponse {
-  fichas: Ficha[]
-  archivadasCount: number
+interface ScanStatus {
+  lastAutoScanAt: string | null
+  nextAutoScanAt: string | null
+  activeCount: number
 }
 
-interface JobResponse {
-  id: string
-  status: "queued" | "running" | "done" | "error"
-  progreso: number
-  errorMsg?: string
+function tiempoRelativo(fecha: string | null): string {
+  if (!fecha) return "Sin escanear"
+  const diff = Date.now() - new Date(fecha).getTime()
+  const mins = Math.floor(diff / 60000)
+  if (mins < 1) return "Hace un momento"
+  if (mins < 60) return `Hace ${mins} min`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `Hace ${hrs}h`
+  return `Hace ${Math.floor(hrs / 24)}d`
 }
 
-function getUserInitials(nombre: string): string {
-  return nombre
-    .split(" ")
-    .filter(Boolean)
-    .map((w) => w[0])
-    .slice(0, 2)
-    .join("")
-    .toUpperCase()
+function gaNum(nombre: string): number {
+  const m = nombre.match(/GA(\d+)/i)
+  return m ? parseInt(m[1]) : 999
+}
+
+function PendientesBadge({ ev }: { ev: EvidenciaActiva }) {
+  if (ev.calificandoAt) return <Badge variant="yellow" className="text-xs">Calificando</Badge>
+  if (ev.total === 0)   return <Badge variant="gray"   className="text-xs">Sin escanear</Badge>
+  if (ev.pendientes === 0) return <Badge variant="green" className="text-xs">Al día</Badge>
+  return <Badge variant="yellow" className="text-xs">{ev.pendientes} pendiente{ev.pendientes !== 1 ? "s" : ""}</Badge>
 }
 
 export default function Dashboard() {
-  const navigate = useNavigate()
+  const navigate    = useNavigate()
   const { jwt, user, clearAuth, setAuth } = useAuthStore()
   const queryClient = useQueryClient()
-
-  const [verArchivadas, setVerArchivadas] = useState(false)
+  const [expandedEv, setExpandedEv] = useState<string | null>(null)
   const [scanStatus, setScanStatus] = useState("")
   const [scanLoading, setScanLoading] = useState(false)
-  const [evidenciasModal, setEvidenciasModal] = useState<{
-    fichaId: string
-    fichaCodigo: string
-    fichaNombre: string
-  } | null>(null)
 
-  // Auto-login from stored JWT on first load
   useEffect(() => {
     const storedJwt = localStorage.getItem("zajuna_jwt")
-    if (!storedJwt) {
-      navigate("/login")
-      return
-    }
+    if (!storedJwt) { navigate("/login"); return }
     if (!user && storedJwt) {
       try {
         const payload = JSON.parse(atob(storedJwt.split(".")[1]))
-        setAuth(storedJwt, {
-          id: payload.id || "",
-          nombre: payload.nombre || "",
-          email: payload.email || "",
-          competenciaNombre: payload.competenciaNombre || "",
-          competenciaCodigo: payload.competenciaCodigo || "",
-        })
-      } catch {
-        clearAuth()
-        navigate("/login")
-      }
+        setAuth(storedJwt, { id: payload.id || "", nombre: payload.nombre || "", email: payload.email || "", competenciaNombre: payload.competenciaNombre || "", competenciaCodigo: payload.competenciaCodigo || "" })
+      } catch { clearAuth(); navigate("/login") }
     }
   }, [])
 
-  const { data, isLoading, error } = useQuery<FichasResponse>({
-    queryKey: ["fichas", verArchivadas],
-    queryFn: () =>
-      apiFetch<FichasResponse>(`/api/fichas${verArchivadas ? "?incluirArchivadas=1" : ""}`),
-    enabled: !!jwt,
-    retry: false,
+  const { data, isLoading, error } = useQuery<{ fichas: FichaActiva[] }>({
+    queryKey: ["evidencias-activas"],
+    queryFn:  () => apiFetch<{ fichas: FichaActiva[] }>("/api/evidencias/activas"),
+    enabled:  !!jwt,
+    retry:    false,
   })
 
-  const archivarMutation = useMutation({
-    mutationFn: ({ id, archivada }: { id: string; archivada: boolean }) =>
-      apiFetch(`/api/fichas/${encodeURIComponent(id)}`, {
-        method: "PATCH",
-        body: JSON.stringify({ archivada }),
-      }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["fichas"] }),
-    onError: (err) => {
-      if (err instanceof ApiError) setScanStatus(`Error: ${err.message}`)
-    },
-  })
-
-  function handleLogout() {
-    clearAuth()
-    navigate("/login")
+  if (error instanceof ApiError && error.status === 401) {
+    clearAuth(); navigate("/login")
   }
 
-  async function handleScanFichas() {
+  const { data: scanStatus_ } = useQuery<ScanStatus>({
+    queryKey: ["scan-status"],
+    queryFn:  () => apiFetch("/api/scan/status"),
+    enabled:  !!jwt,
+    refetchInterval: 60_000,
+  })
+
+  const calificandoMutation = useMutation({
+    mutationFn: ({ id, calificando }: { id: string; calificando: boolean }) =>
+      apiFetch(`/api/evidencias/${encodeURIComponent(id)}/estado`, {
+        method: "PATCH",
+        body:   JSON.stringify({ calificando }),
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["evidencias-activas"] }),
+  })
+
+  async function handleRefrescar() {
     setScanLoading(true)
-    setScanStatus("Iniciando escaneo...")
+    setScanStatus("Iniciando scan...")
     try {
-      const res = await authFetch("/api/fichas/scan", { method: "POST", body: "{}" })
-      const data = await res.json()
-      if (!res.ok) {
-        setScanStatus(data.error || "Error al iniciar el escaneo.")
-        return
-      }
-      await pollJob(data.jobId)
+      await apiFetch("/api/scan/full", { method: "POST" })
+      setScanStatus("Scan iniciado. Los datos se actualizarán en breve.")
+      queryClient.invalidateQueries({ queryKey: ["scan-status"] })
     } catch (err) {
-      if (err instanceof ApiError && err.status === 401) return
-      setScanStatus(err instanceof Error ? err.message : "Error inesperado.")
+      setScanStatus(err instanceof ApiError ? err.message : "Error al iniciar scan.")
     } finally {
       setScanLoading(false)
     }
   }
 
-  function pollJob(jobId: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const timer = setInterval(async () => {
-        try {
-          const res = await authFetch(`/api/jobs/${jobId}`)
-          const data: JobResponse = await res.json()
-          if (!res.ok) {
-            clearInterval(timer)
-            setScanStatus(data.errorMsg || "Error consultando job.")
-            return reject(new Error(data.errorMsg))
-          }
-          if (data.status === "done") {
-            clearInterval(timer)
-            setScanStatus("Escaneo completo.")
-            queryClient.invalidateQueries({ queryKey: ["fichas"] })
-            resolve()
-          } else if (data.status === "error") {
-            clearInterval(timer)
-            setScanStatus(data.errorMsg || "El escaneo falló.")
-            reject(new Error(data.errorMsg))
-          } else {
-            setScanStatus(`Escaneando... ${data.progreso || 0}%`)
-          }
-        } catch (err) {
-          clearInterval(timer)
-          reject(err)
-        }
-      }, 3000)
-    })
+  function handleCalificar(ev: EvidenciaActiva, actId: string | null) {
+    calificandoMutation.mutate({ id: ev.id, calificando: true })
+    if (actId) {
+      window.open(`https://zajuna.sena.edu.co/zajuna/mod/assign/view.php?id=${actId}&action=grading`, "_blank")
+    }
   }
 
-  const fichas = data?.fichas ?? []
-  const archivadasCount = data?.archivadasCount ?? 0
-  const activas = fichas.filter((f) => !f.archivedAt).length
-  const archivadas = fichas.length - activas
-
-  if (error instanceof ApiError && error.status === 401) {
-    clearAuth()
-    navigate("/login")
-    return null
-  }
-
-  const displayNombre = user?.nombre || ""
-  const displayCompetencia = user?.competenciaNombre || ""
+  const fichas: FichaActiva[] = data?.fichas ?? []
+  const totalPendientes = fichas.flatMap((f: FichaActiva) => f.evidencias).reduce((s: number, ev: EvidenciaActiva) => s + ev.pendientes, 0)
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-sena-green rounded-lg flex items-center justify-center flex-shrink-0">
-              <svg viewBox="0 0 24 24" className="w-5 h-5 fill-white">
-                <rect x="3" y="3" width="7" height="7" rx="1.5" />
-                <rect x="14" y="3" width="7" height="7" rx="1.5" />
-                <rect x="3" y="14" width="7" height="7" rx="1.5" />
-                <rect x="14" y="14" width="7" height="7" rx="1.5" />
-              </svg>
-            </div>
-            <div>
-              <div className="font-semibold text-sm text-gray-900">Zajuna Manager</div>
-              {displayCompetencia && (
-                <div className="text-xs text-gray-500">{displayCompetencia}</div>
-              )}
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            {displayNombre && (
-              <div className="flex items-center gap-2">
-                <div className="w-7 h-7 rounded-full bg-sena-green text-white text-xs font-bold flex items-center justify-center">
-                  {getUserInitials(displayNombre)}
-                </div>
-                <span className="text-sm text-gray-700 hidden sm:inline">{displayNombre}</span>
-              </div>
-            )}
-            <Button variant="ghost" size="sm" onClick={handleLogout} className="gap-1.5">
-              <LogOut className="w-4 h-4" />
-              <span className="hidden sm:inline">Salir</span>
-            </Button>
-          </div>
-        </div>
-      </header>
-
-      <main className="max-w-6xl mx-auto px-4 sm:px-6 py-6 space-y-4">
-        {/* Actions bar */}
-        <div className="bg-white rounded-lg border border-gray-200 p-4">
-          <div className="flex flex-wrap items-center gap-3">
-            <Button
-              onClick={handleScanFichas}
-              disabled={scanLoading}
-              className="bg-sena-green hover:bg-sena-green/90 gap-2"
-            >
-              <Search className="w-4 h-4" />
-              {scanLoading ? "Escaneando..." : "Escanear fichas"}
-            </Button>
-
-            {scanStatus && (
-              <span className={`text-sm ${scanLoading ? "text-blue-600" : "text-gray-600"}`}>
-                {scanStatus}
+    <Layout>
+      <div className="space-y-4">
+        {/* Status bar */}
+        <div className="bg-white rounded-lg border border-gray-200 p-4 flex flex-wrap items-center gap-3">
+          <div className="flex-1">
+            {scanStatus_?.lastAutoScanAt ? (
+              <span className="text-sm text-gray-600">
+                Actualizado {tiempoRelativo(scanStatus_?.lastAutoScanAt)}
+                {scanStatus_?.nextAutoScanAt && ` · próximo scan ${tiempoRelativo(scanStatus_?.nextAutoScanAt)}`}
               </span>
-            )}
-
-            <div className="ml-auto flex items-center gap-2">
-              <Switch
-                id="ver-archivadas"
-                checked={verArchivadas}
-                onCheckedChange={setVerArchivadas}
-              />
-              <Label htmlFor="ver-archivadas" className="text-sm text-gray-600 cursor-pointer">
-                Ver archivadas
-              </Label>
-            </div>
-          </div>
-        </div>
-
-        {/* Fichas table */}
-        {isLoading ? (
-          <div className="bg-white rounded-lg border border-gray-200 p-8 text-center text-gray-500 text-sm">
-            Cargando fichas...
-          </div>
-        ) : fichas.length === 0 ? (
-          <div className="bg-white rounded-lg border border-gray-200 p-12 text-center">
-            <div className="text-4xl mb-3">📭</div>
-            {!verArchivadas && archivadasCount > 0 ? (
-              <p className="text-gray-600 text-sm">
-                No hay fichas activas. Tienes{" "}
-                <strong>{archivadasCount} archivada{archivadasCount !== 1 ? "s" : ""}</strong>.{" "}
-                Activa <strong>Ver archivadas</strong> para verlas.
-              </p>
             ) : (
-              <p className="text-gray-600 text-sm">
-                Aún no tienes fichas escaneadas.
-                <br />
-                Haz clic en <strong>Escanear fichas</strong> para empezar.
-              </p>
+              <span className="text-sm text-gray-400">Auto-scan no configurado aún</span>
             )}
           </div>
-        ) : (
-          <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-            <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
-              <h2 className="font-semibold text-gray-800 flex items-center gap-2">
-                <span>📋</span> Fichas
-              </h2>
-              <Badge variant="green" className="text-xs">
-                {archivadas > 0
-                  ? `${activas} activa${activas !== 1 ? "s" : ""} · ${archivadas} archivada${archivadas !== 1 ? "s" : ""}`
-                  : `${activas} ficha${activas !== 1 ? "s" : ""}`}
-              </Badge>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-gray-100 bg-gray-50">
-                    <th className="text-left px-5 py-3 font-medium text-gray-600 whitespace-nowrap">Código</th>
-                    <th className="text-left px-5 py-3 font-medium text-gray-600 whitespace-nowrap">Programa</th>
-                    <th className="text-left px-5 py-3 font-medium text-gray-600">Nombre del curso</th>
-                    <th className="text-left px-5 py-3 font-medium text-gray-600 whitespace-nowrap">Pendientes</th>
-                    <th className="text-left px-5 py-3 font-medium text-gray-600 whitespace-nowrap">Acciones</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {fichas.map((f) => (
-                    <FichaRow
-                      key={f.id}
-                      ficha={f}
-                      onArchivar={(id, archivada) => archivarMutation.mutate({ id, archivada })}
-                      onVerEvidencias={(id, codigo, nombre) =>
-                        setEvidenciasModal({ fichaId: id, fichaCodigo: codigo, fichaNombre: nombre })
-                      }
-                    />
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="px-5 py-2 border-t border-gray-100">
-              <p className="text-xs text-gray-400 text-right">
-                Solo fichas con código de 7 dígitos · Datos de Zajuna/Moodle
-              </p>
-            </div>
-          </div>
-        )}
-      </main>
-
-      {evidenciasModal && (
-        <EvidenciasModal
-          fichaId={evidenciasModal.fichaId}
-          fichaCodigo={evidenciasModal.fichaCodigo}
-          fichaNombre={evidenciasModal.fichaNombre}
-          open={true}
-          onClose={() => setEvidenciasModal(null)}
-        />
-      )}
-    </div>
-  )
-}
-
-function FichaRow({
-  ficha: f,
-  onArchivar,
-  onVerEvidencias,
-}: {
-  ficha: Ficha
-  onArchivar: (id: string, archivada: boolean) => void
-  onVerEvidencias: (id: string, codigo: string, nombre: string) => void
-}) {
-  const isArchivada = !!f.archivedAt
-
-  return (
-    <tr className={`border-b border-gray-100 last:border-0 hover:bg-gray-50 transition-colors ${isArchivada ? "opacity-60" : ""}`}>
-      <td className="px-5 py-3 whitespace-nowrap">
-        <span className="font-mono text-sm font-medium text-gray-800">{f.codigo ?? "—"}</span>
-      </td>
-      <td className="px-5 py-3 whitespace-nowrap">
-        {f.programa ? (
-          <Badge variant="green" className="font-mono text-xs">{f.programa}</Badge>
-        ) : (
-          <Badge variant="gray" className="text-xs">—</Badge>
-        )}
-      </td>
-      <td className="px-5 py-3 text-gray-700 max-w-xs truncate" title={f.nombre}>
-        {f.nombre}
-      </td>
-      <td className="px-5 py-3 whitespace-nowrap">
-        <PendientesBadge pendientes={f.pendientes} />
-      </td>
-      <td className="px-5 py-3 whitespace-nowrap">
-        <div className="flex items-center gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={isArchivada}
-            className="text-xs h-7 px-2"
-            onClick={() => !isArchivada && onVerEvidencias(f.id, f.codigo, f.nombre)}
-          >
-            Ver evidencias
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-xs h-7 px-2"
-            onClick={() => onArchivar(f.id, !isArchivada)}
-          >
-            {isArchivada ? "Restaurar" : "Archivar"}
+          {scanStatus && <span className="text-sm text-blue-600">{scanStatus}</span>}
+          <Button variant="outline" size="sm" onClick={handleRefrescar} disabled={scanLoading} className="gap-2">
+            <RefreshCw className={`w-3.5 h-3.5 ${scanLoading ? "animate-spin" : ""}`} />
+            Refrescar ahora
           </Button>
         </div>
-      </td>
-    </tr>
-  )
-}
 
-function PendientesBadge({ pendientes }: { pendientes: number | null }) {
-  if (pendientes === null) {
-    return <Badge variant="gray">Sin escanear</Badge>
-  }
-  if (pendientes === 0) {
-    return <Badge variant="green">Al día</Badge>
-  }
-  return (
-    <Badge variant="yellow">
-      {pendientes} pendiente{pendientes !== 1 ? "s" : ""}
-    </Badge>
+        {/* Resumen */}
+        {fichas.length > 0 && (
+          <div className="flex items-center gap-3 px-1">
+            <span className="text-sm text-gray-600">
+              {scanStatus_?.activeCount ?? 0} evidencias activas
+            </span>
+            {totalPendientes > 0 && (
+              <Badge variant="yellow">{totalPendientes} pendiente{totalPendientes !== 1 ? "s" : ""} en total</Badge>
+            )}
+          </div>
+        )}
+
+        {/* Lista de evidencias */}
+        {isLoading ? (
+          <div className="bg-white rounded-lg border p-8 text-center text-gray-500 text-sm">Cargando...</div>
+        ) : fichas.length === 0 ? (
+          <div className="bg-white rounded-lg border p-12 text-center">
+            <div className="text-4xl mb-3">📋</div>
+            <p className="text-gray-600 text-sm mb-2">No hay evidencias activas.</p>
+            <p className="text-gray-400 text-xs">
+              Ve a <strong>Mis Evidencias</strong> para seleccionar cuáles quieres rastrear.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {fichas.map(f => {
+              const evOrdenadas = [...f.evidencias].sort((a, b) => gaNum(a.nombre) - gaNum(b.nombre) || a.nombre.localeCompare(b.nombre))
+              return (
+                <div key={f.id} className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                  <div className="px-4 py-2.5 border-b border-gray-100 bg-gray-50 flex items-center gap-2">
+                    <span className="font-mono text-xs font-semibold text-gray-700">{f.codigo}</span>
+                    {f.nombre && <span className="text-xs text-gray-500 truncate">{f.nombre}</span>}
+                  </div>
+
+                  <div className="divide-y divide-gray-50">
+                    {evOrdenadas.map(ev => {
+                      const actIdMatch = ev.href.match(/[?&]id=(\d+)/)
+                      const actId = actIdMatch ? actIdMatch[1] : null
+                      const isExpanded = expandedEv === ev.id
+
+                      return (
+                        <div key={ev.id}>
+                          <div className="px-4 py-3 flex items-center gap-3 hover:bg-gray-50">
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium text-gray-800 truncate" title={ev.nombre}>{ev.nombre}</p>
+                              <p className="text-xs text-gray-400 mt-0.5">{tiempoRelativo(ev.ultimoScan)}</p>
+                            </div>
+
+                            <PendientesBadge ev={ev} />
+
+                            <div className="flex items-center gap-1.5 flex-shrink-0">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 text-xs px-2"
+                                onClick={() => setExpandedEv(isExpanded ? null : ev.id)}
+                              >
+                                {isExpanded ? "Ocultar" : "Ver aprendices"}
+                              </Button>
+                              {ev.pendientes > 0 && (
+                                <Button
+                                  size="sm"
+                                  className="h-7 text-xs px-2 bg-sena-green hover:bg-sena-green/90"
+                                  onClick={() => handleCalificar(ev, actId)}
+                                >
+                                  Calificar
+                                </Button>
+                              )}
+                              {ev.calificandoAt && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 text-xs px-2 text-gray-400"
+                                  onClick={() => calificandoMutation.mutate({ id: ev.id, calificando: false })}
+                                  title="Quitar marca 'Calificando'"
+                                >
+                                  ✕
+                                </Button>
+                              )}
+                            </div>
+                          </div>
+
+                          {isExpanded && (
+                            <div className="px-4 pb-3">
+                              <AprendicesPanel evidenciaId={ev.id} />
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    </Layout>
   )
 }

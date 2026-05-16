@@ -22,6 +22,63 @@ async function fichasRoutes(fastify) {
     return reply.code(202).send({ jobId: job.id });
   });
 
+  // POST /api/fichas — crear ficha manualmente
+  fastify.post("/api/fichas", { preHandler: fastify.authenticate }, async (req, reply) => {
+    const { codigo, courseId, nombre, programa } = req.body || {};
+    if (!codigo || !courseId) return reply.code(400).send({ error: "codigo y courseId requeridos." });
+
+    const existing = await prisma.ficha.findUnique({
+      where: { userId_codigo: { userId: req.user.id, codigo: String(codigo) } },
+    });
+    if (existing) return reply.code(409).send({ error: "Ya existe una ficha con ese código." });
+
+    const ficha = await prisma.ficha.create({
+      data: {
+        userId:   req.user.id,
+        codigo:   String(codigo),
+        courseId: parseInt(courseId, 10),
+        nombre:   nombre || "",
+        programa: programa || "",
+      },
+    });
+    return reply.code(201).send({ id: ficha.id, codigo: ficha.codigo, courseId: ficha.courseId });
+  });
+
+  // PUT /api/fichas/:id — editar ficha
+  fastify.put("/api/fichas/:id", { preHandler: fastify.authenticate }, async (req, reply) => {
+    const ficha = await prisma.ficha.findUnique({ where: { id: req.params.id } });
+    if (!ficha)                       return reply.code(404).send({ error: "Ficha no encontrada." });
+    if (ficha.userId !== req.user.id) return reply.code(403).send({ error: "Sin acceso." });
+
+    const { codigo, nombre, programa, courseId } = req.body || {};
+    const updated = await prisma.ficha.update({
+      where: { id: ficha.id },
+      data: {
+        ...(codigo   ? { codigo }             : {}),
+        ...(nombre   !== undefined ? { nombre }   : {}),
+        ...(programa !== undefined ? { programa } : {}),
+        ...(courseId ? { courseId: parseInt(courseId, 10) } : {}),
+      },
+    });
+    return { id: updated.id, codigo: updated.codigo, nombre: updated.nombre, programa: updated.programa };
+  });
+
+  // DELETE /api/fichas/:id — eliminar ficha (solo si no tiene evidencias con entregas)
+  fastify.delete("/api/fichas/:id", { preHandler: fastify.authenticate }, async (req, reply) => {
+    const ficha = await prisma.ficha.findUnique({
+      where:   { id: req.params.id },
+      include: { evidencias: { include: { entregas: { take: 1 } } } },
+    });
+    if (!ficha)                       return reply.code(404).send({ error: "Ficha no encontrada." });
+    if (ficha.userId !== req.user.id) return reply.code(403).send({ error: "Sin acceso." });
+
+    const tieneEntregas = ficha.evidencias.some(ev => ev.entregas.length > 0);
+    if (tieneEntregas) return reply.code(409).send({ error: "No se puede eliminar: la ficha tiene entregas registradas." });
+
+    await prisma.ficha.delete({ where: { id: ficha.id } });
+    return { ok: true };
+  });
+
   // GET /api/fichas — fichas guardadas en DB para el usuario
   // Query: ?incluirArchivadas=1 para ver tambien las archivadas
   fastify.get("/api/fichas", { preHandler: fastify.authenticate }, async (req) => {

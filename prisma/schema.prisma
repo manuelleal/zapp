@@ -46,6 +46,7 @@ model User {
   competenciaNombre String
   competenciaId     String?
   createdAt         DateTime     @default(now())
+  lastAutoScanAt    DateTime?
   fichas            Ficha[]
   jobs              Job[]
   configAudits      ConfigAudit[]
@@ -70,17 +71,19 @@ model Ficha {
 }
 
 model Evidencia {
-  id            String        @id @default(cuid())
-  fichaId       String
-  nombre        String
-  href          String
-  tipo          String        @default("assign")
-  cerradaAt     DateTime?
-  configCache   Json?
-  configCacheAt DateTime?
-  ficha         Ficha         @relation(fields: [fichaId], references: [id])
-  entregas      Entrega[]
-  configAudits  ConfigAudit[]
+  id             String        @id @default(cuid())
+  fichaId        String
+  nombre         String
+  href           String
+  tipo           String        @default("assign")
+  cerradaAt      DateTime?
+  configCache    Json?
+  configCacheAt  DateTime?
+  activaParaScan Boolean       @default(false)
+  calificandoAt  DateTime?
+  ficha          Ficha         @relation(fields: [fichaId], references: [id])
+  entregas       Entrega[]
+  configAudits   ConfigAudit[]
 
   @@unique([fichaId, href])
 }

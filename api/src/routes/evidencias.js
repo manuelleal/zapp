@@ -1,5 +1,5 @@
 const prisma = require("../db/client");
-const { evidenciasQueue } = require("../lib/queue");
+const { evidenciasQueue, autoScanQueue } = require("../lib/queue");
 
 async function evidenciasRoutes(fastify) {
   // POST /api/fichas/:fichaId/evidencias/scan — inicia scraping de evidencias
@@ -68,6 +68,110 @@ async function evidenciasRoutes(fastify) {
       evidencias: incluirCerradas ? mapped : mapped.filter(e => !e.cerradaAt),
       cerradasCount: mapped.filter(e => e.cerradaAt).length,
     };
+  });
+
+  // GET /api/evidencias/activas — evidencias activas del usuario agrupadas por ficha (para el dashboard)
+  fastify.get("/api/evidencias/activas", { preHandler: fastify.authenticate }, async (req) => {
+    const fichas = await prisma.ficha.findMany({
+      where: {
+        userId:    req.user.id,
+        archivedAt: null,
+        evidencias: { some: { activaParaScan: true, cerradaAt: null } },
+      },
+      orderBy: { codigo: "asc" },
+      include: {
+        evidencias: {
+          where:   { activaParaScan: true, cerradaAt: null },
+          include: { entregas: { select: { estado: true, fechaScan: true } } },
+          orderBy: { nombre: "asc" },
+        },
+      },
+    });
+
+    return {
+      fichas: fichas.map(f => ({
+        id:     f.id,
+        codigo: f.codigo,
+        nombre: f.nombre,
+        evidencias: f.evidencias.map(ev => {
+          const pendientes  = ev.entregas.filter(e => e.estado === "pendiente").length;
+          const calificados = ev.entregas.filter(e => e.estado === "calificado").length;
+          const sinEntregar = ev.entregas.filter(e => e.estado === "sin_entregar").length;
+          const ultimoScan  = ev.entregas.length
+            ? ev.entregas.reduce((max, e) => (e.fechaScan > max ? e.fechaScan : max), ev.entregas[0].fechaScan)
+            : null;
+          return {
+            id:            ev.id,
+            nombre:        ev.nombre,
+            href:          ev.href,
+            tipo:          ev.tipo,
+            pendientes,
+            calificados,
+            sinEntregar,
+            total:         ev.entregas.length,
+            ultimoScan,
+            calificandoAt: ev.calificandoAt,
+          };
+        }),
+      })),
+    };
+  });
+
+  // PATCH /api/evidencias/activar/bulk — activar/desactivar múltiples para auto-scan
+  fastify.patch("/api/evidencias/activar/bulk", { preHandler: fastify.authenticate }, async (req, reply) => {
+    const { ids, activa } = req.body || {};
+    if (!Array.isArray(ids) || ids.length === 0) return reply.code(400).send({ error: "ids requerido." });
+    if (typeof activa !== "boolean")              return reply.code(400).send({ error: "activa (boolean) requerido." });
+
+    // IDOR: verificar que todas pertenecen al usuario
+    const count = await prisma.evidencia.count({
+      where: { id: { in: ids }, ficha: { userId: req.user.id } },
+    });
+    if (count !== ids.length) return reply.code(404).send({ error: "Una o más evidencias no encontradas." });
+
+    const result = await prisma.evidencia.updateMany({
+      where: { id: { in: ids } },
+      data:  { activaParaScan: activa },
+    });
+    return { actualizadas: result.count };
+  });
+
+  // PATCH /api/evidencias/:id/activar — activar/desactivar una evidencia para auto-scan
+  fastify.patch("/api/evidencias/:id/activar", { preHandler: fastify.authenticate }, async (req, reply) => {
+    const { activa } = req.body || {};
+    if (typeof activa !== "boolean") return reply.code(400).send({ error: "activa (boolean) requerido." });
+
+    const ev = await prisma.evidencia.findUnique({
+      where:   { id: req.params.id },
+      include: { ficha: { select: { userId: true } } },
+    });
+    if (!ev)                              return reply.code(404).send({ error: "Evidencia no encontrada." });
+    if (ev.ficha.userId !== req.user.id)  return reply.code(403).send({ error: "Sin acceso." });
+
+    const updated = await prisma.evidencia.update({
+      where: { id: ev.id },
+      data:  { activaParaScan: activa },
+    });
+    return { id: updated.id, activaParaScan: updated.activaParaScan };
+  });
+
+  // PATCH /api/evidencias/:id/estado — marcar/desmarcar "calificando"
+  fastify.patch("/api/evidencias/:id/estado", { preHandler: fastify.authenticate }, async (req, reply) => {
+    const { calificando } = req.body || {};
+    if (typeof calificando !== "boolean") return reply.code(400).send({ error: "calificando (boolean) requerido." });
+
+    const ev = await prisma.evidencia.findUnique({
+      where:   { id: req.params.id },
+      include: { ficha: { select: { userId: true } } },
+    });
+    if (!ev)                              return reply.code(404).send({ error: "Evidencia no encontrada." });
+    if (ev.ficha.userId !== req.user.id)  return reply.code(403).send({ error: "Sin acceso." });
+
+    const updated = await prisma.evidencia.update({
+      where: { id: ev.id },
+      data:  { calificandoAt: calificando ? new Date() : null },
+    });
+    return { id: updated.id, calificandoAt: updated.calificandoAt };
   });
 
   // GET /api/evidencias/:evidenciaId/entregas — lista de aprendices con estado para esta evidencia

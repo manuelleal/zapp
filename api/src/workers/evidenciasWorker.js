@@ -142,6 +142,12 @@ const worker = new Worker("evidencias", async (job) => {
         else if (entrega.estado === "sin_entregar") sinEntregar++;
       }
 
+      // Reset calificandoAt si el instructor marcó "calificando" pero Zajuna
+      // sigue mostrando pendientes — vuelve al estado visual normal.
+      if (pendientes > 0 && evDb.calificandoAt) {
+        await prisma.evidencia.update({ where: { id: evDb.id }, data: { calificandoAt: null } });
+      }
+
       // Cierre/reapertura es 100% manual desde la UI: no tocamos cerradaAt aqui.
       // Razon: pendientes=0 puede deberse a evidencias con fechas viejas, no a
       // que esten realmente revisadas. El instructor decide.
