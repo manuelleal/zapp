@@ -13,7 +13,7 @@ const fastify = require("fastify")({
 // ─── PLUGINS ─────────────────────────────────────────────────────────────────
 
 fastify.register(require("@fastify/cors"), {
-  origin: process.env.ALLOWED_ORIGIN || false,
+  origin: process.env.ALLOWED_ORIGIN || "http://localhost:5173",
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
 });
 
@@ -33,6 +33,15 @@ fastify.setNotFoundHandler((req, reply) => {
     return reply.code(404).send({ error: "Not Found" });
   }
   return reply.sendFile("index.html");
+});
+
+// ─── SECURITY HEADERS ────────────────────────────────────────────────────────
+
+fastify.addHook("onSend", async (req, reply) => {
+  reply.header("X-Frame-Options", "DENY");
+  reply.header("X-Content-Type-Options", "nosniff");
+  reply.header("Referrer-Policy", "strict-origin-when-cross-origin");
+  reply.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
 });
 
 // ─── AUTH HELPER ─────────────────────────────────────────────────────────────

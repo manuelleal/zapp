@@ -97,15 +97,17 @@ model Aprendiz {
 }
 
 model Entrega {
-  id          String           @id @default(cuid())
-  evidenciaId String
-  aprendizId  String
-  estado      String
-  fechaScan   DateTime         @default(now())
-  evidencia   Evidencia        @relation(fields: [evidenciaId], references: [id])
-  aprendiz    Aprendiz         @relation(fields: [aprendizId], references: [id])
-  historial   HistorialEstado[]
-  aiFeedback  AIFeedback[]
+  id           String           @id @default(cuid())
+  evidenciaId  String
+  aprendizId   String
+  estado       String
+  fechaScan    DateTime         @default(now())
+  moodlePostId String?
+  notaActual   Float?
+  evidencia    Evidencia        @relation(fields: [evidenciaId], references: [id])
+  aprendiz     Aprendiz         @relation(fields: [aprendizId], references: [id])
+  historial    HistorialEstado[]
+  aiFeedback   AIFeedback[]
 
   @@unique([evidenciaId, aprendizId])
 }

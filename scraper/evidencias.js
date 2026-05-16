@@ -297,10 +297,13 @@ async function revisarEntregasForo(page, actId, courseId, matriculadosCache) {
     // Calificación: "-999" / "" / null → pendiente; cualquier otro valor → calificado.
     const v = p.ratingVal;
     const calificado = v != null && v !== "" && v !== "-999" && v !== "-1";
+    const notaActual = calificado ? parseFloat(v) : null;
     result.push({
-      nombre: p.nombre || `Aprendiz ${p.moodleUserId}`,
+      nombre:          p.nombre || `Aprendiz ${p.moodleUserId}`,
       aprendizMoodleId: p.moodleUserId,
-      estado: calificado ? "calificado" : "pendiente",
+      estado:          calificado ? "calificado" : "pendiente",
+      moodlePostId:    p.postId || null,
+      notaActual:      Number.isFinite(notaActual) ? notaActual : null,
     });
   }
 
@@ -319,20 +322,69 @@ async function revisarEntregasForo(page, actId, courseId, matriculadosCache) {
 }
 
 /**
- * Revisa entregas de un cuestionario (quiz) — Sprint 2.6 FIX F (basico).
+ * Revisa entregas de un cuestionario (quiz) — Sprint 2.10.
  *
- * NOTA: por ahora solo lista matriculados como `sin_entregar`. El scrape
- * real de intentos requiere /mod/quiz/report.php?id=X&mode=overview o el
- * Web Service mod_quiz_get_user_attempts; queda para un sprint posterior.
- * Esto permite que la evidencia aparezca en la app y se pueda configurar
- * sus fechas (ya soportado por configEvidencias.js + FIELD_MAPS quiz).
+ * Estrategia:
+ *  1. Navegar a /mod/quiz/report.php?id={actId}&mode=overview.
+ *  2. Parsear la tabla de intentos para detectar: calificado (finalizado + nota) /
+ *     pendiente (en progreso, sin nota) / sin_entregar (no aparece en el reporte).
+ *  3. Completar con matriculadosCache para los que no intentaron.
  *
  * @param {import('playwright').Page} page
- * @param {string|number} _actId
+ * @param {string|number} actId   — cmId del quiz (course module id)
  * @param {string|number} courseId
  * @param {Array} [matriculadosCache]
  */
-async function revisarEntregasQuiz(page, _actId, courseId, matriculadosCache) {
+async function revisarEntregasQuiz(page, actId, courseId, matriculadosCache) {
+  const reportUrl = `${BASE_URL}/mod/quiz/report.php?id=${actId}&mode=overview`;
+  log(`[quiz] Report: ${reportUrl}`);
+  await page.goto(reportUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
+  await cerrarModal(page);
+
+  const filas = await page.evaluate(() => {
+    const rows = Array.from(document.querySelectorAll(".generaltable tbody tr, table.quizreport tbody tr"));
+    return rows.map(row => {
+      const profileLink = row.querySelector(
+        'a[href*="/user/view.php?id="], a[href*="/user/profile.php?id="]'
+      );
+      const moodleId = profileLink
+        ? ((profileLink.href.match(/[?&]id=(\d+)/) || [])[1] || null)
+        : null;
+      const nombre = profileLink
+        ? (profileLink.textContent || "").replace(/\s+/g, " ").trim()
+        : null;
+      const cells = Array.from(row.querySelectorAll("td"))
+        .map(td => (td.textContent || "").replace(/\s+/g, " ").trim());
+      return { moodleId, nombre, cells };
+    }).filter(r => r.moodleId);
+  });
+
+  log(`[quiz] Filas en reporte: ${filas.length}`);
+
+  const result = [];
+  const idsEnReporte = new Set();
+
+  for (const fila of filas) {
+    idsEnReporte.add(fila.moodleId);
+    const textos = fila.cells.join(" ");
+    let estado;
+    if (/finalizado|finished|completado|completed/i.test(textos)) {
+      estado = "calificado";
+    } else if (/en progreso|in progress|abierto|started/i.test(textos)) {
+      estado = "pendiente";
+    } else {
+      // Tiene fila en el reporte pero estado ambiguo → calificado si hay nota numérica
+      const tieneNota = fila.cells.some(c => /^\d+([.,]\d+)?$/.test(c.trim()) && c.trim() !== "0");
+      estado = tieneNota ? "calificado" : "pendiente";
+    }
+    result.push({
+      nombre:           fila.nombre || `Aprendiz ${fila.moodleId}`,
+      aprendizMoodleId: fila.moodleId,
+      estado,
+    });
+  }
+
+  // Completar con matriculados que no aparecen en el reporte
   let matriculados;
   if (Array.isArray(matriculadosCache) && matriculadosCache.length > 0) {
     matriculados = matriculadosCache;
@@ -341,12 +393,19 @@ async function revisarEntregasQuiz(page, _actId, courseId, matriculadosCache) {
     matriculados = await obtenerMatriculados(page, courseId);
     log(`[quiz] Matriculados detectados: ${matriculados.length}`);
   }
-  // TODO: scrapear /mod/quiz/report.php para detectar quien lo presento y la nota.
-  return matriculados.map((m) => ({
-    nombre:           m.nombre,
-    aprendizMoodleId: m.moodleUserId,
-    estado:           "sin_entregar",
-  }));
+
+  for (const m of matriculados) {
+    if (!idsEnReporte.has(m.moodleUserId)) {
+      result.push({
+        nombre:           m.nombre,
+        aprendizMoodleId: m.moodleUserId,
+        estado:           "sin_entregar",
+      });
+    }
+  }
+
+  log(`[quiz] Total: ${result.length} (intentaron=${idsEnReporte.size}, sin_entregar=${result.length - idsEnReporte.size})`);
+  return result;
 }
 
 module.exports = { obtenerEvidencias, revisarEntregas, revisarEntregasForo, revisarEntregasQuiz, extraerPostsForo, obtenerMatriculados };

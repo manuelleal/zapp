@@ -1,11 +1,12 @@
 require("dotenv").config({ path: require("path").resolve(__dirname, "../../../.env") });
 
-const { Worker } = require("bullmq");
+const { Worker, UnrecoverableError } = require("bullmq");
 const { chromium } = require("playwright");
 const { connection } = require("../lib/queue");
 const { decrypt } = require("../lib/crypto");
+const { saveSession, loadSession } = require("../lib/sessionStore");
 const prisma = require("../db/client");
-const { login, cerrarModal, BASE_URL, TIMEOUT } = require("../../../scraper/auth");
+const { login, cerrarModal, BASE_URL, TIMEOUT, log } = require("../../../scraper/auth");
 const { obtenerEvidencias, revisarEntregas, revisarEntregasForo, revisarEntregasQuiz, obtenerMatriculados } = require("../../../scraper/evidencias");
 
 const worker = new Worker("evidencias", async (job) => {
@@ -16,13 +17,34 @@ const worker = new Worker("evidencias", async (job) => {
   const zajunaUser = decrypt(zajunaUserEnc);
   const zajunaPass = decrypt(zajunaPassEnc);
 
+  const savedSession = await loadSession(userId);
   const browser = await chromium.launch({ headless: true });
-  const ctx  = await browser.newContext({ locale: "es-CO", timezoneId: "America/Bogota" });
+  const ctx = await browser.newContext({
+    locale: "es-CO",
+    timezoneId: "America/Bogota",
+    ...(savedSession ? { storageState: savedSession } : {}),
+  });
   const page = await ctx.newPage();
   page.setDefaultTimeout(TIMEOUT);
 
   try {
-    await login(page, zajunaUser, zajunaPass);
+    let sessionValida = false;
+    if (savedSession) {
+      await page.goto(`${BASE_URL}/my/`, { waitUntil: "domcontentloaded", timeout: 30_000 });
+      await cerrarModal(page);
+      sessionValida = !page.url().includes("/login") && page.url().includes("zajuna.sena.edu.co");
+      if (!sessionValida) log("[evidenciasWorker] Sesión expirada, login fresco");
+    }
+    if (!sessionValida) {
+      try {
+        await login(page, zajunaUser, zajunaPass);
+      } catch (err) {
+        if (err.message === "Credenciales incorrectas.") throw new UnrecoverableError(err.message);
+        throw err;
+      }
+      const state = await ctx.storageState();
+      await saveSession(userId, state).catch(e => log(`[evidenciasWorker] no se pudo guardar sesión: ${e.message}`));
+    }
     await prisma.job.update({ where: { id: jobId }, data: { progreso: 30 } });
 
     await page.goto(`${BASE_URL}/course/view.php?id=${courseId}`, { waitUntil: "load", timeout: TIMEOUT });
@@ -84,20 +106,35 @@ const worker = new Worker("evidencias", async (job) => {
 
         if (!entregaExistente) {
           await prisma.entrega.create({
-            data: { evidenciaId: evDb.id, aprendizId: aprendizDb.id, estado: entrega.estado },
-          });
-        } else if (entregaExistente.estado !== entrega.estado) {
-          await prisma.historialEstado.create({
             data: {
-              entregaId:     entregaExistente.id,
-              estadoAnterior: entregaExistente.estado,
-              estadoNuevo:    entrega.estado,
+              evidenciaId:  evDb.id,
+              aprendizId:   aprendizDb.id,
+              estado:       entrega.estado,
+              moodlePostId: entrega.moodlePostId || null,
+              notaActual:   entrega.notaActual ?? null,
             },
           });
-          await prisma.entrega.update({
-            where: { id: entregaExistente.id },
-            data:  { estado: entrega.estado, fechaScan: new Date() },
-          });
+        } else {
+          const estadoCambio = entregaExistente.estado !== entrega.estado;
+          if (estadoCambio) {
+            await prisma.historialEstado.create({
+              data: {
+                entregaId:      entregaExistente.id,
+                estadoAnterior: entregaExistente.estado,
+                estadoNuevo:    entrega.estado,
+              },
+            });
+          }
+          if (estadoCambio || entrega.moodlePostId || entrega.notaActual != null) {
+            await prisma.entrega.update({
+              where: { id: entregaExistente.id },
+              data:  {
+                ...(estadoCambio ? { estado: entrega.estado, fechaScan: new Date() } : {}),
+                ...(entrega.moodlePostId ? { moodlePostId: entrega.moodlePostId } : {}),
+                ...(entrega.notaActual != null ? { notaActual: entrega.notaActual } : {}),
+              },
+            });
+          }
         }
 
         if (entrega.estado === "pendiente")    pendientes++;

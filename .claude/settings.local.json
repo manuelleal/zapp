@@ -25,7 +25,13 @@
       "Bash(docker-compose up *)",
       "Bash(docker-compose ps *)",
       "PowerShell(echo \"\" | npx prisma migrate dev --name add_raps_competencias 2>&1)",
-      "Bash(curl *)"
+      "Bash(curl *)",
+      "Bash(Get-ChildItem -Path \"C:\\\\zajuna\" -MaxDepth 1 -Filter \"*.md\")",
+      "Bash(Select-Object FullName)",
+      "Bash(Get-ChildItem -Path \"C:\\\\zajuna\" -Recurse -Depth 2)",
+      "Bash(find C:\\\\\\\\zajuna -type f -name \"*.json\" -o -name \".env*\" -o -name \".gitignore\")",
+      "Bash(xargs grep -l \"innerHTML\\\\|insertAdjacentHTML\"2)",
+      "Bash(npm list *)"
     ]
   }
 }

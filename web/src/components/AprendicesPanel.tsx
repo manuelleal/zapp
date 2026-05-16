@@ -18,6 +18,8 @@ interface Entrega {
   id: string
   estado: "pendiente" | "calificado" | "sin_entregar"
   fechaScan: string
+  moodlePostId: string | null
+  notaActual: number | null
   aprendiz: Aprendiz
 }
 
@@ -50,6 +52,9 @@ export default function AprendicesPanel({ evidenciaId }: { evidenciaId: string }
   const [ratings, setRatings] = useState<Record<string, string>>({})
   const [savePhase, setSavePhase] = useState<"idle" | "saving" | "error" | "success">("idle")
   const [saveMsg, setSaveMsg]     = useState("")
+  // Sprint 2.9: cuando guardamos UNA sola calificacion (boton individual),
+  // marcamos aqui el moodleId para mostrar spinner solo en esa fila.
+  const [savingSingle, setSavingSingle] = useState<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   function stopPoll() {
@@ -65,6 +70,55 @@ export default function AprendicesPanel({ evidenciaId }: { evidenciaId: string }
       ),
     staleTime: 2 * 60 * 1000,
   })
+
+  async function guardarCalificacionIndividual(moodleId: string, nota: string) {
+    const notaNum = Number(nota)
+    if (!nota || Number.isNaN(notaNum)) return
+    setSavingSingle(moodleId)
+    setSavePhase("saving")
+    setSaveMsg("Guardando...")
+    stopPoll()
+    try {
+      const { jobId } = await apiFetch<{ jobId: string }>(
+        `/api/evidencias/${encodeURIComponent(evidenciaId)}/foro/calificar`,
+        { method: "PATCH", body: JSON.stringify({ ratings: [{ moodleUserId: moodleId, nota: notaNum }] }) }
+      )
+      pollRef.current = setInterval(async () => {
+        try {
+          const res = await authFetch(`/api/jobs/${encodeURIComponent(jobId)}`)
+          const d = await res.json()
+          if (!res.ok) { stopPoll(); setSavingSingle(null); setSavePhase("error"); setSaveMsg(d?.errorMsg || `Error ${res.status}`); return }
+          if (d.status === "done") {
+            stopPoll(); setSavingSingle(null)
+            const r = d.resultado as { total: number; ok: number; results: Array<{ ok: boolean; error?: string; moodleUserId: string }> }
+            const item = r.results.find(x => String(x.moodleUserId) === moodleId)
+            if (item?.ok) {
+              setSavePhase("success")
+              setSaveMsg("Calificación guardada.")
+              setRatings(p => { const n = {...p}; delete n[moodleId]; return n })
+              queryClient.invalidateQueries({ queryKey: ["entregas", evidenciaId] })
+              queryClient.invalidateQueries({ queryKey: ["evidencias"] })
+            } else {
+              setSavePhase("error")
+              setSaveMsg(item?.error || "Error al calificar.")
+            }
+          } else if (d.status === "error") {
+            stopPoll(); setSavingSingle(null)
+            setSavePhase("error"); setSaveMsg(d.errorMsg || "El job falló.")
+          } else {
+            setSaveMsg(`Guardando... ${d.progreso || 0}%`)
+          }
+        } catch (err) {
+          stopPoll(); setSavingSingle(null)
+          setSavePhase("error")
+          setSaveMsg(err instanceof Error ? err.message : "Error de red.")
+        }
+      }, 2500)
+    } catch (e) {
+      setSavingSingle(null); setSavePhase("error")
+      setSaveMsg(e instanceof ApiError ? e.message : "Error al iniciar el guardado.")
+    }
+  }
 
   async function guardarCalificaciones() {
     const items = Object.entries(ratings)
@@ -248,24 +302,52 @@ export default function AprendicesPanel({ evidenciaId }: { evidenciaId: string }
               )}
               <Badge variant={estadoVariant(e.estado)} className="text-xs shrink-0">
                 {estadoLabel(e.estado)}
+                {e.notaActual != null && ` · ${e.notaActual}`}
               </Badge>
               {/* Sprint 2.5 FIX 4: input de calificacion para foros (solo si el alumno publico) */}
               {esForo && e.aprendiz.moodleId && e.estado !== "sin_entregar" && (
-                <Input
-                  type="number"
-                  inputMode="numeric"
-                  min={0}
-                  max={100}
-                  placeholder="Nota"
-                  value={ratings[e.aprendiz.moodleId] ?? ""}
-                  onChange={(ev) => {
-                    const id = e.aprendiz.moodleId!
-                    setRatings((p) => ({ ...p, [id]: ev.target.value }))
-                  }}
-                  disabled={savePhase === "saving"}
-                  className="h-7 w-16 text-xs shrink-0 px-2"
-                  aria-label={`Calificar a ${e.aprendiz.nombre}`}
-                />
+                <>
+                  <Input
+                    type="number"
+                    inputMode="numeric"
+                    min={0}
+                    max={100}
+                    placeholder="Nota"
+                    value={ratings[e.aprendiz.moodleId] ?? ""}
+                    onChange={(ev) => {
+                      const id = e.aprendiz.moodleId!
+                      setRatings((p) => ({ ...p, [id]: ev.target.value }))
+                    }}
+                    disabled={savePhase === "saving" || savingSingle !== null}
+                    className="h-7 w-16 text-xs shrink-0 px-2"
+                    aria-label={`Calificar a ${e.aprendiz.nombre}`}
+                  />
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className={`h-7 w-7 p-0 shrink-0 ${
+                      ratings[e.aprendiz.moodleId]
+                        ? "text-sena-green hover:bg-sena-green/10"
+                        : "text-gray-300"
+                    }`}
+                    onClick={() => {
+                      const mid = e.aprendiz.moodleId!
+                      guardarCalificacionIndividual(mid, ratings[mid] ?? "")
+                    }}
+                    disabled={
+                      savingSingle !== null ||
+                      savePhase === "saving" ||
+                      !ratings[e.aprendiz.moodleId]
+                    }
+                    title="Guardar esta calificación"
+                  >
+                    {savingSingle === e.aprendiz.moodleId ? (
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                    ) : (
+                      <Save className="w-3 h-3" />
+                    )}
+                  </Button>
+                </>
               )}
               {actId && (esForo ? (
                 <a

@@ -1,11 +1,12 @@
 require("dotenv").config({ path: require("path").resolve(__dirname, "../../../.env") });
 
-const { Worker } = require("bullmq");
+const { Worker, UnrecoverableError } = require("bullmq");
 const { chromium } = require("playwright");
 const { connection } = require("../lib/queue");
 const { decrypt } = require("../lib/crypto");
+const { saveSession, loadSession } = require("../lib/sessionStore");
 const prisma = require("../db/client");
-const { login } = require("../../../scraper/auth");
+const { login, cerrarModal, BASE_URL, log } = require("../../../scraper/auth");
 const { calificarPostsForo } = require("../../../scraper/foroRating");
 
 const worker = new Worker("foroRating", async (job) => {
@@ -16,13 +17,34 @@ const worker = new Worker("foroRating", async (job) => {
   const zajunaUser = decrypt(zajunaUserEnc);
   const zajunaPass = decrypt(zajunaPassEnc);
 
+  const savedSession = await loadSession(userId);
   const browser = await chromium.launch({ headless: true });
-  const ctx  = await browser.newContext({ locale: "es-CO", timezoneId: "America/Bogota" });
+  const ctx = await browser.newContext({
+    locale: "es-CO",
+    timezoneId: "America/Bogota",
+    ...(savedSession ? { storageState: savedSession } : {}),
+  });
   const page = await ctx.newPage();
   page.setDefaultTimeout(30_000);
 
   try {
-    await login(page, zajunaUser, zajunaPass);
+    let sessionValida = false;
+    if (savedSession) {
+      await page.goto(`${BASE_URL}/my/`, { waitUntil: "domcontentloaded", timeout: 30_000 });
+      await cerrarModal(page);
+      sessionValida = !page.url().includes("/login") && page.url().includes("zajuna.sena.edu.co");
+      if (!sessionValida) log("[foroRatingWorker] Sesión expirada, login fresco");
+    }
+    if (!sessionValida) {
+      try {
+        await login(page, zajunaUser, zajunaPass);
+      } catch (err) {
+        if (err.message === "Credenciales incorrectas.") throw new UnrecoverableError(err.message);
+        throw err;
+      }
+      const state = await ctx.storageState();
+      await saveSession(userId, state).catch(e => log(`[foroRatingWorker] no se pudo guardar sesión: ${e.message}`));
+    }
     await prisma.job.update({ where: { id: jobId }, data: { progreso: 30 } });
 
     const results = await calificarPostsForo(page, actId, ratings);

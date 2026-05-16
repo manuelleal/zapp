@@ -101,9 +101,11 @@ async function evidenciasRoutes(fastify) {
       actId,
       tipo:          ev.tipo,
       entregas: entregas.map(e => ({
-        id:        e.id,
-        estado:    e.estado,
-        fechaScan: e.fechaScan,
+        id:           e.id,
+        estado:       e.estado,
+        fechaScan:    e.fechaScan,
+        moodlePostId: e.moodlePostId || null,
+        notaActual:   e.notaActual ?? null,
         aprendiz: {
           id:       e.aprendiz.id,
           nombre:   e.aprendiz.nombre,
