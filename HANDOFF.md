@@ -1,7 +1,9 @@
 # HANDOFF.md — Guía operativa Zajuna App
 
 > Documento maestro para continuar el desarrollo en chats nuevos.
-> Léelo PRIMERO antes de cualquier prompt. Última actualización: **16 mayo 2026 — Módulos 1-3 completos, M4+M5+M6 en build por agentes paralelos.**
+> Léelo PRIMERO antes de cualquier prompt. Última actualización: **17 mayo 2026 — Módulos 1-3 completos, M4+M5+M6 en build por agentes paralelos.**
+>
+> **Sprint paralelo activo:** Ver [`HANDOFF-ACTAS.md`](./HANDOFF-ACTAS.md) para el sprint de Actas GOR-F-084 V02 + Mensajería Inteligente (nuevo sprint, contexto separado).
 
 ---
 
