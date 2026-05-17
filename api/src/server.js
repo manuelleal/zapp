@@ -65,6 +65,7 @@ fastify.register(require("./routes/configEvidencias"));
 fastify.register(require("./routes/batchConfig"));
 fastify.register(require("./routes/foroRating"));
 fastify.register(require("./routes/scan"));
+fastify.register(require("./routes/raps"));
 
 // ─── WORKER ──────────────────────────────────────────────────────────────────
 

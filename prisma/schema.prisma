@@ -16,13 +16,14 @@ model Competencia {
 }
 
 model RAP {
-  id            String      @id @default(cuid())
+  id            String            @id @default(cuid())
   competenciaId String
   codigo        String
   descripcion   String
   criterios     Criterio[]
   feedbacks     AIFeedback[]
-  competencia   Competencia @relation(fields: [competenciaId], references: [id])
+  evidenciaRels RapEvidenciaRel[]
+  competencia   Competencia       @relation(fields: [competenciaId], references: [id])
 
   @@unique([competenciaId, codigo])
 }
@@ -82,10 +83,11 @@ model Evidencia {
   configCacheAt  DateTime?
   activaParaScan Boolean          @default(false)
   calificandoAt  DateTime?
-  ficha          Ficha            @relation(fields: [fichaId], references: [id])
-  entregas       Entrega[]
-  configAudits   ConfigAudit[]
+  ficha            Ficha             @relation(fields: [fichaId], references: [id])
+  entregas         Entrega[]
+  configAudits     ConfigAudit[]
   evidenciaConfigs EvidenciaConfig[]
+  rapRels          RapEvidenciaRel[]
 
   @@unique([fichaId, href])
 }
@@ -184,4 +186,18 @@ model ConfigChangeJob {
   detalle      Json?
   creadoAt     DateTime @default(now())
   user         User     @relation(fields: [userId], references: [id])
+}
+
+// ─── Módulo 4+5: RAPs ↔ Evidencias ──────────────────────────────────────────
+// Para migrar: npx prisma migrate dev --name rap_evidencia_rel
+
+model RapEvidenciaRel {
+  id          String    @id @default(cuid())
+  rapId       String
+  evidenciaId String
+  createdAt   DateTime  @default(now())
+  rap         RAP       @relation(fields: [rapId], references: [id])
+  evidencia   Evidencia @relation(fields: [evidenciaId], references: [id])
+
+  @@unique([rapId, evidenciaId])
 }
