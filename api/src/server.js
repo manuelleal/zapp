@@ -66,6 +66,7 @@ fastify.register(require("./routes/batchConfig"));
 fastify.register(require("./routes/foroRating"));
 fastify.register(require("./routes/scan"));
 fastify.register(require("./routes/raps"));
+fastify.register(require("./routes/matchingIa"));
 
 // ─── WORKER ──────────────────────────────────────────────────────────────────
 
@@ -77,6 +78,7 @@ require("./workers/cambiarFechaWorker");
 require("./workers/cambiarConfigWorker");
 require("./workers/foroRatingWorker");
 require("./workers/autoScanWorker");
+require("./workers/matchingIaWorker");
 
 // ─── START ───────────────────────────────────────────────────────────────────
 

@@ -4,6 +4,7 @@ import Dashboard from "@/pages/Dashboard"
 import Fichas from "@/pages/Fichas"
 import EvidenciasConfig from "@/pages/EvidenciasConfig"
 import RapsPage from "@/pages/RapsPage"
+import MatchingIaPage from "@/pages/MatchingIaPage"
 
 function App() {
   return (
@@ -14,6 +15,7 @@ function App() {
         <Route path="/fichas"            element={<Fichas />} />
         <Route path="/evidencias/config" element={<EvidenciasConfig />} />
         <Route path="/raps"              element={<RapsPage />} />
+        <Route path="/matching"          element={<MatchingIaPage />} />
         <Route path="*"                  element={<Navigate to="/dashboard" replace />} />
       </Routes>
     </BrowserRouter>
