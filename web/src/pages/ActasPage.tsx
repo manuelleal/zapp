@@ -329,8 +329,20 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
   })
 
   const autoPoblarMutation = useMutation({
-    mutationFn: () => apiFetch(`/api/actas/${actaId}/auto-poblar`, { method: "POST" }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["acta-detalle", actaId] }),
+    mutationFn: () =>
+      apiFetch<{ poblados: number; aprobaron: number; pendientes: number; noAsistieron: number; evidenciasVinculadas: number }>(
+        `/api/actas/${actaId}/auto-poblar`, { method: "POST" }
+      ),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["acta-detalle", actaId] })
+      if (result.poblados === 0) {
+        toast.warning("No hay aprendices registrados en esta ficha. Escanea la ficha primero.")
+      } else if (result.evidenciasVinculadas === 0) {
+        toast.warning(
+          "No se encontraron RAPs asociados. Asegúrate de haber unificado los reportes de Zajuna y Sofía para esta ficha."
+        )
+      }
+    },
     onError: (e) => {
       const msg = e instanceof ApiError ? e.message : "Error al auto-poblar."
       setPatchError(msg)

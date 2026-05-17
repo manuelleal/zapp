@@ -285,10 +285,11 @@ async function actasRoutes(fastify) {
     await prisma.$transaction(upserts);
 
     return {
-      poblados:     aprendices.length,
+      poblados:            aprendices.length,
       aprobaron,
       pendientes,
       noAsistieron,
+      evidenciasVinculadas: evidenciaIds.length,
     };
   });
 
