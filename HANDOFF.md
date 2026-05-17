@@ -1,21 +1,19 @@
 # HANDOFF.md — Guía operativa Zajuna App
 
 > Documento maestro para continuar el desarrollo en chats nuevos.
-> Léelo PRIMERO antes de cualquier prompt. Última actualización: **17 mayo 2026 — Módulos 1-3 completos, M4+M5+M6 en build por agentes paralelos.**
+> Léelo PRIMERO antes de cualquier prompt. Última actualización: **17 mayo 2026 — M1-M6 completos, sprint Actas v2 en curso.**
 >
-> **Sprint paralelo activo:** Ver [`HANDOFF-ACTAS.md`](./HANDOFF-ACTAS.md) para el sprint de Actas GOR-F-084 V02 + Mensajería Inteligente (nuevo sprint, contexto separado).
+> **Sprint activo:** Ver [`HANDOFF-ACTAS.md`](./HANDOFF-ACTAS.md) — Actas v2 con rapStatus por RAP, tabla dinámica, delete participante, archive.
 
 ---
 
 ## 🎯 Estado actual del proyecto
 
-- **Rama activa:** `feature/config-evs-3-batch-config` (branch off M2)
-- **HEAD:** commit `1513812` — feat(módulo-3): cambio masivo de configuración completa
+- **Rama activa:** `feat/frontend-resilience-e2e`
+- **HEAD:** commit `78b156e` — docs(actas): refinar plan sprint v2
 - **Stack:** Fastify 5 + Prisma 6 + Postgres + Redis + BullMQ + Playwright 1.59
-- **Frontend:** React 18 + Vite 5 + Tailwind 3 + shadcn/ui en `web/` — `web/dist` servido por Fastify sin flags
+- **Frontend:** React 18 + Vite 5 + Tailwind 3 + shadcn/ui en `web/` — `web/dist` servido por Fastify
 - **`public/` eliminado** ✅
-- **M4+M5 en build** (agente en background — branch `feature/config-evs-4-raps`)
-- **M6 en build** (agente en background — branch `feature/config-evs-6-matching-ia`)
 
 ---
 
@@ -28,8 +26,8 @@ Plan de 6 módulos independientes en branches separadas. Regla: **NO empezar N+1
 | **1** | `feature/config-evs-1-lectura` | ✅ Código completo + fixes UX | ⏳ Pendiente usuario |
 | **2** | `feature/config-evs-2-batch-duedate` | ✅ Código completo (commits `9ecb8ed`+`30ef5fd`) | ⏳ Pendiente smoke test |
 | **3** | `feature/config-evs-3-batch-config` | ✅ Código completo (commit `1513812`) | ⏳ Pendiente smoke test |
-| **4+5** | `feature/config-evs-4-raps` | 🔄 En build (agente background) | — |
-| **6** | `feature/config-evs-6-matching-ia` | 🔄 En build (agente background) | — |
+| **4+5** | `feature/config-evs-4-raps` | ✅ Código completo (commit `df3b15b`) | ⏳ Pendiente smoke test |
+| **6** | `feature/config-evs-6-matching-ia` | ✅ Código completo (commit `84df368`) | ⏳ Pendiente smoke test |
 
 ### ✅ MÓDULO 1 — Lectura de configuración actual (commit `e469cfc`)
 
@@ -183,9 +181,9 @@ web/src/components/EvidenciasModal.tsx        ← botón "Ver config" → readOn
 
 ---
 
-### 🔲 MÓDULO 4 — RAPs locales (pendiente)
+### ✅ MÓDULO 4+5 — RAPs locales + Import/Export JSON (commit `df3b15b`)
 
-**Pre-requisito:** Módulo 3 ✅
+**Rama:** `feature/config-evs-4-raps` — **Pre-requisito:** Módulo 3 ✅
 
 **Spec técnica:**
 - **Tabla nueva:** `RapEvidenciaRel { rapId, evidenciaId, createdAt }` (join table)
@@ -202,7 +200,7 @@ web/src/components/EvidenciasModal.tsx        ← botón "Ver config" → readOn
 
 ---
 
-### 🔲 MÓDULO 5 — Import/Export JSON de RAPs (pendiente)
+### ✅ MÓDULO 5 — Import/Export JSON de RAPs — incluido en commit `df3b15b`
 
 **Pre-requisito:** Módulo 4 ✅
 
@@ -215,9 +213,9 @@ web/src/components/EvidenciasModal.tsx        ← botón "Ver config" → readOn
 
 ---
 
-### 🔲 MÓDULO 6 — Matching IA Evidencias ↔ RAPs (pendiente)
+### ✅ MÓDULO 6 — Matching IA Evidencias ↔ RAPs (commit `84df368`)
 
-**Pre-requisito:** Módulo 5 ✅
+**Rama:** `feature/config-evs-6-matching-ia` — **Pre-requisito:** Módulo 5 ✅
 
 **Spec técnica:**
 - Instalar `@anthropic-ai/sdk`
