@@ -1,7 +1,7 @@
-import { useState, useRef, useEffect, useCallback } from "react"
+import { useState, useRef, useEffect } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
-  Plus, Pencil, Trash2, ChevronDown, ChevronRight, Link2, Unlink,
+  ChevronDown, ChevronRight, Link2, Unlink,
   Upload, Download, Search, X, Loader2, AlertCircle, CheckCircle,
   BookOpen,
 } from "lucide-react"
@@ -14,6 +14,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from "@/components/ui/dialog"
 import { apiFetch, ApiError } from "@/api/client"
+import { toast } from "sonner"
 import { useAuthStore } from "@/store/auth"
 import { useNavigate } from "react-router-dom"
 
@@ -86,168 +87,6 @@ function tipoBadgeLabel(tipo: string): string {
   return map[tipo] ?? tipo
 }
 
-// ─── Sub-componente: fila de criterio editable ────────────────────────────────
-
-interface CriterioRowProps {
-  index:    number
-  value:    string
-  onChange: (val: string) => void
-  onRemove: () => void
-}
-
-function CriterioRow({ index, value, onChange, onRemove }: CriterioRowProps) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className="text-xs text-gray-400 w-5 text-right flex-shrink-0">{index + 1}.</span>
-      <Input
-        value={value}
-        onChange={e => onChange(e.target.value)}
-        placeholder={`Criterio ${index + 1}`}
-        className="h-8 text-sm flex-1"
-      />
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        className="h-8 w-8 p-0 text-gray-400 hover:text-red-500 flex-shrink-0"
-        onClick={onRemove}
-      >
-        <X className="w-3.5 h-3.5" />
-      </Button>
-    </div>
-  )
-}
-
-// ─── Sub-componente: modal de crear/editar RAP ────────────────────────────────
-
-interface RapFormModalProps {
-  open:    boolean
-  rap?:    RapSummary | null
-  onClose: () => void
-  onSave:  (data: { codigo: string; descripcion: string; criterios: Criterio[] }) => void
-  busy:    boolean
-  error:   string
-}
-
-function RapFormModal({ open, rap, onClose, onSave, busy, error }: RapFormModalProps) {
-  const [codigo, setCodigo]           = useState("")
-  const [descripcion, setDescripcion] = useState("")
-  const [criterios, setCriterios]     = useState<string[]>([""])
-
-  // Sincronizar cuando se abre para edición
-  useEffect(() => {
-    if (open) {
-      setCodigo(rap?.codigo ?? "")
-      setDescripcion(rap?.descripcion ?? "")
-      setCriterios(
-        rap?.criterios?.length
-          ? rap.criterios.map(c => c.descripcion)
-          : [""]
-      )
-    }
-  }, [open, rap])
-
-  function addCriterio() { setCriterios(prev => [...prev, ""]) }
-
-  function updateCriterio(i: number, val: string) {
-    setCriterios(prev => prev.map((c, idx) => idx === i ? val : c))
-  }
-
-  function removeCriterio(i: number) {
-    setCriterios(prev => prev.length > 1 ? prev.filter((_, idx) => idx !== i) : prev)
-  }
-
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    onSave({
-      codigo:      codigo.trim(),
-      descripcion: descripcion.trim(),
-      criterios:   criterios
-        .map((d, i) => ({ descripcion: d.trim(), orden: i }))
-        .filter(c => c.descripcion),
-    })
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={v => { if (!v && !busy) onClose() }}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle>{rap ? "Editar RAP" : "Nuevo RAP"}</DialogTitle>
-          <DialogDescription>
-            {rap ? "Modifica los datos del RAP y sus criterios de evaluación." : "Define el código, descripción y criterios del nuevo RAP."}
-          </DialogDescription>
-        </DialogHeader>
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="rap-codigo">Código</Label>
-            <Input
-              id="rap-codigo"
-              value={codigo}
-              onChange={e => setCodigo(e.target.value)}
-              placeholder="Ej: RAP1"
-              required
-              disabled={busy}
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="rap-descripcion">Descripción</Label>
-            <textarea
-              id="rap-descripcion"
-              value={descripcion}
-              onChange={e => setDescripcion(e.target.value)}
-              placeholder="Descripción del resultado de aprendizaje..."
-              required
-              disabled={busy}
-              rows={3}
-              className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 resize-none"
-            />
-          </div>
-
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <Label>Criterios de evaluación</Label>
-              <Button type="button" variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={addCriterio} disabled={busy}>
-                <Plus className="w-3 h-3" />
-                Agregar
-              </Button>
-            </div>
-            <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
-              {criterios.map((c, i) => (
-                <CriterioRow
-                  key={i}
-                  index={i}
-                  value={c}
-                  onChange={val => updateCriterio(i, val)}
-                  onRemove={() => removeCriterio(i)}
-                />
-              ))}
-            </div>
-          </div>
-
-          {error && (
-            <div className="flex items-center gap-2 text-sm text-red-600">
-              <AlertCircle className="w-4 h-4 shrink-0" />
-              <span>{error}</span>
-            </div>
-          )}
-
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={onClose} disabled={busy}>
-              Cancelar
-            </Button>
-            <Button type="submit" className="bg-sena-green hover:bg-sena-green/90" disabled={busy}>
-              {busy && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-              {rap ? "Guardar cambios" : "Crear RAP"}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
 // ─── Sub-componente: modal de importación ─────────────────────────────────────
 
 interface ImportModalProps {
@@ -296,7 +135,7 @@ function ImportModal({ open, onClose, onConfirm, busy, error, result }: ImportMo
         <DialogHeader>
           <DialogTitle>Importar RAPs desde JSON</DialogTitle>
           <DialogDescription>
-            Selecciona un archivo JSON exportado desde esta misma herramienta. Los RAPs existentes se actualizarán; los nuevos se crearán.
+            Selecciona un archivo JSON exportado desde esta herramienta. Los RAPs existentes se actualizarán; los nuevos se crearán.
           </DialogDescription>
         </DialogHeader>
 
@@ -391,13 +230,8 @@ function ImportModal({ open, onClose, onConfirm, busy, error, result }: ImportMo
 
 // ─── Sub-componente: panel de detalle de un RAP ───────────────────────────────
 
-interface RapDetailPanelProps {
-  rapId:    string
-  onClose?: () => void
-}
-
-function RapDetailPanel({ rapId }: RapDetailPanelProps) {
-  const queryClient   = useQueryClient()
+function RapDetailPanel({ rapId }: { rapId: string }) {
+  const queryClient = useQueryClient()
   const [evSearch, setEvSearch] = useState("")
 
   const { data: detalle, isLoading } = useQuery<RapDetalle>({
@@ -419,6 +253,7 @@ function RapDetailPanel({ rapId }: RapDetailPanelProps) {
       queryClient.invalidateQueries({ queryKey: ["rap-detalle", rapId] })
       queryClient.invalidateQueries({ queryKey: ["raps"] })
     },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Error al asociar la evidencia."),
   })
 
   const desasociarMutation = useMutation({
@@ -428,23 +263,20 @@ function RapDetailPanel({ rapId }: RapDetailPanelProps) {
       queryClient.invalidateQueries({ queryKey: ["rap-detalle", rapId] })
       queryClient.invalidateQueries({ queryKey: ["raps"] })
     },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Error al quitar la asociación."),
   })
 
-  // Todas las evidencias planas
   const todasEvidencias = (todasData?.fichas ?? []).flatMap(f =>
     f.evidencias.map(ev => ({ ...ev, ficha: { id: f.id, codigo: f.codigo, nombre: f.nombre } }))
   )
 
-  // IDs de evidencias ya asociadas
   const asociadasIds = new Set((detalle?.evidencias ?? []).map(e => e.id))
 
-  // Filtrar por búsqueda y excluir ya asociadas
   const disponibles = todasEvidencias
     .filter(ev => !asociadasIds.has(ev.id))
     .filter(ev => {
       if (!evSearch.trim()) return false
-      const q = evSearch.toLowerCase()
-      return ev.nombre.toLowerCase().includes(q)
+      return ev.nombre.toLowerCase().includes(evSearch.toLowerCase())
     })
     .slice(0, 10)
 
@@ -574,7 +406,6 @@ export default function RapsPage() {
   const { jwt, user, clearAuth, setAuth } = useAuthStore()
   const queryClient = useQueryClient()
 
-  // Auth bootstrap (mismo patrón que EvidenciasConfig)
   useEffect(() => {
     const storedJwt = localStorage.getItem("zajuna_jwt")
     if (!storedJwt) { navigate("/login"); return }
@@ -592,20 +423,12 @@ export default function RapsPage() {
     }
   }, [])
 
-  // ── State ──────────────────────────────────────────────────────────────────
-  const [expanded, setExpanded]           = useState<Set<string>>(new Set())
-  const [formOpen, setFormOpen]           = useState(false)
-  const [editingRap, setEditingRap]       = useState<RapSummary | null>(null)
-  const [formBusy, setFormBusy]           = useState(false)
-  const [formError, setFormError]         = useState("")
-  const [deleteTarget, setDeleteTarget]   = useState<RapSummary | null>(null)
-  const [deleteBusy, setDeleteBusy]       = useState(false)
-  const [importOpen, setImportOpen]       = useState(false)
-  const [importBusy, setImportBusy]       = useState(false)
-  const [importError, setImportError]     = useState("")
-  const [importResult, setImportResult]   = useState<{ created: number; updated: number; skipped: { codigo: string; error: string }[] } | null>(null)
+  const [expanded, setExpanded]         = useState<Set<string>>(new Set())
+  const [importOpen, setImportOpen]     = useState(false)
+  const [importBusy, setImportBusy]     = useState(false)
+  const [importError, setImportError]   = useState("")
+  const [importResult, setImportResult] = useState<{ created: number; updated: number; skipped: { codigo: string; error: string }[] } | null>(null)
 
-  // ── Query: lista de RAPs ───────────────────────────────────────────────────
   const { data: raps, isLoading } = useQuery<RapSummary[]>({
     queryKey: ["raps"],
     queryFn:  () => apiFetch<RapSummary[]>("/api/raps"),
@@ -613,7 +436,6 @@ export default function RapsPage() {
     retry:    false,
   })
 
-  // ── Toggle expand ─────────────────────────────────────────────────────────
   function toggleExpand(rapId: string) {
     setExpanded(prev => {
       const next = new Set(prev)
@@ -623,56 +445,6 @@ export default function RapsPage() {
     })
   }
 
-  // ── Crear / Editar ─────────────────────────────────────────────────────────
-  function openCreate() {
-    setEditingRap(null)
-    setFormError("")
-    setFormOpen(true)
-  }
-
-  function openEdit(rap: RapSummary) {
-    setEditingRap(rap)
-    setFormError("")
-    setFormOpen(true)
-  }
-
-  async function handleSave(data: { codigo: string; descripcion: string; criterios: Criterio[] }) {
-    setFormBusy(true)
-    setFormError("")
-    try {
-      if (editingRap) {
-        await apiFetch(`/api/raps/${encodeURIComponent(editingRap.id)}`, {
-          method: "PUT",
-          body:   JSON.stringify(data),
-        })
-      } else {
-        await apiFetch("/api/raps", { method: "POST", body: JSON.stringify(data) })
-      }
-      queryClient.invalidateQueries({ queryKey: ["raps"] })
-      setFormOpen(false)
-    } catch (e) {
-      setFormError(e instanceof ApiError ? e.message : "Error al guardar el RAP.")
-    } finally {
-      setFormBusy(false)
-    }
-  }
-
-  // ── Eliminar ───────────────────────────────────────────────────────────────
-  async function handleDelete() {
-    if (!deleteTarget) return
-    setDeleteBusy(true)
-    try {
-      await apiFetch(`/api/raps/${encodeURIComponent(deleteTarget.id)}`, { method: "DELETE" })
-      queryClient.invalidateQueries({ queryKey: ["raps"] })
-      setDeleteTarget(null)
-    } catch (e) {
-      alert(e instanceof ApiError ? e.message : "Error al eliminar el RAP.")
-    } finally {
-      setDeleteBusy(false)
-    }
-  }
-
-  // ── Exportar ───────────────────────────────────────────────────────────────
   async function handleExport() {
     try {
       const res = await fetch("/api/raps/export", {
@@ -688,11 +460,10 @@ export default function RapsPage() {
       a.href = url; a.download = filename; a.click()
       URL.revokeObjectURL(url)
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Error al exportar.")
+      toast.error(e instanceof Error ? e.message : "Error al exportar.")
     }
   }
 
-  // ── Importar ───────────────────────────────────────────────────────────────
   async function handleImport(payload: ImportPayload) {
     setImportBusy(true)
     setImportError("")
@@ -716,7 +487,6 @@ export default function RapsPage() {
     <Layout>
       <div className="space-y-4">
 
-        {/* Cabecera */}
         <div className="bg-white rounded-lg border border-gray-200 p-4 flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-2 flex-1 min-w-0">
             <BookOpen className="w-4 h-4 text-sena-green" />
@@ -741,18 +511,9 @@ export default function RapsPage() {
               <Upload className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Importar JSON</span>
             </Button>
-            <Button
-              size="sm"
-              className="bg-sena-green hover:bg-sena-green/90 gap-1.5 text-xs"
-              onClick={openCreate}
-            >
-              <Plus className="w-3.5 h-3.5" />
-              Nuevo RAP
-            </Button>
           </div>
         </div>
 
-        {/* Lista */}
         {isLoading ? (
           <div className="bg-white rounded-lg border p-8 text-center text-gray-500 text-sm flex items-center justify-center gap-2">
             <Loader2 className="w-4 h-4 animate-spin" />
@@ -761,16 +522,8 @@ export default function RapsPage() {
         ) : rapsList.length === 0 ? (
           <div className="bg-white rounded-lg border p-12 text-center space-y-3">
             <BookOpen className="w-10 h-10 text-gray-300 mx-auto" />
-            <p className="text-gray-600 text-sm font-medium">No hay RAPs definidos aún.</p>
-            <p className="text-gray-400 text-xs">Crea el primer RAP para tu competencia o importa desde un archivo JSON.</p>
-            <Button
-              size="sm"
-              className="bg-sena-green hover:bg-sena-green/90 gap-1.5 mt-2"
-              onClick={openCreate}
-            >
-              <Plus className="w-3.5 h-3.5" />
-              Crear primer RAP
-            </Button>
+            <p className="text-gray-600 text-sm font-medium">No hay RAPs cargados aún.</p>
+            <p className="text-gray-400 text-xs">Usa "Importar JSON" para cargar los RAPs de tu competencia.</p>
           </div>
         ) : (
           <div className="space-y-2">
@@ -778,7 +531,6 @@ export default function RapsPage() {
               const isExpanded = expanded.has(rap.id)
               return (
                 <div key={rap.id} className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-                  {/* Fila principal */}
                   <div
                     className="px-4 py-3 flex items-start gap-3 cursor-pointer hover:bg-gray-50 select-none"
                     onClick={() => toggleExpand(rap.id)}
@@ -801,31 +553,8 @@ export default function RapsPage() {
                       </div>
                       <p className="text-sm text-gray-600 mt-0.5 line-clamp-2">{rap.descripcion}</p>
                     </div>
-
-                    {/* Acciones — stopPropagation para no colapsar el card */}
-                    <div className="flex items-center gap-1 flex-shrink-0" onClick={e => e.stopPropagation()}>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 w-7 p-0 text-gray-400 hover:text-gray-700"
-                        title="Editar RAP"
-                        onClick={() => openEdit(rap)}
-                      >
-                        <Pencil className="w-3.5 h-3.5" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 w-7 p-0 text-gray-400 hover:text-red-500"
-                        title="Eliminar RAP"
-                        onClick={() => setDeleteTarget(rap)}
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </Button>
-                    </div>
                   </div>
 
-                  {/* Panel de detalle expandido */}
                   {isExpanded && <RapDetailPanel rapId={rap.id} />}
                 </div>
               )
@@ -834,38 +563,6 @@ export default function RapsPage() {
         )}
       </div>
 
-      {/* Modal crear/editar */}
-      <RapFormModal
-        open={formOpen}
-        rap={editingRap}
-        onClose={() => setFormOpen(false)}
-        onSave={handleSave}
-        busy={formBusy}
-        error={formError}
-      />
-
-      {/* Confirmación eliminar */}
-      <Dialog open={!!deleteTarget} onOpenChange={v => { if (!v && !deleteBusy) setDeleteTarget(null) }}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Eliminar RAP</DialogTitle>
-            <DialogDescription>
-              Esta acción eliminará el RAP <strong className="font-mono">{deleteTarget?.codigo}</strong> y todos sus criterios y asociaciones de evidencias. No se puede deshacer.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={deleteBusy}>
-              Cancelar
-            </Button>
-            <Button variant="destructive" onClick={handleDelete} disabled={deleteBusy}>
-              {deleteBusy && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-              Eliminar
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Modal importar */}
       <ImportModal
         open={importOpen}
         onClose={() => { setImportOpen(false); setImportResult(null) }}

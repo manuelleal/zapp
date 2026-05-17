@@ -8,6 +8,7 @@ import Layout from "@/components/Layout"
 import { Button }  from "@/components/ui/button"
 import { Badge }   from "@/components/ui/badge"
 import { apiFetch, authFetch, ApiError } from "@/api/client"
+import { toast } from "sonner"
 import { useAuthStore } from "@/store/auth"
 import { useNavigate } from "react-router-dom"
 
@@ -68,7 +69,7 @@ function confianzaBadge(n: number) {
 
 function estadoBadge(estado: string) {
   if (estado === "aprobado")  return <Badge variant="green"  className="text-xs">Aprobada</Badge>
-  if (estado === "rechazado") return <Badge variant="red"    className="text-xs">Rechazada</Badge>
+  if (estado === "rechazado") return <Badge variant="destructive" className="text-xs">Rechazada</Badge>
   return null
 }
 
@@ -172,6 +173,7 @@ export default function MatchingIaPage() {
       queryClient.invalidateQueries({ queryKey: ["matching-propuestas"] })
       queryClient.invalidateQueries({ queryKey: ["matching-historial"] })
     },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Error al guardar la decisión."),
   })
 
   const eliminarMutation = useMutation({
@@ -180,6 +182,7 @@ export default function MatchingIaPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["matching-propuestas"] })
     },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Error al eliminar la propuesta."),
   })
 
   // ── Iniciar matching ─────────────────────────────────────────────────────────
