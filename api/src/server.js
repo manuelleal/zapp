@@ -67,6 +67,8 @@ fastify.register(require("./routes/foroRating"));
 fastify.register(require("./routes/scan"));
 fastify.register(require("./routes/raps"));
 fastify.register(require("./routes/matchingIa"));
+fastify.register(require("./routes/actas"));
+fastify.register(require("./routes/mensajes"));
 
 // ─── WORKER ──────────────────────────────────────────────────────────────────
 
@@ -79,6 +81,7 @@ require("./workers/cambiarConfigWorker");
 require("./workers/foroRatingWorker");
 require("./workers/autoScanWorker");
 require("./workers/matchingIaWorker");
+require("./workers/mensajeFormativoWorker");
 
 // ─── START ───────────────────────────────────────────────────────────────────
 

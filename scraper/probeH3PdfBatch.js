@@ -1,83 +1,205 @@
 /**
- * scraper/probeH3PdfBatch.js
+ * scraper/probeH3PdfBatch.js — Hipótesis 3: Parseo batch de PDFs de Guías
  *
- * HIPÓTESIS 3 — Descarga y parseo de PDFs en batch.
+ * MISIÓN: Descargar cada PDF encontrado por H2, parsear su texto con pdf-parse
+ * y extraer las descripciones reales de RAP usando el formato estándar SENA.
  *
- * Lee probe-h2-resultado.json (generado por probeH2GuiasIterator.js),
- * descarga cada PDF usando las cookies activas del browser (sesión Moodle),
- * parsea el texto con pdf-parse y extrae:
- *   - Códigos GA<n>-<9dig>-AA<n>-EV<n>
- *   - Descripciones de RAP con patrón:
- *       /(RAP|Resultado\s+de\s+Aprendizaje)\s*(\d+)[:\-\.\s]\s*([^\n]{20,400})/gi
+ * FORMATO SENA ESTÁNDAR (referencia: Guía 6):
+ *   Primera página, sección "Resultados de aprendizaje a alcanzar:"
+ *   Cada RAP aparece con el patrón:  \d{9}-\d{2}
+ *   Ejemplo:
+ *     Resultados de aprendizaje a alcanzar:
+ *     240202501-06 Comprender textos en inglés...
+ *     220501096-02 Analizar requerimientos...
  *
- * Genera probe-h3-resultado.json con:
- *   {
- *     guiaNum, pdfUrl,
- *     codigosGA: [{ codigo, guiaNum, competenciaCodigo, aaNum, evNum }],
- *     raps:      [{ rapNum, descripcion }],
- *     textoMuestra: "<primeros 600 chars>"
- *   }
+ * MAPEO (GA, AA) → RAP:
+ *   Los RAPs se listan en orden dentro del bloque.
+ *   El primero listado corresponde a AA1 de la guía, el segundo a AA2, etc.
+ *   Este orden se valida cruzando con los datos de Evidencia de la DB.
+ *
+ * ENTRADAS:
+ *   probe-h2-resultado.json   (generado por probeH2GuiasIterator.js)
+ *
+ * SALIDAS:
+ *   probe-h3-guia01.pdf …     copias locales de los PDFs descargados
+ *   probe-h3-resultado.json   mapa completo (GA, AA) → { codigo, descripcion }
  *
  * Uso:
- *   node scraper/probeH3PdfBatch.js                     ← lee probe-h2-resultado.json
- *   node scraper/probeH3PdfBatch.js <path-a-resultado>  ← archivo custom
+ *   node scraper/probeH3PdfBatch.js
+ *   node scraper/probeH3PdfBatch.js <path-a-h2-resultado.json>
  *
- * Si pdf-parse no está instalado:
- *   npm install pdf-parse        (en la raíz del proyecto)
+ * Requiere:
+ *   npm install pdf-parse   (ya instalado si corriste H2 antes)
  */
 
 require("dotenv").config({ path: require("path").resolve(__dirname, "../.env") });
 
 const fs    = require("fs");
 const path  = require("path");
-const { chromium } = require("playwright");
+const { chromium }                          = require("playwright");
 const { login, cerrarModal, BASE_URL, TIMEOUT, log } = require("./auth");
-const { decrypt } = require("../api/src/lib/crypto");
-const prisma = require("../api/src/db/client");
+const { decrypt }                           = require("../api/src/lib/crypto");
+const prisma                                = require("../api/src/db/client");
 
-const EV_REGEX  = /GA(\d+)-(\d{9})-AA(\d+)-EV(\d+)/gi;
-// Captura "RAP 1: descripción..." o "Resultado de Aprendizaje 2 - ..."
-const RAP_REGEX = /(RAP|Resultado\s+de\s+Aprendizaje)\s*(\d+)\s*[:\-\.]\s*([^\n]{20,400})/gi;
+// ── Regex de extracción SENA ──────────────────────────────────────────────────
 
-function parsearCodigosGA(texto) {
-  const vistos = new Set();
-  const hits = [];
-  for (const m of texto.matchAll(EV_REGEX)) {
-    const codigo = m[0].toUpperCase();
-    if (!vistos.has(codigo)) {
-      vistos.add(codigo);
-      hits.push({
-        codigo,
-        guiaNum:           parseInt(m[1], 10),
-        competenciaCodigo:  m[2],
-        aaNum:             parseInt(m[3], 10),
-        evNum:             parseInt(m[4], 10),
-      });
-    }
+/**
+ * Localiza el bloque "Resultados de aprendizaje a alcanzar:" en el texto del PDF.
+ * El bloque termina cuando aparece otra sección o se agotan ~3000 chars.
+ */
+const BLOQUE_RAP_REGEX =
+  /Resultados?\s+de\s+aprendizaje\s+a\s+alcanzar\s*[:\n]([\s\S]{0,3000})/i;
+
+/**
+ * Código SENA de RAP: 9 dígitos (competencia) + guión + 2 dígitos (número RAP).
+ * Captura: (1) código completo, (2) competencia 9-dig, (3) número 2-dig, (4) descripción.
+ *
+ * Maneja formatos:
+ *   240202501-06 Comprender textos en inglés...
+ *   240202501-06: Comprender textos en inglés...
+ *   • 240202501-06 - Comprender textos...
+ */
+const RAP_ENTRY_REGEX =
+  /(\d{9})-(\d{2})\s*[:\-\.\s]+([A-ZÁÉÍÓÚÑ][^\n\d]{10,400})/g;
+
+/**
+ * Fallback: captura "RAP N:" o "RAP N -" cuando el formato SENA estricto no aparece.
+ * Útil para guías más antiguas o formatos alternativos.
+ */
+const RAP_FALLBACK_REGEX =
+  /(?:^|\n)\s*(?:RAP|Resultado\s+de\s+Aprendizaje)\s*(\d+)\s*[:\-\.]\s*([^\n]{10,400})/gi;
+
+// ── Extracción ────────────────────────────────────────────────────────────────
+
+/**
+ * Extrae el bloque "Resultados de aprendizaje a alcanzar:" del texto completo del PDF.
+ * Devuelve el substring del bloque o null si no se encontró.
+ */
+function extraerBloque(textoPdf) {
+  const m = textoPdf.match(BLOQUE_RAP_REGEX);
+  if (!m) {
+    log("  [extracción] ⚠  Bloque 'Resultados de aprendizaje' NO encontrado en el PDF.");
+    log("  [extracción]    Muestra del texto (primeros 800 chars):");
+    log(`  ${textoPdf.substring(0, 800).replace(/\n/g, "\n  ")}`);
+    return null;
   }
-  return hits;
+  const bloque = m[1];
+  log(`  [extracción] ✅ Bloque encontrado (${bloque.length} chars):`);
+  log(`  ${bloque.substring(0, 600).replace(/\n/g, "\n  ")}`);
+  return bloque;
 }
 
-function parsearRaps(texto) {
-  const vistos = new Set();
+/**
+ * Parsea los RAPs del bloque usando el patrón SENA estándar (\d{9}-\d{2}).
+ * Si no encuentra ninguno, intenta el fallback "RAP N: descripción".
+ * Devuelve array de { codigoSena, competenciaCodigo, rapNumGlobal, descripcion }.
+ */
+function parsearRapsDelBloque(bloque, textoCompleto) {
   const raps = [];
-  for (const m of texto.matchAll(RAP_REGEX)) {
-    const rapNum = parseInt(m[2], 10);
-    if (!vistos.has(rapNum)) {
-      vistos.add(rapNum);
-      raps.push({
-        rapNum,
-        descripcion: m[3].replace(/\s+/g, " ").trim(),
-      });
-    }
+
+  // ── Intento 1: formato SENA estándar ────────────────────────────────────
+  log("  [parseo] Buscando formato SENA \\d{9}-\\d{2}...");
+  for (const m of bloque.matchAll(RAP_ENTRY_REGEX)) {
+    const descripcion = m[3].replace(/\s+/g, " ").trim();
+    log(`  [parseo]   Encontrado: ${m[1]}-${m[2]} → "${descripcion.substring(0, 80)}"`);
+    raps.push({
+      codigoSena:        `${m[1]}-${m[2]}`,
+      competenciaCodigo: m[1],
+      rapNumGlobal:      parseInt(m[2], 10),
+      descripcion,
+    });
   }
-  return raps.sort((a, b) => a.rapNum - b.rapNum);
+
+  if (raps.length > 0) {
+    log(`  [parseo] ✅ ${raps.length} RAP(s) con formato SENA estándar.`);
+    return raps;
+  }
+
+  // ── Intento 2: fallback "RAP N: descripción" ────────────────────────────
+  log("  [parseo] Formato SENA no encontrado. Intentando fallback 'RAP N:'...");
+  for (const m of textoCompleto.matchAll(RAP_FALLBACK_REGEX)) {
+    const descripcion = m[2].replace(/\s+/g, " ").trim();
+    log(`  [parseo]   Fallback: RAP${m[1]} → "${descripcion.substring(0, 80)}"`);
+    raps.push({
+      codigoSena:        null,
+      competenciaCodigo: null,
+      rapNumGlobal:      parseInt(m[1], 10),
+      descripcion,
+    });
+  }
+
+  if (raps.length > 0) {
+    log(`  [parseo] ⚠  ${raps.length} RAP(s) por fallback (sin código SENA).`);
+  } else {
+    log("  [parseo] ❌ No se extrajo ningún RAP.");
+  }
+  return raps;
 }
 
-async function descargarPdf(page, pdfUrl) {
-  log(`  [pdf] Descargando: ${pdfUrl.substring(0, 100)}…`);
+/**
+ * Mapea los RAPs extraídos del PDF a las actividades (AA) de la guía.
+ * El primer RAP listado → AA1, el segundo → AA2, etc.
+ * Devuelve map: aaNum → { codigoSena, descripcion }
+ */
+function mapearRapsAANum(raps, guiaNum) {
+  const mapa = {};
+  raps.forEach((rap, idx) => {
+    const aaNum = idx + 1;
+    log(`  [mapeo] GA${guiaNum}-AA${aaNum} ← ${rap.codigoSena || `RAP${rap.rapNumGlobal}`}: "${rap.descripcion.substring(0, 60)}"`);
+    mapa[aaNum] = {
+      codigoSena:    rap.codigoSena,
+      competencia:   rap.competenciaCodigo,
+      rapNumGlobal:  rap.rapNumGlobal,
+      descripcion:   rap.descripcion,
+    };
+  });
+  return mapa;
+}
 
-  const descarga = await page.evaluate(async (url) => {
+// ── Descarga de PDF ───────────────────────────────────────────────────────────
+
+/**
+ * Descarga un PDF usando las cookies de sesión activas del browser.
+ * Si la URL es un visor Moodle (mod/resource/view), navega primero para
+ * obtener la URL directa del pluginfile.
+ * Devuelve Buffer con los bytes del PDF, o null si falla.
+ */
+async function descargarPdf(page, urlOriginal) {
+  let urlPdf = urlOriginal;
+
+  // Si es visor Moodle, navegar para resolver la URL real del archivo
+  if (/mod\/resource\/view/i.test(urlPdf)) {
+    log(`  [descarga] URL es visor Moodle — resolviendo URL real...`);
+    await page.goto(urlPdf, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+    await cerrarModal(page);
+
+    // Buscar el link/iframe/embed del PDF real en la página del visor
+    const urlReal = await page.evaluate(() => {
+      for (const sel of ["a[href]", "iframe[src]", "embed[src]", "object[data]"]) {
+        for (const el of document.querySelectorAll(sel)) {
+          const u = el.href || el.src || el.data || "";
+          if (/pluginfile.*\.pdf|pluginfile.*forcedownload/i.test(u)) return u;
+        }
+      }
+      // Fallback: cualquier link de pluginfile
+      for (const a of document.querySelectorAll("a[href]")) {
+        if (/pluginfile/i.test(a.href)) return a.href;
+      }
+      return null;
+    });
+
+    if (urlReal) {
+      log(`  [descarga] URL real del PDF: ${urlReal.substring(0, 100)}`);
+      urlPdf = urlReal;
+    } else {
+      log("  [descarga] ⚠  No se encontró URL real — intentando URL original.");
+    }
+  }
+
+  log(`  [descarga] Descargando: ${urlPdf.substring(0, 100)}…`);
+
+  // Fetch dentro del contexto del browser para heredar las cookies de sesión
+  const result = await page.evaluate(async (url) => {
     try {
       const res = await fetch(url, { credentials: "include" });
       if (!res.ok) return { ok: false, status: res.status, error: `HTTP ${res.status}` };
@@ -86,86 +208,85 @@ async function descargarPdf(page, pdfUrl) {
     } catch (e) {
       return { ok: false, error: e.message };
     }
-  }, pdfUrl);
+  }, urlPdf);
 
-  if (!descarga.ok) {
-    log(`  [pdf] ❌ Error: ${descarga.error}`);
+  if (!result.ok) {
+    log(`  [descarga] ❌ Falló: ${result.error}`);
     return null;
   }
 
-  log(`  [pdf] ✓ ${descarga.size} bytes`);
-  return Buffer.from(descarga.bytes);
+  log(`  [descarga] ✅ ${result.size.toLocaleString()} bytes recibidos.`);
+  return Buffer.from(result.bytes);
 }
 
-async function parsearPdf(buffer, guiaNum) {
+/**
+ * Parsea un Buffer de PDF con pdf-parse.
+ * Devuelve { texto, numPaginas } o null si pdf-parse no está instalado.
+ */
+async function parsearBufferPdf(buffer, guiaNum) {
   let pdfParse;
   try {
     pdfParse = require("pdf-parse");
-  } catch (e) {
-    log("  [pdf-parse] No instalado. Instala con: npm install pdf-parse");
-    return { texto: null, codigosGA: [], raps: [] };
+  } catch {
+    log("  [pdf-parse] ❌ No instalado. Ejecuta: npm install pdf-parse");
+    return null;
   }
 
   try {
     const data = await pdfParse(buffer);
-    const texto = data.text || "";
-    log(`  [pdf-parse] Guía ${guiaNum}: ${texto.length} chars`);
-
-    const codigosGA = parsearCodigosGA(texto);
-    const raps      = parsearRaps(texto);
-
-    log(`    Códigos GA: ${codigosGA.length > 0 ? codigosGA.map(c => c.codigo).join(", ") : "(ninguno)"}`);
-    log(`    RAPs       : ${raps.length > 0 ? raps.map(r => `RAP${r.rapNum}`).join(", ") : "(ninguno)"}`);
-    if (raps.length > 0) {
-      raps.forEach(r => log(`      RAP${r.rapNum}: ${r.descripcion.substring(0, 100)}`));
-    }
-
-    return { texto, codigosGA, raps };
+    log(`  [pdf-parse] GA${guiaNum}: ${data.numpages} páginas, ${data.text.length.toLocaleString()} chars de texto`);
+    log(`  [pdf-parse] Primeros 400 chars del texto extraído:`);
+    log(`  "${data.text.substring(0, 400).replace(/\n/g, "↵")}"`);
+    return { texto: data.text, numPaginas: data.numpages };
   } catch (e) {
-    log(`  [pdf-parse] Error: ${e.message}`);
-    return { texto: null, codigosGA: [], raps: [] };
+    log(`  [pdf-parse] ❌ Error parseando: ${e.message}`);
+    return null;
   }
 }
+
+// ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
   const h2File = process.argv[2] || "probe-h2-resultado.json";
 
+  // ── Leer resultado de H2 ───────────────────────────────────────────────────
   if (!fs.existsSync(h2File)) {
     console.error(`\n❌ Archivo no encontrado: ${h2File}`);
-    console.error("  → Ejecuta primero: node scraper/probeH2GuiasIterator.js");
+    console.error("  Ejecuta primero: node scraper/probeH2GuiasIterator.js");
     process.exit(1);
   }
 
-  const h2 = JSON.parse(fs.readFileSync(h2File, "utf-8"));
-  log(`\n[H3] Leyendo ${h2File}  —  ${h2.guias?.length ?? 0} guías`);
+  const h2        = JSON.parse(fs.readFileSync(h2File, "utf-8"));
+  const guias     = h2.guias || [];
+  const courseId  = h2.courseId;
+  log(`\n[H3] Leyendo: ${h2File}  (${guias.length} guías, courseId=${courseId})`);
 
-  // Recopilar todas las URLs de PDF únicas con su guía
-  const tareasDescarga = [];
-  for (const guia of (h2.guias || [])) {
-    for (const pdfUrl of (guia.pdfUrls || [])) {
-      tareasDescarga.push({ guiaNum: guia.guiaNum, pdfUrl });
+  // Construir lista de tareas: una entrada por cada (guiaNum, pdfUrl)
+  const tareas = [];
+  for (const g of guias) {
+    for (const url of (g.pdfUrls || [])) {
+      tareas.push({ guiaNum: g.guiaNum, pdfUrl: url });
     }
   }
 
-  if (tareasDescarga.length === 0) {
-    console.log("\n⚠  No hay URLs de PDF en probe-h2-resultado.json.");
-    console.log("  → Revisa los screenshots probe-h2-guia*.png para ver si los PDFs se abrieron en browser.");
-    console.log("  → Puede que los PDFs estén en iframes o requieran navegación directa al resource viewer.");
-    console.log("  → Ejecuta probeH2GuiasIterator.js con el browser visible y copia las URLs manualmente.");
+  log(`[H3] PDFs a procesar: ${tareas.length}`);
+  tareas.forEach((t, i) => log(`  ${i + 1}. GA${t.guiaNum}: ${t.pdfUrl.substring(0, 80)}`));
+
+  if (tareas.length === 0) {
+    console.log("\n⚠  No hay PDFs en probe-h2-resultado.json.");
+    console.log("  → Revisa los screenshots probe-h2-guia*.png.");
+    console.log("  → Los PDFs pueden estar en un iframe o requerir navegación directa.");
     process.exit(0);
   }
 
-  log(`\nPDFs a procesar: ${tareasDescarga.length}`);
-  tareasDescarga.forEach((t, i) => log(`  ${i + 1}. Guía ${t.guiaNum}: ${t.pdfUrl.substring(0, 80)}…`));
-
-  // Necesitamos sesión Moodle para descargar con cookies
+  // ── Obtener ficha para sesión Moodle ──────────────────────────────────────
   const ficha = await prisma.ficha.findFirst({
-    where:   { courseId: h2.courseId ? Number(h2.courseId) : { not: 0 }, archivedAt: null },
-    include: { user: { select: { zajunaUserEnc: true, zajunaPassEnc: true, nombre: true } } },
+    where:   { courseId: Number(courseId), archivedAt: null },
+    include: { user: { select: { zajunaUserEnc: true, zajunaPassEnc: true } } },
   });
 
   if (!ficha) {
-    console.log("No hay ficha en DB para courseId del resultado H2. Abortando.");
+    console.error("❌ No hay ficha para courseId=" + courseId);
     await prisma.$disconnect();
     return;
   }
@@ -173,122 +294,135 @@ async function main() {
   const zajunaUser = decrypt(ficha.user.zajunaUserEnc);
   const zajunaPass = decrypt(ficha.user.zajunaPassEnc);
 
+  // headless:true para el batch de descarga (no necesitamos verlo)
   const browser = await chromium.launch({ headless: true });
   const ctx     = await browser.newContext({ locale: "es-CO", timezoneId: "America/Bogota" });
   const page    = await ctx.newPage();
   page.setDefaultTimeout(TIMEOUT);
 
+  // Acumulador de resultados por (guiaNum, aaNum)
   const resultados = [];
 
   try {
+    // Login y warm-up en el curso
     await login(page, zajunaUser, zajunaPass);
-
-    // Warm up: abrir el curso una vez para asegurar sesión completa
-    await page.goto(`${BASE_URL}/course/view.php?id=${ficha.courseId}`, {
-      waitUntil: "domcontentloaded",
-    });
+    await page.goto(`${BASE_URL}/course/view.php?id=${courseId}`, { waitUntil: "domcontentloaded" });
     await cerrarModal(page);
+    log("[H3] Sesión establecida ✓");
 
-    for (const tarea of tareasDescarga) {
-      log(`\n══ Procesando Guía ${tarea.guiaNum} PDF ══`);
+    // ── Procesar cada PDF ──────────────────────────────────────────────────
+    for (const tarea of tareas) {
+      const { guiaNum, pdfUrl } = tarea;
+      const pad = String(guiaNum).padStart(2, "0");
+      log(`\n${"═".repeat(60)}`);
+      log(`  PROCESANDO GA${pad}  —  ${pdfUrl.substring(0, 80)}…`);
+      log(`${"═".repeat(60)}`);
 
-      // Si la URL es mod/resource/view (visor Moodle), navegar primero para
-      // que Moodle redirija al pluginfile real
-      let urlPdf = tarea.pdfUrl;
-      if (/mod\/resource\/view/i.test(urlPdf)) {
-        log("  URL es visor Moodle, navegando para obtener URL real del PDF...");
-        await page.goto(urlPdf, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
-        await cerrarModal(page);
-        // Buscar el PDF real en la página del visor
-        const pdfReal = await page.evaluate(() => {
-          for (const el of document.querySelectorAll("a[href], iframe[src], embed[src], object[data]")) {
-            const url = el.href || el.src || el.data || "";
-            if (/pluginfile.*\.pdf|forcedownload/i.test(url)) return url;
-          }
-          // También intentar el link de "Clic aquí" estándar de Moodle
-          for (const a of document.querySelectorAll("a[href]")) {
-            if (/pluginfile/i.test(a.href)) return a.href;
-          }
-          return null;
-        });
-        if (pdfReal) {
-          log(`  URL real: ${pdfReal.substring(0, 100)}…`);
-          urlPdf = pdfReal;
-        }
-      }
-
-      const buffer = await descargarPdf(page, urlPdf);
-
+      // 1. Descargar
+      const buffer = await descargarPdf(page, pdfUrl);
       if (!buffer) {
-        resultados.push({
-          guiaNum:     tarea.guiaNum,
-          pdfUrl:      urlPdf,
-          error:       "Descarga fallida",
-          codigosGA:   [],
-          raps:        [],
-          textoMuestra: null,
-        });
+        resultados.push({ guiaNum, pdfUrl, error: "Descarga fallida", rapsEncontrados: [], mapaAA: {} });
         continue;
       }
 
-      // Guardar copia local
-      const filename = `probe-h3-guia${String(tarea.guiaNum).padStart(2, "0")}.pdf`;
-      fs.writeFileSync(filename, buffer);
-      log(`  Guardado: ${filename}`);
+      // 2. Guardar copia local
+      const pdfFile = `probe-h3-guia${pad}.pdf`;
+      fs.writeFileSync(pdfFile, buffer);
+      log(`  [guardado] ${pdfFile}  (${buffer.length.toLocaleString()} bytes)`);
 
-      const { texto, codigosGA, raps } = await parsearPdf(buffer, tarea.guiaNum);
+      // 3. Parsear texto del PDF
+      const parsed = await parsearBufferPdf(buffer, guiaNum);
+      if (!parsed) {
+        resultados.push({ guiaNum, pdfUrl, pdfFile, error: "pdf-parse no disponible", rapsEncontrados: [], mapaAA: {} });
+        continue;
+      }
+
+      const { texto } = parsed;
+
+      // 4. Extraer bloque SENA
+      const bloque = extraerBloque(texto);
+
+      // 5. Parsear RAPs del bloque (con fallback al texto completo)
+      const rapsEncontrados = parsearRapsDelBloque(bloque || texto, texto);
+
+      // 6. Mapear a (AA) por orden de aparición
+      const mapaAA = mapearRapsAANum(rapsEncontrados, guiaNum);
 
       resultados.push({
-        guiaNum:      tarea.guiaNum,
-        pdfUrl:       urlPdf,
-        archivoPdf:   filename,
-        codigosGA,
-        raps,
-        textoMuestra: texto ? texto.substring(0, 600) : null,
+        guiaNum,
+        pdfUrl,
+        pdfFile,
+        numPaginas:    parsed.numPaginas,
+        rapsEncontrados,
+        mapaAA,
+        textoMuestra:  texto.substring(0, 800),
       });
     }
 
-    // ── Guardar resultado ────────────────────────────────────────────────────
-    const outPath = "probe-h3-resultado.json";
-    fs.writeFileSync(outPath, JSON.stringify(resultados, null, 2));
-    log(`\n✅ Resultado guardado en ${outPath}`);
+    // ── Guardar resultado ──────────────────────────────────────────────────
+    const outFile = "probe-h3-resultado.json";
+    fs.writeFileSync(outFile, JSON.stringify(resultados, null, 2));
+    log(`\n✅ Resultado guardado: ${outFile}`);
 
-    // ── Resumen ──────────────────────────────────────────────────────────────
-    log("\n╔══════════════════════════════════════════════════╗");
-    log("║  RESUMEN H3 — PDFs parseados                     ║");
-    log("╠══════════════════════════════════════════════════╣");
+    // ── Reporte consolidado ────────────────────────────────────────────────
+    log(`\n${"╔" + "═".repeat(58) + "╗"}`);
+    log("║  REPORTE CONSOLIDADO H3 — Descripciones RAP por (GA, AA)   ║");
+    log(`${"╠" + "═".repeat(58) + "╣"}`);
 
-    let totalCodigos = 0;
-    let totalRaps    = 0;
+    // Construir tabla completa de (GA, AA) con descripción
+    const tablaFinal = [];
+    let conDescripcion = 0;
+    let sinDescripcion = 0;
 
-    for (const r of resultados) {
-      log(`║  Guía ${String(r.guiaNum).padStart(2, "0")}:`);
-      log(`║    Códigos GA : ${r.codigosGA?.length ?? 0}`);
-      log(`║    RAPs       : ${r.raps?.length ?? 0}`);
-      if (r.raps?.length > 0) {
-        r.raps.forEach(rap => log(`║      RAP${rap.rapNum}: ${rap.descripcion.substring(0, 60)}…`));
+    for (const r of resultados.sort((a, b) => a.guiaNum - b.guiaNum)) {
+      if (r.error) {
+        log(`║  GA${String(r.guiaNum).padStart(2,"0")}: ERROR — ${r.error}`);
+        continue;
       }
-      totalCodigos += r.codigosGA?.length ?? 0;
-      totalRaps    += r.raps?.length ?? 0;
+      const aaKeys = Object.keys(r.mapaAA).sort();
+      if (aaKeys.length === 0) {
+        log(`║  GA${String(r.guiaNum).padStart(2,"0")}: ⚠  Sin RAPs extraídos`);
+        sinDescripcion++;
+        continue;
+      }
+      for (const aaNumStr of aaKeys) {
+        const aaNum = parseInt(aaNumStr, 10);
+        const rap   = r.mapaAA[aaNumStr];
+        const desc  = rap.descripcion.substring(0, 55);
+        log(`║  GA${String(r.guiaNum).padStart(2,"0")}-AA${aaNum}  ${rap.codigoSena || "sin-código"}  "${desc}…"`);
+        tablaFinal.push({ guiaNum: r.guiaNum, aaNum, ...rap });
+        conDescripcion++;
+      }
     }
 
-    log("╠══════════════════════════════════════════════════╣");
-    log(`║  Total códigos GA: ${totalCodigos}`);
-    log(`║  Total RAPs con descripción: ${totalRaps}`);
-    log("╠══════════════════════════════════════════════════╣");
+    log(`${"╠" + "═".repeat(58) + "╣"}`);
+    log(`║  RAPs con descripción : ${conDescripcion}`);
+    log(`║  Slots sin descripción: ${sinDescripcion}`);
+    log(`${"╠" + "═".repeat(58) + "╣"}`);
 
-    if (totalRaps > 0) {
-      log("║  ✅ Se pueden crear RAPs con descripción real desde los PDFs.");
-      log("║  → Combinar con H1 para crear Rap + RapEvidenciaRel en DB.");
-    } else if (totalCodigos > 0) {
-      log("║  ✅ Códigos GA en PDF pero sin descripción RAP estructurada.");
-      log("║  → Usa H1 para estructura + textoMuestra del PDF para descripción manual.");
+    // Cruzar con los 12 slots esperados según H1
+    const slotsEsperados = [
+      "GA01-AA1","GA01-AA2",
+      "GA02-AA1","GA02-AA2",
+      "GA03-AA1","GA03-AA2",
+      "GA04-AA1","GA04-AA2",
+      "GA05-AA1","GA05-AA2",
+      "GA06-AA1",
+      "GA07-AA1",
+    ];
+    const encontrados = new Set(tablaFinal.map(t => `GA${String(t.guiaNum).padStart(2,"0")}-AA${t.aaNum}`));
+    const faltantes   = slotsEsperados.filter(s => !encontrados.has(s));
+
+    if (faltantes.length > 0) {
+      log(`║  Slots sin PDF aún: ${faltantes.join(", ")}`);
     } else {
-      log("║  ⚠  No se encontró información en los PDFs.");
-      log("║  → Revisa probe-h3-guia*.pdf manualmente.");
-      log("║  → El formato del PDF puede ser imagen escaneada (sin OCR).");
+      log("║  ✅ Todos los slots cubiertos.");
     }
-    log("╚══════════════════════════════════════════════════╝\n");
+    log(`${"╚" + "═".repeat(58) + "╝"}\n`);
+
+    // Guardar tabla final por separado para fácil lectura
+    fs.writeFileSync("probe-h3-tabla-raps.json", JSON.stringify(tablaFinal, null, 2));
+    log("✅ Tabla final: probe-h3-tabla-raps.json\n");
 
   } finally {
     await browser.close();

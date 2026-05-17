@@ -54,6 +54,8 @@ model User {
   configAudits       ConfigAudit[]
   configChangeJobs   ConfigChangeJob[]
   matchingPropuestas MatchingPropuesta[]
+  actas              ActaSeguimiento[]
+  mensajesFormativos MensajeFormativo[]
   competencia        Competencia?         @relation(fields: [competenciaId], references: [id])
 }
 
@@ -68,8 +70,10 @@ model Ficha {
   updatedAt  DateTime   @updatedAt
   archivedAt DateTime?
   user       User       @relation(fields: [userId], references: [id])
-  evidencias Evidencia[]
-  aprendices Aprendiz[]
+  evidencias         Evidencia[]
+  aprendices         Aprendiz[]
+  actas              ActaSeguimiento[]
+  mensajesFormativos MensajeFormativo[]
 
   @@unique([userId, codigo])
 }
@@ -108,8 +112,9 @@ model Aprendiz {
   fichaId   String
   nombre    String
   moodleId  String?
-  ficha     Ficha     @relation(fields: [fichaId], references: [id])
-  entregas  Entrega[]
+  ficha           Ficha              @relation(fields: [fichaId], references: [id])
+  entregas        Entrega[]
+  participaciones ActaParticipante[]
 
   @@unique([fichaId, nombre])
 }
@@ -223,4 +228,56 @@ model MatchingPropuesta {
   rap         RAP       @relation(fields: [rapId], references: [id])
 
   @@unique([userId, evidenciaId, rapId])
+}
+
+// ─── Módulo 7: Actas de Seguimiento + Mensajes Formales ─────────────────────
+// Para migrar: npx prisma migrate dev --name actas_mensajes_formativos
+
+model ActaSeguimiento {
+  id           String   @id @default(cuid())
+  userId       String
+  fichaId      String
+  numero       String
+  fecha        DateTime
+  hora         String
+  lugar        String   @default("Videoconferencia / Plataforma Zajuna")
+  objetivo     String
+  conclusiones String?
+  compromisos  Json?
+  rapIds       Json
+  estado       String   @default("borrador")
+  creadoAt     DateTime @default(now())
+  user          User               @relation(fields: [userId],  references: [id])
+  ficha         Ficha              @relation(fields: [fichaId], references: [id])
+  participantes ActaParticipante[]
+  mensajes      MensajeFormativo[]
+}
+
+model ActaParticipante {
+  id         String @id @default(cuid())
+  actaId     String
+  aprendizId String
+  juicio     String
+  acta     ActaSeguimiento @relation(fields: [actaId],     references: [id])
+  aprendiz Aprendiz        @relation(fields: [aprendizId], references: [id])
+
+  @@unique([actaId, aprendizId])
+}
+
+model MensajeFormativo {
+  id            String    @id @default(cuid())
+  userId        String
+  actaId        String?
+  fichaId       String
+  canal         String
+  asunto        String
+  cuerpo        String
+  destinatarios Json
+  enviadoAt     DateTime?
+  estado        String    @default("pendiente")
+  errorMsg      String?
+  creadoAt      DateTime  @default(now())
+  user  User              @relation(fields: [userId],  references: [id])
+  acta  ActaSeguimiento?  @relation(fields: [actaId],  references: [id])
+  ficha Ficha             @relation(fields: [fichaId], references: [id])
 }

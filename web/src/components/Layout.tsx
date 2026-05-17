@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from "react-router-dom"
-import { LogOut, LayoutDashboard, FolderOpen, Settings2, BookOpen, Sparkles } from "lucide-react"
+import { LogOut, LayoutDashboard, FolderOpen, Settings2, BookOpen, Sparkles, ClipboardList } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAuthStore } from "@/store/auth"
 
@@ -13,6 +13,7 @@ const navItems = [
   { to: "/evidencias/config",label: "Mis Evidencias",  icon: Settings2 },
   { to: "/raps",             label: "RAPs",            icon: BookOpen },
   { to: "/matching",         label: "IA Matching",     icon: Sparkles },
+  { to: "/actas",            label: "Actas",           icon: ClipboardList },
 ]
 
 export default function Layout({ children }: { children: React.ReactNode }) {

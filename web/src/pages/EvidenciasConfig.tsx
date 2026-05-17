@@ -200,7 +200,7 @@ export default function EvidenciasConfig() {
   }
 
   function toggleCollapse(fichaId: string) {
-    setCollapsed(c => ({ ...c, [fichaId]: !c[fichaId] }))
+    setCollapsed(c => ({ ...c, [fichaId]: !(c[fichaId] ?? true) }))
   }
 
   // ── Helpers de selección (M2) ─────────────────────────────────────────────
@@ -344,7 +344,7 @@ export default function EvidenciasConfig() {
         ) : (
           <div className="space-y-2">
             {fichas.map(f => {
-              const isCollapsed    = collapsed[f.id] ?? false
+              const isCollapsed    = collapsed[f.id] ?? true
               const evOrdenadas    = [...f.evidencias].sort((a, b) => gaNum(a.nombre) - gaNum(b.nombre) || a.nombre.localeCompare(b.nombre))
               const evActivas      = evOrdenadas.filter(ev => ev.activaParaScan).length
               const todosIds       = evOrdenadas.map(ev => ev.id)

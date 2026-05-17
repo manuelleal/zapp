@@ -64,11 +64,12 @@ export default function Dashboard() {
   const queryClient = useQueryClient()
   const [expandedEv, setExpandedEv]           = useState<string | null>(null)
   const [collapsedFichas, setCollapsedFichas] = useState<Record<string, boolean>>({})
+  // fichas start collapsed; undefined means not yet toggled → treat as collapsed
   const [scanStatus, setScanStatus]           = useState("")
   const [scanLoading, setScanLoading]         = useState(false)
 
   function toggleFicha(fichaId: string) {
-    setCollapsedFichas(c => ({ ...c, [fichaId]: !c[fichaId] }))
+    setCollapsedFichas(c => ({ ...c, [fichaId]: !(c[fichaId] ?? true) }))
   }
 
   useEffect(() => {
@@ -182,7 +183,7 @@ export default function Dashboard() {
           <div className="space-y-3">
             {fichas.map(f => {
               const evOrdenadas  = [...f.evidencias].sort((a, b) => gaNum(a.nombre) - gaNum(b.nombre) || a.nombre.localeCompare(b.nombre))
-              const isCollapsed  = !!collapsedFichas[f.id]
+              const isCollapsed  = collapsedFichas[f.id] ?? true
               const pendFicha    = f.evidencias.reduce((s, ev) => s + ev.pendientes, 0)
               return (
                 <div key={f.id} className="bg-white rounded-lg border border-gray-200 overflow-hidden">
