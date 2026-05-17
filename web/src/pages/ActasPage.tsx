@@ -2,7 +2,7 @@ import { useState, useEffect } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   ClipboardList, Plus, Loader2, AlertCircle, Users,
-  MessageSquare, ChevronDown, ChevronRight, Lock, Download,
+  MessageSquare, ChevronDown, ChevronRight, Lock, Download, Upload, FileText,
 } from "lucide-react"
 import Layout from "@/components/Layout"
 import { Button } from "@/components/ui/button"
@@ -59,7 +59,7 @@ interface ActaDetalle extends ActaSummary {
   participantes: {
     id:        string
     aprendizId: string
-    juicio:    "APROBÓ" | "NO ASISTIÓ" | "PENDIENTE"
+    juicio:    "APROBÓ" | "EVIDENCIAS PENDIENTES" | "NO PARTICIPÓ" | "NO ASISTIÓ" | "PENDIENTE"
     aprendiz:  { nombre: string; moodleId: string | null }
   }[]
   mensajes: {
@@ -269,6 +269,219 @@ function NuevaActaModal({ open, onClose, fichas, raps }: NuevaActaModalProps) {
   )
 }
 
+// ─── Import CSV Modal ─────────────────────────────────────────────────────────
+
+interface FilaClasificada {
+  nombre:         string
+  documento:      string | null
+  estado:         string
+  rapsAprobados:  string[]
+  rapsPendientes: string[]
+  warningCount:   number
+}
+
+interface PreviewResult {
+  filas:              FilaClasificada[]
+  resumen:            { total: number; aprobaron: number; pendientes: number; noParticiparon: number }
+  errores:            string[]
+  columnasDetectadas: { nombre: string | null; documento: string | null; raps: string[] }
+}
+
+interface ImportCSVModalProps {
+  open:    boolean
+  actaId:  string
+  fichaId: string
+  onClose: () => void
+}
+
+function ImportCSVModal({ open, actaId, fichaId, onClose }: ImportCSVModalProps) {
+  const queryClient = useQueryClient()
+  const [preview,      setPreview]      = useState<PreviewResult | null>(null)
+  const [loading,      setLoading]      = useState(false)
+  const [importing,    setImporting]    = useState(false)
+  const [error,        setError]        = useState("")
+
+  useEffect(() => {
+    if (!open) { setPreview(null); setError("") }
+  }, [open])
+
+  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setLoading(true)
+    setError("")
+    setPreview(null)
+    try {
+      const text = await file.text()
+      const res = await fetch("/api/actas/import-csv/preview", {
+        method:  "POST",
+        headers: {
+          "Content-Type":  "application/json",
+          "Authorization": `Bearer ${localStorage.getItem("zajuna_jwt")}`,
+        },
+        body: JSON.stringify({ csv: text, fichaId }),
+      })
+      const data = await res.json() as PreviewResult & { error?: string }
+      if (!res.ok) throw new Error(data.error || `Error ${res.status}`)
+      setPreview(data)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error al procesar el CSV.")
+    } finally {
+      setLoading(false)
+      e.target.value = ""
+    }
+  }
+
+  async function handleConfirmar() {
+    if (!preview) return
+    setImporting(true)
+    try {
+      const res = await fetch(`/api/actas/${encodeURIComponent(actaId)}/import-csv`, {
+        method:  "POST",
+        headers: {
+          "Content-Type":  "application/json",
+          "Authorization": `Bearer ${localStorage.getItem("zajuna_jwt")}`,
+        },
+        body: JSON.stringify({ filas: preview.filas }),
+      })
+      const data = await res.json() as { importados?: number; errores?: string[]; error?: string }
+      if (!res.ok) throw new Error(data.error || `Error ${res.status}`)
+      toast.success(`${data.importados} aprendices importados correctamente.`)
+      queryClient.invalidateQueries({ queryKey: ["acta-detalle", actaId] })
+      queryClient.invalidateQueries({ queryKey: ["actas"] })
+      onClose()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error al importar.")
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={v => { if (!v && !loading && !importing) onClose() }}>
+      <DialogContent className="max-w-lg max-h-[90vh] flex flex-col">
+        <DialogHeader className="flex-shrink-0">
+          <DialogTitle>Importar participantes desde CSV</DialogTitle>
+          <DialogDescription>
+            Sube el CSV exportado del libro de calificaciones de Zajuna.
+            Se clasificarán los aprendices según los RAPs de inglés (240202501-01 a 06).
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex-1 overflow-y-auto space-y-4 pr-1">
+          {/* Selector de archivo */}
+          {!preview && (
+            <label className="flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-lg p-8 cursor-pointer hover:bg-gray-50 transition-colors">
+              <Upload className="w-8 h-8 text-gray-400 mb-2" />
+              <span className="text-sm text-gray-600">Haz clic para seleccionar el CSV de Zajuna</span>
+              <span className="text-xs text-gray-400 mt-1">Formato: libro de calificaciones exportado de Moodle</span>
+              <input type="file" accept=".csv,text/csv" className="sr-only" onChange={handleFile} disabled={loading} />
+            </label>
+          )}
+
+          {loading && (
+            <div className="flex items-center justify-center gap-2 text-sm text-gray-500 py-4">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Analizando CSV...
+            </div>
+          )}
+
+          {error && (
+            <div className="flex items-start gap-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded-md px-3 py-2">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>{error}</span>
+            </div>
+          )}
+
+          {preview && (
+            <div className="space-y-3">
+              {/* Columnas detectadas */}
+              <div className="text-xs text-gray-500 bg-gray-50 rounded-md p-3 space-y-1">
+                <p><span className="font-medium">Nombre:</span> {preview.columnasDetectadas.nombre || <span className="text-red-500">No detectada</span>}</p>
+                <p><span className="font-medium">Documento:</span> {preview.columnasDetectadas.documento || "No detectada (opcional)"}</p>
+                <p><span className="font-medium">RAPs:</span> {preview.columnasDetectadas.raps.length > 0 ? preview.columnasDetectadas.raps.join(", ") : <span className="text-red-500">Ninguno — verificar cabeceras</span>}</p>
+              </div>
+
+              {/* Resumen */}
+              <div className="grid grid-cols-4 gap-2 text-center">
+                {[
+                  { label: "Total",        val: preview.resumen.total,          color: "text-gray-900" },
+                  { label: "Aprobó",       val: preview.resumen.aprobaron,      color: "text-green-600" },
+                  { label: "Pendientes",   val: preview.resumen.pendientes,     color: "text-yellow-600" },
+                  { label: "No participó", val: preview.resumen.noParticiparon, color: "text-gray-500" },
+                ].map(({ label, val, color }) => (
+                  <div key={label} className="bg-gray-50 rounded-md p-2">
+                    <p className={`text-lg font-bold ${color}`}>{val}</p>
+                    <p className="text-xs text-gray-500">{label}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Advertencias del parser */}
+              {preview.errores.length > 0 && (
+                <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md p-3 space-y-1">
+                  {preview.errores.map((e, i) => <p key={i}>⚠ {e}</p>)}
+                </div>
+              )}
+
+              {/* Muestra de primeras filas */}
+              <div className="overflow-x-auto rounded-md border border-gray-200 max-h-48">
+                <table className="w-full text-xs">
+                  <thead className="bg-gray-50 sticky top-0">
+                    <tr>
+                      <th className="text-left px-2 py-1.5 font-semibold text-gray-500">Nombre</th>
+                      <th className="text-left px-2 py-1.5 font-semibold text-gray-500">Doc.</th>
+                      <th className="text-left px-2 py-1.5 font-semibold text-gray-500">Estado</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {preview.filas.slice(0, 8).map((f, i) => (
+                      <tr key={i}>
+                        <td className="px-2 py-1 text-gray-800">{f.nombre}</td>
+                        <td className="px-2 py-1 text-gray-500 font-mono">{f.documento || "—"}</td>
+                        <td className="px-2 py-1 text-gray-600">{f.estado}</td>
+                      </tr>
+                    ))}
+                    {preview.filas.length > 8 && (
+                      <tr>
+                        <td colSpan={3} className="px-2 py-1 text-gray-400 italic text-center">
+                          ... y {preview.filas.length - 8} más
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Reset */}
+              <button
+                onClick={() => setPreview(null)}
+                className="text-xs text-gray-400 hover:text-gray-600 underline"
+              >
+                Subir otro CSV
+              </button>
+            </div>
+          )}
+        </div>
+
+        <DialogFooter className="flex-shrink-0">
+          <Button variant="outline" onClick={onClose} disabled={importing}>Cancelar</Button>
+          {preview && (
+            <Button
+              className="bg-sena-green hover:bg-sena-green/90"
+              onClick={handleConfirmar}
+              disabled={importing || preview.filas.length === 0}
+            >
+              {importing && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Confirmar import ({preview.filas.length} aprendices)
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 // ─── Panel de detalle del acta ────────────────────────────────────────────────
 
 interface ActaDetailPanelProps {
@@ -280,12 +493,13 @@ interface ActaDetailPanelProps {
 
 function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaDetailPanelProps) {
   const queryClient = useQueryClient()
-  const [juiciosLocales, setJuiciosLocales] = useState<Record<string, "APROBÓ" | "NO ASISTIÓ" | "PENDIENTE">>({})
+  const [juiciosLocales, setJuiciosLocales] = useState<Record<string, "APROBÓ" | "NO ASISTIÓ" | "PENDIENTE" | "EVIDENCIAS PENDIENTES" | "NO PARTICIPÓ">>({})
   const [conclusiones,   setConclusiones]   = useState("")
   const [compromisos,    setCompromisos]    = useState<Compromiso[]>([])
   const [rapIdsLocales,  setRapIdsLocales]  = useState<string[]>([])
   const [patchError,     setPatchError]     = useState("")
   const [cerrarConfirm,  setCerrarConfirm]  = useState(false)
+  const [importCSVOpen,  setImportCSVOpen]  = useState(false)
 
   const { data: acta, isLoading } = useQuery<ActaDetalle>({
     queryKey: ["acta-detalle", actaId],
@@ -295,7 +509,7 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
 
   useEffect(() => {
     if (!acta) return
-    const mapa: Record<string, "APROBÓ" | "NO ASISTIÓ" | "PENDIENTE"> = {}
+    const mapa: Record<string, "APROBÓ" | "EVIDENCIAS PENDIENTES" | "NO PARTICIPÓ" | "NO ASISTIÓ" | "PENDIENTE"> = {}
     acta.participantes.forEach(p => { mapa[p.aprendizId] = p.juicio })
     setJuiciosLocales(mapa)
     setConclusiones(acta.conclusiones ?? "")
@@ -405,11 +619,18 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
   if (!acta) return null
 
   const esBorrador = acta.estado === "borrador"
-  const nAprobaron = acta.participantes.filter(p => p.juicio === "APROBÓ").length
-  const nPendientes = acta.participantes.filter(p => p.juicio === "PENDIENTE").length
-  const nNoAsistio  = acta.participantes.filter(p => p.juicio === "NO ASISTIÓ").length
+  const nAprobaron   = acta.participantes.filter(p => p.juicio === "APROBÓ").length
+  const nPendientes  = acta.participantes.filter(p => p.juicio === "EVIDENCIAS PENDIENTES" || p.juicio === "PENDIENTE").length
+  const nNoParticipo = acta.participantes.filter(p => p.juicio === "NO PARTICIPÓ" || p.juicio === "NO ASISTIÓ").length
 
   return (
+    <>
+    <ImportCSVModal
+      open={importCSVOpen}
+      actaId={actaId}
+      fichaId={acta.fichaId}
+      onClose={() => setImportCSVOpen(false)}
+    />
     <div className="border-t border-gray-100 bg-gray-50/40 p-5 space-y-6">
 
       {/* ── Info general ── */}
@@ -480,6 +701,15 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
               <Button
                 size="sm"
                 variant="outline"
+                className="text-xs gap-1.5"
+                onClick={() => setImportCSVOpen(true)}
+              >
+                <Upload className="w-3 h-3" />
+                Importar CSV
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
                 className="text-xs"
                 onClick={guardarJuicios}
                 disabled={juiciosMutation.isPending || acta.participantes.length === 0}
@@ -493,9 +723,9 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
 
         {acta.participantes.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-2">
-            <Badge variant="green" className="text-xs">{nAprobaron} aprobaron</Badge>
-            <Badge variant="yellow" className="text-xs">{nPendientes} pendientes</Badge>
-            <Badge variant="gray" className="text-xs">{nNoAsistio} no asistieron</Badge>
+            <Badge variant="green"  className="text-xs">{nAprobaron}   aprobaron</Badge>
+            <Badge variant="yellow" className="text-xs">{nPendientes}  pendientes</Badge>
+            <Badge variant="gray"   className="text-xs">{nNoParticipo} no participaron</Badge>
           </div>
         )}
 
@@ -523,13 +753,15 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
                           value={juiciosLocales[p.aprendizId] ?? p.juicio}
                           onChange={e => setJuiciosLocales(prev => ({
                             ...prev,
-                            [p.aprendizId]: e.target.value as "APROBÓ" | "NO ASISTIÓ" | "PENDIENTE",
+                            [p.aprendizId]: e.target.value as "APROBÓ" | "EVIDENCIAS PENDIENTES" | "NO PARTICIPÓ" | "NO ASISTIÓ" | "PENDIENTE",
                           }))}
                           className="h-7 rounded border border-input bg-background px-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
                         >
                           <option value="APROBÓ">APROBÓ</option>
-                          <option value="NO ASISTIÓ">NO ASISTIÓ</option>
+                          <option value="EVIDENCIAS PENDIENTES">EVIDENCIAS PENDIENTES</option>
+                          <option value="NO PARTICIPÓ">NO PARTICIPÓ</option>
                           <option value="PENDIENTE">PENDIENTE</option>
+                          <option value="NO ASISTIÓ">NO ASISTIÓ</option>
                         </select>
                       ) : (
                         <Badge variant={juicioBadgeVariant(p.juicio)} className="text-xs">{p.juicio}</Badge>
@@ -698,6 +930,7 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
       )}
 
     </div>
+    </>
   )
 }
 
@@ -709,7 +942,8 @@ export default function ActasPage() {
   const [fichaFiltro,   setFichaFiltro]   = useState("")
   const [expandedActa,  setExpandedActa]  = useState<string | null>(null)
   const [nuevaActaOpen, setNuevaActaOpen] = useState(false)
-  const [downloadingId, setDownloadingId] = useState<string | null>(null)
+  const [downloadingId,    setDownloadingId]    = useState<string | null>(null)
+  const [downloadingGorId, setDownloadingGorId] = useState<string | null>(null)
 
   useEffect(() => {
     const storedJwt = localStorage.getItem("zajuna_jwt")
@@ -777,6 +1011,28 @@ export default function ActasPage() {
       toast.error(e instanceof Error ? e.message : "Error al descargar el documento.")
     } finally {
       setDownloadingId(null)
+    }
+  }
+
+  async function handleDescargarGOR(actaId: string, numero: string) {
+    setDownloadingGorId(actaId)
+    try {
+      const res = await fetch(`/api/actas/${encodeURIComponent(actaId)}/download/gor-f-084`, {
+        headers: { Authorization: `Bearer ${localStorage.getItem("zajuna_jwt")}` },
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: string }
+        throw new Error(data.error || `Error ${res.status} al generar GOR-F-084.`)
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url; a.download = `acta-${numero}-gor-f-084.docx`; a.click()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error al descargar GOR-F-084.")
+    } finally {
+      setDownloadingGorId(null)
     }
   }
 
@@ -896,6 +1152,18 @@ export default function ActasPage() {
                           ? <Loader2 className="w-3 h-3 animate-spin" />
                           : <Download className="w-3 h-3" />}
                         Word
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-xs gap-1.5"
+                        onClick={() => handleDescargarGOR(acta.id, acta.numero)}
+                        disabled={downloadingGorId === acta.id}
+                      >
+                        {downloadingGorId === acta.id
+                          ? <Loader2 className="w-3 h-3 animate-spin" />
+                          : <FileText className="w-3 h-3" />}
+                        GOR-F-084
                       </Button>
                       <Button
                         size="sm"

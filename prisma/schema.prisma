@@ -108,10 +108,11 @@ model EvidenciaConfig {
 }
 
 model Aprendiz {
-  id        String    @id @default(cuid())
-  fichaId   String
-  nombre    String
-  moodleId  String?
+  id         String    @id @default(cuid())
+  fichaId    String
+  nombre     String
+  moodleId   String?
+  documento  String?
   ficha           Ficha              @relation(fields: [fichaId], references: [id])
   entregas        Entrega[]
   participaciones ActaParticipante[]
@@ -276,6 +277,7 @@ model MensajeFormativo {
   enviadoAt     DateTime?
   estado        String    @default("pendiente")
   errorMsg      String?
+  templateTipo  String?
   creadoAt      DateTime  @default(now())
   user  User              @relation(fields: [userId],  references: [id])
   acta  ActaSeguimiento?  @relation(fields: [actaId],  references: [id])

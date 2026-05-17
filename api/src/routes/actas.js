@@ -179,7 +179,7 @@ async function actasRoutes(fastify) {
       return reply.code(400).send({ error: "Se requiere un array de { aprendizId, juicio }." });
     }
 
-    const JUICIOS_VALIDOS = ["APROBÓ", "NO ASISTIÓ", "PENDIENTE"];
+    const JUICIOS_VALIDOS = ["APROBÓ", "EVIDENCIAS PENDIENTES", "NO PARTICIPÓ", "NO ASISTIÓ", "PENDIENTE"];
 
     for (const j of juicios) {
       if (!j.aprendizId || !JUICIOS_VALIDOS.includes(j.juicio)) {
@@ -253,26 +253,34 @@ async function actasRoutes(fastify) {
       entregasPorAprendiz.get(e.aprendizId).push(e);
     }
 
-    // Calcular juicio y preparar upserts (sin ejecutar aún)
-    let aprobaron    = 0;
-    let pendientes   = 0;
-    let noAsistieron = 0;
+    // Calcular juicio GOR-F-084 V02 (4 estados) y preparar upserts
+    let aprobaron          = 0;
+    let evidenciasPendientes = 0;
+    let noParticiparon     = 0;
 
     const upserts = aprendices.map(aprendiz => {
-      let juicio = "NO ASISTIÓ";
       const entregas = entregasPorAprendiz.get(aprendiz.id) ?? [];
+      let juicio;
 
-      if (entregas.length > 0) {
+      if (entregas.length === 0) {
+        // Regla 4: sin ningún registro → No participó
+        juicio = "NO PARTICIPÓ";
+        noParticiparon++;
+      } else {
         const todasAprobadas = entregas.every(e =>
           (e.notaActual !== null && e.notaActual > 0) ||
           /aprobad|^A$/i.test(e.estado ?? "")
         );
-        juicio = todasAprobadas ? "APROBÓ" : "PENDIENTE";
+        if (todasAprobadas) {
+          // Regla 1: todos aprobados
+          juicio = "APROBÓ";
+          aprobaron++;
+        } else {
+          // Reglas 2/3: tiene registros pero no todo aprobado
+          juicio = "EVIDENCIAS PENDIENTES";
+          evidenciasPendientes++;
+        }
       }
-
-      if (juicio === "APROBÓ")         aprobaron++;
-      else if (juicio === "PENDIENTE") pendientes++;
-      else                             noAsistieron++;
 
       return prisma.actaParticipante.upsert({
         where:  { actaId_aprendizId: { actaId: acta.id, aprendizId: aprendiz.id } },
@@ -281,14 +289,14 @@ async function actasRoutes(fastify) {
       });
     });
 
-    // 1 transacción atómica para todos los upserts (antes: 1 upsert × N aprendices)
+    // 1 transacción atómica para todos los upserts
     await prisma.$transaction(upserts);
 
     return {
-      poblados:            aprendices.length,
+      poblados:             aprendices.length,
       aprobaron,
-      pendientes,
-      noAsistieron,
+      evidenciasPendientes,
+      noParticiparon,
       evidenciasVinculadas: evidenciaIds.length,
     };
   });
@@ -558,6 +566,344 @@ async function actasRoutes(fastify) {
     return reply
       .header("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
       .header("Content-Disposition", `attachment; filename="acta-${acta.numero}.docx"`)
+      .send(buffer);
+  });
+
+  // ── GET /api/actas/:id/download/gor-f-084 ────────────────────────────────────
+  // Genera Word en formato institucional GOR-F-084 V02 del SENA.
+  fastify.get("/api/actas/:id/download/gor-f-084", { preHandler: fastify.authenticate }, async (req, reply) => {
+    const {
+      Document, Paragraph, Table, TableRow, TableCell, TextRun,
+      AlignmentType, WidthType, BorderStyle, Packer, VerticalAlign,
+    } = require("docx");
+
+    const acta = await verificarActaDelUsuario(req.params.id, req.user.id, reply);
+    if (!acta) return;
+
+    // ── Datos ────────────────────────────────────────────────────────────────
+    const actaCompleta = await prisma.actaSeguimiento.findUnique({
+      where:   { id: acta.id },
+      include: {
+        ficha:        { select: { codigo: true, nombre: true, programa: true } },
+        participantes: {
+          include: { aprendiz: { select: { nombre: true, documento: true } } },
+          orderBy: { aprendiz: { nombre: "asc" } },
+        },
+      },
+    });
+
+    const rapIds   = Array.isArray(acta.rapIds) ? acta.rapIds : [];
+    const rapsInfo = rapIds.length > 0
+      ? await prisma.rAP.findMany({
+          where:  { id: { in: rapIds } },
+          select: { id: true, codigo: true, descripcion: true },
+          orderBy: { codigo: "asc" },
+        })
+      : [];
+
+    // Warning counts: unpacking destinatarios JSON en DB
+    let warningPorNombre = new Map();
+    try {
+      const rows = await prisma.$queryRaw`
+        SELECT
+          a.nombre,
+          COUNT(*)::int AS warning_count
+        FROM "MensajeFormativo" mf,
+             jsonb_array_elements(mf.destinatarios) AS elem
+        JOIN "Aprendiz" a ON a.id = (elem->>'aprendizId')
+        WHERE mf."fichaId" = ${acta.fichaId}
+          AND mf.estado = 'enviado'
+        GROUP BY a.nombre
+      `;
+      warningPorNombre = new Map(
+        rows.map(r => [r.nombre.toUpperCase().trim(), Number(r.warning_count)])
+      );
+    } catch (_) {}
+
+    const ficha        = actaCompleta.ficha || {};
+    const participantes = actaCompleta.participantes || [];
+
+    // ── Conteos resumen ───────────────────────────────────────────────────────
+    let nAprobaron   = 0;
+    let nPendientes  = 0;
+    let nNoParticipo = 0;
+
+    for (const p of participantes) {
+      const j = p.juicio;
+      if (j === "APROBÓ")                                   nAprobaron++;
+      else if (j === "EVIDENCIAS PENDIENTES" || j === "PENDIENTE") nPendientes++;
+      else                                                   nNoParticipo++;
+    }
+
+    // ── Helpers de estilo ──────────────────────────────────────────────────────
+
+    const BORDE = { style: BorderStyle.SINGLE, size: 4, color: "000000" };
+    const BORDES = { top: BORDE, bottom: BORDE, left: BORDE, right: BORDE };
+    const VERDE_SENA = "39A900";
+    const GRIS_HEADER = "CCCCCC";
+
+    function celda(texto, opts = {}) {
+      return new TableCell({
+        borders:    BORDES,
+        shading:    opts.bg ? { fill: opts.bg } : undefined,
+        verticalAlign: VerticalAlign.CENTER,
+        width:      opts.width ? { size: opts.width, type: WidthType.DXA } : undefined,
+        columnSpan: opts.span,
+        children: [
+          new Paragraph({
+            alignment: opts.center ? AlignmentType.CENTER : AlignmentType.LEFT,
+            children: [
+              new TextRun({
+                text:  String(texto ?? ""),
+                bold:  opts.bold,
+                size:  opts.size || 18,
+                color: opts.color,
+              }),
+            ],
+          }),
+        ],
+      });
+    }
+
+    function fila(...celdas) {
+      return new TableRow({ children: celdas });
+    }
+
+    function tabla(rows, widthPct = 100) {
+      return new Table({
+        width: { size: widthPct, type: WidthType.PERCENTAGE },
+        rows,
+      });
+    }
+
+    function parrafo(texto, opts = {}) {
+      return new Paragraph({
+        spacing: { before: opts.before ?? 80, after: opts.after ?? 60 },
+        alignment: opts.center ? AlignmentType.CENTER : AlignmentType.LEFT,
+        children: [
+          new TextRun({
+            text:    String(texto ?? ""),
+            bold:    opts.bold,
+            size:    opts.size || 20,
+            color:   opts.color,
+            italics: opts.italics,
+          }),
+        ],
+      });
+    }
+
+    const fechaStr = acta.fecha
+      ? new Date(acta.fecha).toLocaleDateString("es-CO", { day: "2-digit", month: "long", year: "numeric" })
+      : "";
+
+    // ── Sección 1: Header institucional ───────────────────────────────────────
+    const headerTabla = tabla([
+      fila(
+        celda("SERVICIO NACIONAL DE APRENDIZAJE\nSENA", { bold: true, center: true, size: 18, bg: VERDE_SENA, color: "FFFFFF", width: 2880 }),
+        celda("ACTA DE SEGUIMIENTO DE FORMACIÓN\nGOR-F-084 V02", { bold: true, center: true, size: 20, width: 6120 }),
+        celda(`FECHA: ${fechaStr}`, { center: true, size: 16, width: 1800 }),
+      ),
+    ]);
+
+    // ── Sección 2: Info general del acta ──────────────────────────────────────
+    const infoTabla = tabla([
+      fila(
+        celda("PROGRAMA:", { bold: true, bg: GRIS_HEADER, width: 2000 }),
+        celda(ficha.programa || "", { width: 4600 }),
+        celda("N° ACTA:", { bold: true, bg: GRIS_HEADER, width: 1200 }),
+        celda(acta.numero, { center: true, bold: true, width: 1000 }),
+      ),
+      fila(
+        celda("FICHA:", { bold: true, bg: GRIS_HEADER }),
+        celda(ficha.codigo || "", {}),
+        celda("HORA:", { bold: true, bg: GRIS_HEADER }),
+        celda(acta.hora || "", { center: true }),
+      ),
+      fila(
+        celda("NOMBRE DEL PROGRAMA:", { bold: true, bg: GRIS_HEADER }),
+        celda(ficha.nombre || "", { span: 3 }),
+      ),
+      fila(
+        celda("LUGAR:", { bold: true, bg: GRIS_HEADER }),
+        celda(acta.lugar || "", { span: 3 }),
+      ),
+    ]);
+
+    // ── Sección 3: Objetivo ────────────────────────────────────────────────────
+    const objetivoTabla = tabla([
+      fila(celda("OBJETIVO DE LA SESIÓN", { bold: true, center: true, bg: GRIS_HEADER, span: 1 })),
+      fila(celda(acta.objetivo || "", {})),
+    ]);
+
+    // ── Sección 4: RAPs evaluados ─────────────────────────────────────────────
+    const rapFilas = [
+      fila(celda("RESULTADOS DE APRENDIZAJE EVALUADOS", { bold: true, center: true, bg: GRIS_HEADER })),
+    ];
+    if (rapsInfo.length > 0) {
+      for (const r of rapsInfo) {
+        rapFilas.push(fila(celda(`${r.codigo}: ${r.descripcion}`, { size: 18 })));
+      }
+    } else {
+      rapFilas.push(fila(celda("(Sin RAPs asociados)", { italics: true })));
+    }
+    const rapsTabla = tabla(rapFilas);
+
+    // ── Sección 5: Tabla de participantes ─────────────────────────────────────
+    const partFilas = [
+      fila(
+        celda("N°",          { bold: true, center: true, bg: GRIS_HEADER, width: 480  }),
+        celda("NOMBRE COMPLETO", { bold: true, bg: GRIS_HEADER, width: 3600 }),
+        celda("DOCUMENTO",   { bold: true, center: true, bg: GRIS_HEADER, width: 1200 }),
+        celda("ESTADO",      { bold: true, center: true, bg: GRIS_HEADER, width: 3240 }),
+      ),
+    ];
+
+    participantes.forEach((p, idx) => {
+      const nombre = p.aprendiz?.nombre || "";
+      const doc    = p.aprendiz?.documento || "—";
+      const juicio = p.juicio;
+
+      let estadoTexto;
+      if (juicio === "APROBÓ")                                   estadoTexto = "Aprobó";
+      else if (juicio === "EVIDENCIAS PENDIENTES" || juicio === "PENDIENTE") estadoTexto = "Evidencias pendientes";
+      else if (juicio === "NO PARTICIPÓ" || juicio === "NO ASISTIÓ") estadoTexto = "No participó";
+      else                                                        estadoTexto = juicio;
+
+      partFilas.push(fila(
+        celda(String(idx + 1), { center: true }),
+        celda(nombre),
+        celda(doc, { center: true, size: 16 }),
+        celda(estadoTexto, { center: true }),
+      ));
+    });
+
+    if (participantes.length === 0) {
+      partFilas.push(fila(celda("Sin participantes registrados.", { italics: true, span: 4, center: true })));
+    }
+
+    const participantesTabla = tabla(partFilas);
+
+    // ── Sección 6: Tabla resumen ───────────────────────────────────────────────
+    const resumenTabla = tabla([
+      fila(
+        celda("TOTAL APRENDICES", { bold: true, center: true, bg: GRIS_HEADER }),
+        celda("APROBÓ",           { bold: true, center: true, bg: GRIS_HEADER }),
+        celda("EVIDENCIAS PENDIENTES", { bold: true, center: true, bg: GRIS_HEADER }),
+        celda("NO PARTICIPÓ",     { bold: true, center: true, bg: GRIS_HEADER }),
+      ),
+      fila(
+        celda(String(participantes.length), { center: true, bold: true, size: 24 }),
+        celda(String(nAprobaron),           { center: true, bold: true, size: 24 }),
+        celda(String(nPendientes),          { center: true, bold: true, size: 24 }),
+        celda(String(nNoParticipo),         { center: true, bold: true, size: 24 }),
+      ),
+    ]);
+
+    // ── Sección 7: Conclusiones ────────────────────────────────────────────────
+    const conclusionesTabla = tabla([
+      fila(celda("CONCLUSIONES", { bold: true, center: true, bg: GRIS_HEADER })),
+      fila(celda(acta.conclusiones || "Sin conclusiones registradas.", {})),
+    ]);
+
+    // ── Sección 8: Nota (llamados de atención) ────────────────────────────────
+    const notaItems = [];
+    for (const p of participantes) {
+      const nombre = (p.aprendiz?.nombre || "").toUpperCase().trim();
+      const wc = warningPorNombre.get(nombre) || 0;
+      if (wc > 0) {
+        notaItems.push(`El/la aprendiz ${p.aprendiz?.nombre} tuvo ${wc} llamado(s) de atención por plataforma.`);
+      }
+    }
+    const notaTexto = notaItems.length > 0
+      ? notaItems.join("\n")
+      : "Sin llamados de atención registrados en la plataforma.";
+
+    const notaTabla = tabla([
+      fila(celda("NOTA", { bold: true, center: true, bg: GRIS_HEADER })),
+      fila(celda(notaTexto, { size: 16 })),
+    ]);
+
+    // ── Sección 9: Compromisos ─────────────────────────────────────────────────
+    const compromisos = Array.isArray(acta.compromisos) ? acta.compromisos : [];
+    const compromisosFilas = [
+      fila(
+        celda("ACTIVIDAD / COMPROMISO", { bold: true, bg: GRIS_HEADER }),
+        celda("FECHA",                  { bold: true, center: true, bg: GRIS_HEADER, width: 1500 }),
+        celda("RESPONSABLE",            { bold: true, bg: GRIS_HEADER, width: 2400 }),
+      ),
+    ];
+    if (compromisos.length === 0) {
+      compromisosFilas.push(fila(celda("Sin compromisos registrados.", { italics: true, span: 3, center: true })));
+    } else {
+      for (const c of compromisos) {
+        compromisosFilas.push(fila(
+          celda(c.actividad   || ""),
+          celda(c.fecha       || "", { center: true }),
+          celda(c.responsable || ""),
+        ));
+      }
+    }
+    const compromisosTabla = tabla(compromisosFilas);
+
+    // ── Sección 10: Firma ──────────────────────────────────────────────────────
+    const user = await prisma.user.findUnique({
+      where:  { id: acta.userId },
+      select: { nombre: true },
+    });
+
+    const firmaTabla = tabla([
+      fila(
+        celda("FIRMA INSTRUCTOR DE FORMACIÓN",  { bold: true, center: true, bg: GRIS_HEADER }),
+        celda("FIRMA COORDINADOR ACADÉMICO",     { bold: true, center: true, bg: GRIS_HEADER }),
+      ),
+      fila(
+        celda(`\n\n_______________________________\n${user?.nombre || ""}`, { center: true, size: 18 }),
+        celda("\n\n_______________________________\n",                        { center: true, size: 18 }),
+      ),
+    ]);
+
+    // ── Ensamblar documento ─────────────────────────────────────────────────────
+    const espacio = parrafo("", { before: 120, after: 0 });
+
+    const doc = new Document({
+      sections: [{
+        properties: {
+          page: {
+            margin: { top: 720, bottom: 720, left: 1080, right: 1080 },
+          },
+        },
+        children: [
+          headerTabla,
+          espacio,
+          infoTabla,
+          espacio,
+          objetivoTabla,
+          espacio,
+          rapsTabla,
+          espacio,
+          parrafo("REGISTRO DE PARTICIPANTES", { bold: true, center: true, size: 22, before: 80 }),
+          participantesTabla,
+          espacio,
+          parrafo("RESUMEN", { bold: true, center: true, size: 22, before: 80 }),
+          resumenTabla,
+          espacio,
+          conclusionesTabla,
+          espacio,
+          notaTabla,
+          espacio,
+          compromisosTabla,
+          espacio,
+          firmaTabla,
+        ],
+      }],
+    });
+
+    const buffer = await Packer.toBuffer(doc);
+    const filename = `acta-${acta.numero}-gor-f-084.docx`;
+
+    return reply
+      .header("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+      .header("Content-Disposition", `attachment; filename="${filename}"`)
       .send(buffer);
   });
 }
