@@ -32,7 +32,7 @@ async function authRoutes(fastify) {
       return reply.code(429).send({ error: "Demasiados intentos. Espera 15 minutos." });
     }
 
-    const { nombre, email, password, zajunaUser, zajunaPass, competenciaCodigo, competenciaNombre } = req.body;
+    const { nombre, email, password, zajunaUser, zajunaPass, competenciaCodigo, competenciaNombre } = req.body || {};
 
     if (!nombre || !email || !password || !zajunaUser || !zajunaPass || !competenciaCodigo) {
       return reply.code(400).send({ error: "Faltan campos obligatorios." });
@@ -58,7 +58,7 @@ async function authRoutes(fastify) {
       return reply.code(429).send({ error: "Demasiados intentos. Espera 15 minutos." });
     }
 
-    const { email, password } = req.body;
+    const { email, password } = req.body || {};
     if (!email || !password) return reply.code(400).send({ error: "Email y contraseña requeridos." });
 
     const user = await prisma.user.findUnique({ where: { email } });

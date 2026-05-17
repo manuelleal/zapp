@@ -26,6 +26,7 @@ async function fichasRoutes(fastify) {
   fastify.post("/api/fichas", { preHandler: fastify.authenticate }, async (req, reply) => {
     const { codigo, courseId, nombre, programa } = req.body || {};
     if (!codigo || !courseId) return reply.code(400).send({ error: "codigo y courseId requeridos." });
+    if (isNaN(parseInt(courseId, 10))) return reply.code(400).send({ error: "courseId debe ser un número entero." });
 
     const existing = await prisma.ficha.findUnique({
       where: { userId_codigo: { userId: req.user.id, codigo: String(codigo) } },
@@ -51,6 +52,9 @@ async function fichasRoutes(fastify) {
     if (ficha.userId !== req.user.id) return reply.code(403).send({ error: "Sin acceso." });
 
     const { codigo, nombre, programa, courseId } = req.body || {};
+    if (courseId !== undefined && isNaN(parseInt(courseId, 10))) {
+      return reply.code(400).send({ error: "courseId debe ser un número entero." });
+    }
     const updated = await prisma.ficha.update({
       where: { id: ficha.id },
       data: {

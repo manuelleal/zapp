@@ -95,44 +95,6 @@ async function rapsRoutes(fastify) {
     }));
   });
 
-  // POST /api/raps — crear RAP con criterios
-  fastify.post("/api/raps", { preHandler: fastify.authenticate }, async (req, reply) => {
-    const competenciaId = await getCompetenciaId(fastify, req, reply);
-    if (!competenciaId) return;
-
-    const { codigo, descripcion, criterios = [] } = req.body || {};
-    if (!codigo?.trim())      return reply.code(400).send({ error: "Campo 'codigo' requerido." });
-    if (!descripcion?.trim()) return reply.code(400).send({ error: "Campo 'descripcion' requerido." });
-
-    // Verificar unicidad dentro de la competencia
-    const existe = await prisma.rAP.findUnique({ where: { competenciaId_codigo: { competenciaId, codigo: codigo.trim() } } });
-    if (existe) return reply.code(409).send({ error: `Ya existe un RAP con código '${codigo.trim()}' en esta competencia.` });
-
-    const rap = await prisma.rAP.create({
-      data: {
-        competenciaId,
-        codigo:      codigo.trim(),
-        descripcion: descripcion.trim(),
-        criterios: {
-          create: criterios.map((c, i) => ({
-            descripcion: String(c.descripcion ?? "").trim(),
-            orden:       typeof c.orden === "number" ? c.orden : i,
-          })).filter(c => c.descripcion),
-        },
-      },
-      include: { criterios: { orderBy: { orden: "asc" } } },
-    });
-
-    return reply.code(201).send({
-      id:             rap.id,
-      codigo:         rap.codigo,
-      descripcion:    rap.descripcion,
-      criteriosCount: rap.criterios.length,
-      evidenciasCount: 0,
-      criterios:      rap.criterios.map(c => ({ id: c.id, descripcion: c.descripcion, orden: c.orden })),
-    });
-  });
-
   // GET /api/raps/:rapId — detalle de un RAP con criterios y relaciones de evidencias
   fastify.get("/api/raps/:rapId", { preHandler: fastify.authenticate }, async (req, reply) => {
     const competenciaId = await getCompetenciaId(fastify, req, reply);
@@ -169,74 +131,6 @@ async function rapsRoutes(fastify) {
         ficha:      rel.evidencia.ficha,
       })),
     };
-  });
-
-  // PUT /api/raps/:rapId — actualizar RAP y reemplazar criterios
-  fastify.put("/api/raps/:rapId", { preHandler: fastify.authenticate }, async (req, reply) => {
-    const competenciaId = await getCompetenciaId(fastify, req, reply);
-    if (!competenciaId) return;
-
-    const rap = await getRapParaUsuario(req.params.rapId, competenciaId, reply);
-    if (!rap) return;
-
-    const { codigo, descripcion, criterios = [] } = req.body || {};
-    if (!codigo?.trim())      return reply.code(400).send({ error: "Campo 'codigo' requerido." });
-    if (!descripcion?.trim()) return reply.code(400).send({ error: "Campo 'descripcion' requerido." });
-
-    // Verificar unicidad si cambió el código
-    if (codigo.trim() !== rap.codigo) {
-      const existe = await prisma.rAP.findUnique({ where: { competenciaId_codigo: { competenciaId, codigo: codigo.trim() } } });
-      if (existe) return reply.code(409).send({ error: `Ya existe un RAP con código '${codigo.trim()}' en esta competencia.` });
-    }
-
-    // Reemplazar criterios: borrar los viejos y crear los nuevos en transacción
-    const [, updated] = await prisma.$transaction([
-      prisma.criterio.deleteMany({ where: { rapId: rap.id } }),
-      prisma.rAP.update({
-        where: { id: rap.id },
-        data: {
-          codigo:      codigo.trim(),
-          descripcion: descripcion.trim(),
-          criterios: {
-            create: criterios.map((c, i) => ({
-              descripcion: String(c.descripcion ?? "").trim(),
-              orden:       typeof c.orden === "number" ? c.orden : i,
-            })).filter(c => c.descripcion),
-          },
-        },
-        include: {
-          criterios:     { orderBy: { orden: "asc" } },
-          evidenciaRels: { select: { id: true } },
-        },
-      }),
-    ]);
-
-    return {
-      id:              updated.id,
-      codigo:          updated.codigo,
-      descripcion:     updated.descripcion,
-      criteriosCount:  updated.criterios.length,
-      evidenciasCount: updated.evidenciaRels.length,
-      criterios:       updated.criterios.map(c => ({ id: c.id, descripcion: c.descripcion, orden: c.orden })),
-    };
-  });
-
-  // DELETE /api/raps/:rapId — eliminar RAP (criterios y rels en cascade por FK)
-  fastify.delete("/api/raps/:rapId", { preHandler: fastify.authenticate }, async (req, reply) => {
-    const competenciaId = await getCompetenciaId(fastify, req, reply);
-    if (!competenciaId) return;
-
-    const rap = await getRapParaUsuario(req.params.rapId, competenciaId, reply);
-    if (!rap) return;
-
-    // Borrar en orden: criterios → evidenciaRels → rap
-    await prisma.$transaction([
-      prisma.criterio.deleteMany({ where: { rapId: rap.id } }),
-      prisma.rapEvidenciaRel.deleteMany({ where: { rapId: rap.id } }),
-      prisma.rAP.delete({ where: { id: rap.id } }),
-    ]);
-
-    return reply.code(204).send();
   });
 
   // ── M4: Asociaciones RAP ↔ Evidencia ───────────────────────────────────────
@@ -322,20 +216,20 @@ async function rapsRoutes(fastify) {
 
   // POST /api/raps/import — importar RAPs desde JSON; upsert por codigo
   fastify.post("/api/raps/import", { preHandler: fastify.authenticate }, async (req, reply) => {
-    const competenciaId = await getCompetenciaId(fastify, req, reply);
-    if (!competenciaId) return;
-
     const body = req.body;
     if (!body || !Array.isArray(body.raps))
       return reply.code(400).send({ error: "El cuerpo debe tener la forma { raps: [...] }." });
 
-    // Validar estructura mínima
+    // Validar estructura mínima ANTES de tocar la DB
     for (const [i, r] of body.raps.entries()) {
       if (!r.codigo?.trim())      return reply.code(400).send({ error: `raps[${i}].codigo es requerido.` });
       if (!r.descripcion?.trim()) return reply.code(400).send({ error: `raps[${i}].descripcion es requerido.` });
       if (r.criterios !== undefined && !Array.isArray(r.criterios))
         return reply.code(400).send({ error: `raps[${i}].criterios debe ser un array.` });
     }
+
+    const competenciaId = await getCompetenciaId(fastify, req, reply);
+    if (!competenciaId) return;
 
     let created = 0;
     let updated = 0;
