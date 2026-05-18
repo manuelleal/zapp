@@ -2,8 +2,8 @@ import { useState, useEffect } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   ClipboardList, Plus, Loader2, AlertCircle, Users,
-  MessageSquare, ChevronDown, ChevronRight, Lock, Download, FileText,
-  Trash2, Archive, ArchiveRestore, AlertTriangle,
+  MessageSquare, ChevronDown, ChevronRight, ChevronUp, Lock, Download, FileText,
+  Trash2, Archive, ArchiveRestore, AlertTriangle, Send,
 } from "lucide-react"
 import Layout from "@/components/Layout"
 import { Button } from "@/components/ui/button"
@@ -297,6 +297,7 @@ interface ActaDetailPanelProps {
 
 function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaDetailPanelProps) {
   const queryClient = useQueryClient()
+  const navigate    = useNavigate()
   const [juiciosLocales,    setJuiciosLocales]    = useState<Record<string, Juicio>>({})
   const [rapStatusLocales,  setRapStatusLocales]  = useState<Record<string, Record<string, Juicio>>>({})
   const [conclusiones,      setConclusiones]      = useState("")
@@ -306,6 +307,7 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
   const [patchError,        setPatchError]        = useState("")
   const [cerrarConfirm,     setCerrarConfirm]     = useState(false)
   const [deletePartId,      setDeletePartId]      = useState<string | null>(null)
+  const [guiaVisible,       setGuiaVisible]       = useState(true)
 
   const { data: acta, isLoading } = useQuery<ActaDetalle>({
     queryKey: ["acta-detalle", actaId],
@@ -335,6 +337,7 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
       queryClient.invalidateQueries({ queryKey: ["acta-detalle", actaId] })
       queryClient.invalidateQueries({ queryKey: ["actas"] })
       setPatchError("")
+      toast.success("Guardado correctamente.")
     },
     onError: (e) => {
       const msg = e instanceof ApiError ? e.message : "Error al guardar."
@@ -346,7 +349,10 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
   const juiciosMutation = useMutation({
     mutationFn: (participantes: { aprendizId: string; juicio: Juicio; rapStatus?: Record<string, Juicio> }[]) =>
       apiFetch(`/api/actas/${actaId}/participantes`, { method: "POST", body: JSON.stringify(participantes) }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["acta-detalle", actaId] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["acta-detalle", actaId] })
+      toast.success("Juicios guardados correctamente.")
+    },
     onError: (e) => {
       const msg = e instanceof ApiError ? e.message : "Error al guardar juicios."
       setPatchError(msg)
@@ -370,7 +376,7 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
 
   const autoPoblarMutation = useMutation({
     mutationFn: () =>
-      apiFetch<{ poblados: number; aprobaron: number; pendientes: number; noParticiparon: number; warnings: number; evidenciasVinculadas: number }>(
+      apiFetch<{ poblados: number; aprobaron: number; pendientes: number; noParticiparon: number; warnings: number; evidenciasVinculadas: number; filtrados?: number }>(
         `/api/actas/${actaId}/auto-poblar`, { method: "POST" }
       ),
     onSuccess: (result) => {
@@ -382,7 +388,10 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
           "No se encontraron RAPs asociados. Asegúrate de haber vinculado evidencias a los RAPs del acta."
         )
       } else {
-        toast.success(`Poblado: ${result.poblados} aprendices. ${result.aprobaron} aprobaron, ${result.pendientes} pendientes, ${result.noParticiparon} no participaron.${ result.warnings > 0 ? ` ⚠ ${result.warnings} con entregas sin calificar.` : ""}`)
+        const filtradosTxt = (result.filtrados ?? 0) > 0
+          ? ` ⚠ ${result.filtrados} registros inválidos omitidos (AA, AG...). Elimínalos manualmente si aparecen.`
+          : ""
+        toast.success(`Poblado: ${result.poblados} aprendices. ${result.aprobaron} aprobaron, ${result.pendientes} pendientes, ${result.noParticiparon} no participaron.${ result.warnings > 0 ? ` ⚠ ${result.warnings} con entregas sin calificar.` : ""}${filtradosTxt}`)
       }
     },
     onError: (e) => {
@@ -430,6 +439,31 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
     patchMutation.mutate({ conclusiones, compromisos, notas })
   }
 
+  async function descargarActaConAuth(id: string, numero: string, tipo: "borrador" | "gor-f-084") {
+    try {
+      const url = tipo === "borrador"
+        ? `/api/actas/${encodeURIComponent(id)}/download`
+        : `/api/actas/${encodeURIComponent(id)}/download/gor-f-084`
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${localStorage.getItem("zajuna_jwt")}` },
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: string }
+        throw new Error(data.error || `Error ${res.status} al generar el documento.`)
+      }
+      const blob = await res.blob()
+      const cd = res.headers.get("Content-Disposition") ?? ""
+      const match = cd.match(/filename="([^"]+)"/)
+      const filename = match?.[1] ?? (tipo === "borrador" ? `acta-${numero}.docx` : `acta-${numero}-gor-f-084.docx`)
+      const blobUrl = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = blobUrl; a.download = filename; a.click()
+      URL.revokeObjectURL(blobUrl)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error al descargar el documento.")
+    }
+  }
+
   function guardarJuicios() {
     if (!acta) return
     const payload = acta.participantes.map(p => {
@@ -461,6 +495,26 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
 
   return (
     <div className="border-t border-gray-100 bg-gray-50/40 p-5 space-y-6">
+
+      {/* ── Banner de pasos (solo borrador) ── */}
+      {esBorrador && (
+        <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800 space-y-1">
+          <div className="flex items-center justify-between">
+            <span className="font-semibold">Cómo completar esta acta:</span>
+            <button onClick={() => setGuiaVisible(v => !v)} className="text-blue-700 hover:text-blue-900" aria-label="Mostrar/ocultar guía">
+              {guiaVisible ? <ChevronUp className="w-3.5 h-3.5"/> : <ChevronDown className="w-3.5 h-3.5"/>}
+            </button>
+          </div>
+          {guiaVisible && (
+            <ol className="list-decimal list-inside space-y-0.5 ml-1">
+              <li>Marca los RAPs trabajados en esta sesión → <strong>Guardar RAPs</strong></li>
+              <li>Haz clic en <strong>Auto-poblar desde evidencias</strong> para cargar los aprendices</li>
+              <li>Ajusta el estado de cada aprendiz por RAP si es necesario → <strong>Guardar juicios</strong></li>
+              <li>Descarga el Word cuando el acta esté lista</li>
+            </ol>
+          )}
+        </div>
+      )}
 
       {/* ── Info general ── */}
       <section className="space-y-3">
@@ -494,10 +548,15 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
               ))}
             </div>
             {esBorrador && (
-              <Button size="sm" variant="outline" className="text-xs" onClick={guardarInfoGeneral} disabled={patchMutation.isPending}>
-                {patchMutation.isPending && <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />}
-                Guardar RAPs
-              </Button>
+              <div>
+                <Button size="sm" variant="outline" className="text-xs" onClick={guardarInfoGeneral} disabled={patchMutation.isPending}>
+                  {patchMutation.isPending && <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />}
+                  Guardar RAPs
+                </Button>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  Al guardar los RAPs, la tabla mostrará una columna por cada RAP seleccionado.
+                </p>
+              </div>
             )}
           </div>
         )}
@@ -510,15 +569,22 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
           {esBorrador && (
             <div className="flex items-center gap-2 flex-wrap">
               <Button size="sm" variant="outline" className="text-xs gap-1.5"
-                onClick={() => autoPoblarMutation.mutate()} disabled={autoPoblarMutation.isPending}>
+                onClick={() => autoPoblarMutation.mutate()} disabled={autoPoblarMutation.isPending}
+                title="Carga automáticamente todos los aprendices de la ficha y calcula su estado según las evidencias vinculadas a los RAPs">
                 {autoPoblarMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Users className="w-3 h-3" />}
-                Auto-poblar
+                Auto-poblar desde evidencias
               </Button>
               <Button size="sm" variant="outline" className="text-xs"
                 onClick={guardarJuicios} disabled={juiciosMutation.isPending || acta.participantes.length === 0}>
                 {juiciosMutation.isPending && <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />}
                 Guardar juicios
               </Button>
+              {acta.participantes.length > 0 && (
+                <Button size="sm" variant="outline" className="text-xs gap-1.5 border-amber-300 text-amber-700 hover:bg-amber-50"
+                  onClick={() => navigate(`/mensajes/nuevo?actaId=${actaId}&filtro=pendientes`)}>
+                  <Send className="w-3 h-3" /> Notificar pendientes
+                </Button>
+              )}
             </div>
           )}
         </div>
@@ -528,6 +594,16 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
             <Badge variant="green"  className="text-xs">{nAprobaron} aprobaron</Badge>
             <Badge variant="yellow" className="text-xs">{nPendientes} pendientes</Badge>
             <Badge variant="gray"   className="text-xs">{nNoParticipo} no participaron</Badge>
+          </div>
+        )}
+
+        {rapsDelActa.length === 0 && acta.participantes.length > 0 && (
+          <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+            <span>
+              Las columnas de RAP no aparecen porque el acta no tiene RAPs guardados.
+              Selecciona los RAPs arriba, haz clic en <strong>Guardar RAPs</strong> y luego usa <strong>Auto-poblar desde evidencias</strong>.
+            </span>
           </div>
         )}
 
@@ -562,7 +638,7 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
                   ))}
                   <th className="text-center px-2 py-2 text-xs font-semibold text-gray-500">Juicio</th>
                   <th className="text-center px-2 py-2 text-xs font-semibold text-gray-500 w-6">⚠</th>
-                  {esBorrador && <th className="w-6 px-2 py-2" />}
+                  {esBorrador && <th className="w-10 px-2 py-2 text-xs text-gray-400 text-center">Quitar</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -617,8 +693,8 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
                         <td className="px-2 py-2 text-center">
                           <button
                             onClick={() => setDeletePartId(p.id)}
-                            className="text-gray-300 hover:text-red-500"
-                            title="Eliminar participante"
+                            className="text-gray-400 hover:text-red-500 transition-colors"
+                            title="Quitar este aprendiz del acta"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
@@ -742,6 +818,22 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
           <span>{patchError}</span>
         </div>
       )}
+
+      {/* ── Descargar acta ── */}
+      <section className="space-y-2 border-t border-gray-100 pt-4">
+        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Descargar acta</h3>
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" variant="outline" className="text-xs gap-1.5"
+            onClick={() => descargarActaConAuth(actaId, acta.numero, "borrador")}>
+            <Download className="w-3 h-3" /> Word (borrador)
+          </Button>
+          <Button size="sm" variant="outline" className="text-xs gap-1.5"
+            onClick={() => descargarActaConAuth(actaId, acta.numero, "gor-f-084")}>
+            <FileText className="w-3 h-3" /> GOR-F-084 (oficial SENA)
+          </Button>
+        </div>
+        <p className="text-xs text-gray-400">El archivo se descarga directamente al computador.</p>
+      </section>
 
       {/* ── Cerrar acta ── */}
       {esBorrador && (

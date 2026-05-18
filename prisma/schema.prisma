@@ -56,6 +56,7 @@ model User {
   matchingPropuestas MatchingPropuesta[]
   actas              ActaSeguimiento[]
   mensajesFormativos MensajeFormativo[]
+  configCorreo       ConfigCorreo?
   competencia        Competencia?         @relation(fields: [competenciaId], references: [id])
 }
 
@@ -108,11 +109,13 @@ model EvidenciaConfig {
 }
 
 model Aprendiz {
-  id         String    @id @default(cuid())
-  fichaId    String
-  nombre     String
-  moodleId   String?
-  documento  String?
+  id            String    @id @default(cuid())
+  fichaId       String
+  nombre        String
+  moodleId      String?
+  documento     String?
+  email         String?
+  ultimoAcceso  DateTime?
   ficha           Ficha              @relation(fields: [fichaId], references: [id])
   entregas        Entrega[]
   participaciones ActaParticipante[]
@@ -267,6 +270,22 @@ model ActaParticipante {
   aprendiz Aprendiz        @relation(fields: [aprendizId], references: [id])
 
   @@unique([actaId, aprendizId])
+}
+
+// ─── Módulo 8: Configuración SMTP por instructor (mensajería masiva) ─────────
+// Para migrar: npx prisma migrate dev --name mensajes_email_smtp
+
+model ConfigCorreo {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  smtpHost      String
+  smtpPort      Int      @default(587)
+  smtpUser      String
+  smtpPassEnc   String
+  fromNombre    String?
+  user          User     @relation(fields: [userId], references: [id])
+  creadaAt      DateTime @default(now())
+  actualizadaAt DateTime @updatedAt
 }
 
 model MensajeFormativo {

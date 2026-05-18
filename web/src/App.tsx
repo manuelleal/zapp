@@ -7,6 +7,8 @@ import EvidenciasConfig from "@/pages/EvidenciasConfig"
 import RapsPage from "@/pages/RapsPage"
 import MatchingIaPage from "@/pages/MatchingIaPage"
 import ActasPage from "@/pages/ActasPage"
+import MensajesPage from "@/pages/MensajesPage"
+import AjustesPage from "@/pages/AjustesPage"
 import ErrorBoundary from "@/components/ErrorBoundary"
 
 function App() {
@@ -22,6 +24,9 @@ function App() {
           <Route path="/raps"              element={<RapsPage />} />
           <Route path="/matching"          element={<MatchingIaPage />} />
           <Route path="/actas"             element={<ActasPage />} />
+          <Route path="/mensajes"          element={<MensajesPage />} />
+          <Route path="/mensajes/nuevo"    element={<MensajesPage />} />
+          <Route path="/ajustes"           element={<AjustesPage />} />
           <Route path="*"                  element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </BrowserRouter>

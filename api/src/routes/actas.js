@@ -283,11 +283,14 @@ async function actasRoutes(fastify) {
 
     const todasEvidenciaIds = [...new Set([...relsConfirmadas, ...relsIA].map(r => r.evidenciaId))];
 
-    // ── Aprendices de la ficha ─────────────────────────────────────────────────
-    const aprendices = await prisma.aprendiz.findMany({
+    // ── Aprendices de la ficha (filtrando nombres inválidos: AA, AG, etc.) ─────
+    const NOMBRE_INVALIDO = /^[A-Z]{1,3}$|^.{1,4}$/;
+    const aprendicesRaw = await prisma.aprendiz.findMany({
       where:  { fichaId: acta.fichaId },
-      select: { id: true },
+      select: { id: true, nombre: true },
     });
+    const aprendices = aprendicesRaw.filter(a => !NOMBRE_INVALIDO.test((a.nombre || "").trim()));
+    const nFiltrados = aprendicesRaw.length - aprendices.length;
     const aprendizIds = aprendices.map(a => a.id);
 
     // ── Todas las entregas relevantes en una query ─────────────────────────────
@@ -361,6 +364,7 @@ async function actasRoutes(fastify) {
       pendientes:          nPendientes,
       noParticiparon:      nNoParticiparon,
       warnings:            nWarnings,
+      filtrados:           nFiltrados,
       evidenciasVinculadas: todasEvidenciaIds.length,
     };
   });
@@ -508,16 +512,29 @@ async function actasRoutes(fastify) {
     const filasParticipantes = [
       new TableRow({
         tableHeader: true,
-        children: [headerCell("Aprendiz"), headerCell("Juicio")],
+        children: [
+          headerCell("Aprendiz"),
+          ...rapsInfo.map(r => {
+            const num = r.codigo.match(/-?(\d+)$/)?.[1];
+            return headerCell(num ? `RAP ${num}` : r.codigo);
+          }),
+          headerCell("Juicio"),
+        ],
       }),
-      ...participantes.map(p =>
-        new TableRow({
-          children: [
-            dataCell(p.aprendiz?.nombre ?? ""),
-            dataCell(p.juicio ?? "", { center: true }),
-          ],
-        })
-      ),
+      ...participantes.map(p => {
+        const rs = p.rapStatus && typeof p.rapStatus === "object" ? p.rapStatus : null;
+        const rapCells = rapsInfo.map(r => {
+          const val = rs?.[r.codigo] ?? "NO PARTICIPÓ";
+          return dataCell(
+            val === "APROBÓ" ? "Aprobó" : val === "PENDIENTE" ? "Pendiente" : "No participó",
+            { center: true }
+          );
+        });
+        const jTexto = p.juicio === "APROBÓ" ? "Aprobó" : p.juicio === "PENDIENTE" ? "Pendiente" : "No participó";
+        return new TableRow({
+          children: [dataCell(p.aprendiz?.nombre ?? ""), ...rapCells, dataCell(jTexto, { center: true })],
+        });
+      }),
     ];
 
     if (participantes.length === 0) {
@@ -526,7 +543,7 @@ async function actasRoutes(fastify) {
           children: [
             new TableCell({
               borders: cellBorders,
-              columnSpan: 2,
+              columnSpan: 2 + rapsInfo.length,
               children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: "Sin participantes registrados.", size: 20, italics: true })] })],
             }),
           ],

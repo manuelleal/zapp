@@ -1,4 +1,4 @@
-const { BASE_URL, log } = require("./auth");
+const { BASE_URL, log, cerrarModal } = require("./auth");
 
 /**
  * Envía un mensaje interno de Moodle a un aprendiz.
@@ -105,4 +105,56 @@ function construirMensaje({ nombre, instructor, ficha }, evidenciasPendientes = 
   return partes.join("\n");
 }
 
-module.exports = { enviarMensajeMoodle, linkWhatsApp, construirMensaje };
+/**
+ * Sincroniza la lista de participantes (aprendices) de un curso desde la página
+ * de participantes de Moodle/Zajuna. Devuelve nombre, email, documento, último
+ * acceso y moodleId de cada aprendiz (rol Estudiante).
+ *
+ * NUNCA debe explotar — si los selectores fallan loguea el error y retorna [].
+ *
+ * @param {import('playwright').Page} page  — Página autenticada en Zajuna
+ * @param {number|string} courseId          — ID Moodle del curso (Ficha.courseId)
+ * @returns {Promise<Array<{moodleId:string, nombre:string, email:string, documento:string, ultimoAcceso:string}>>}
+ */
+async function sincronizarParticipantes(page, courseId) {
+  try {
+    // roleid=5 = Estudiante/Aprendiz en Moodle. perpage=500 evita paginar.
+    const url = `${BASE_URL}/user/index.php?id=${courseId}&roleid=5&perpage=500`;
+    log(`[sincronizarParticipantes] navegando a ${url}`);
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45_000 });
+    await cerrarModal(page).catch(() => {});
+
+    // Esperar a que la tabla aparezca. Si no aparece en 8s, asumimos que la
+    // página devolvió otra cosa (login expirado, error, etc.) y retornamos [].
+    try {
+      await page.waitForSelector("table tr[data-userid], #participants tr[data-userid]", { timeout: 8000 });
+    } catch {
+      log(`[sincronizarParticipantes] No se encontró tabla de participantes para courseId=${courseId}`);
+      return [];
+    }
+
+    const participantes = await page.evaluate(() => {
+      // Selectores principales de Moodle 4.x. TODO: si fallan, intentar
+      // table.flexible tbody tr, td.cell.c1, td.cell.c2, td.cell.c3, td.cell.c5.
+      const filas = document.querySelectorAll("tr[data-userid]");
+      const txt = (el) => (el?.textContent || "").trim();
+      return Array.from(filas).map((fila) => {
+        const moodleId = fila.getAttribute("data-userid") || "";
+        const nombre   = txt(fila.querySelector(".col-fullname, td.c1, td:nth-child(2)"));
+        const documento = txt(fila.querySelector(".col-username, td.c2, td:nth-child(3)"));
+        const email    = txt(fila.querySelector(".col-email, td.c3, td:nth-child(4)"));
+        const ultimoAcceso = txt(fila.querySelector(".col-lastaccess, td.c5, td:nth-child(6)"));
+        return { moodleId, nombre, email, documento, ultimoAcceso };
+      });
+    });
+
+    const filtrados = participantes.filter(p => p.nombre && p.nombre.length > 3);
+    log(`[sincronizarParticipantes] courseId=${courseId} — ${filtrados.length} encontrados (de ${participantes.length} filas).`);
+    return filtrados;
+  } catch (err) {
+    log(`[sincronizarParticipantes] ERROR courseId=${courseId}: ${err.message}`);
+    return [];
+  }
+}
+
+module.exports = { enviarMensajeMoodle, linkWhatsApp, construirMensaje, sincronizarParticipantes };

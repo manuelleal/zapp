@@ -1,0 +1,562 @@
+import { useState, useEffect, useMemo } from "react"
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
+import {
+  Mail, Send, Loader2, RefreshCw, AlertCircle, CheckCircle2, Clock,
+  Users, History, FileText, ChevronRight, ChevronDown,
+} from "lucide-react"
+import Layout from "@/components/Layout"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Badge } from "@/components/ui/badge"
+import { apiFetch, ApiError } from "@/api/client"
+import { toast } from "sonner"
+import { useAuthStore } from "@/store/auth"
+import { useNavigate, useSearchParams } from "react-router-dom"
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface Ficha { id: string; codigo: string; nombre: string }
+interface Aprendiz {
+  id:           string
+  nombre:       string
+  email:        string | null
+  moodleId:     string | null
+  ultimoAcceso: string | null
+}
+interface MensajeHistorial {
+  id:                 string
+  canal:              string
+  asunto:             string
+  estado:             string
+  enviadoAt:          string | null
+  creadoAt:           string
+  fichaId:            string
+  ficha:              { codigo: string; nombre: string } | null
+  actaId:             string | null
+  errorMsg:           string | null
+  destinatariosCount: number
+}
+
+// ─── Templates ────────────────────────────────────────────────────────────────
+
+const TEMPLATES = {
+  inactividad: {
+    label: "Aprendices inactivos (>7 días)",
+    asunto: "Aprendiz inactivo en Zajuna — {{nombre}}",
+    cuerpo: `Hola {{nombre}},
+
+Hemos notado que llevas varios días sin ingresar a la plataforma Zajuna. Te recordamos que tienes evidencias por entregar en la ficha {{ficha}}.
+
+Por favor ingresa lo antes posible para revisar tu estado de formación.
+
+Saludos,
+{{instructor}}`,
+  },
+  pendientes: {
+    label: "Evidencias pendientes",
+    asunto: "Evidencias pendientes — {{nombre}}",
+    cuerpo: `Hola {{nombre}},
+
+Tienes las siguientes evidencias pendientes en la ficha {{ficha}}:
+
+{{evidencias}}
+
+Por favor entrega lo antes posible.
+
+Saludos,
+{{instructor}}`,
+  },
+  recordatorio: {
+    label: "Recordatorio general",
+    asunto: "Recordatorio formación — {{ficha}}",
+    cuerpo: `Hola {{nombre}},
+
+Te recordamos revisar tu progreso en la ficha {{ficha}}.
+
+Saludos,
+{{instructor}}`,
+  },
+} as const
+
+type TemplateKey = keyof typeof TEMPLATES
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function formatFecha(iso: string | null): string {
+  if (!iso) return "—"
+  try { return new Date(iso).toLocaleString("es-CO", { dateStyle: "short", timeStyle: "short" }) }
+  catch { return iso }
+}
+
+function diasSinAcceso(iso: string | null): number | null {
+  if (!iso) return null
+  const ms = Date.now() - new Date(iso).getTime()
+  return Math.floor(ms / (1000 * 60 * 60 * 24))
+}
+
+function estadoBadge(estado: string): "green" | "yellow" | "gray" | "red" {
+  if (estado === "enviado")    return "green"
+  if (estado === "pendiente")  return "yellow"
+  if (estado === "error")      return "red" as never
+  return "gray"
+}
+
+// ─── Componente principal ─────────────────────────────────────────────────────
+
+export default function MensajesPage() {
+  const queryClient = useQueryClient()
+  const navigate    = useNavigate()
+  const { jwt, user, clearAuth, setAuth } = useAuthStore()
+  const [searchParams] = useSearchParams()
+
+  const [tab, setTab]               = useState<"compositor" | "historial">("compositor")
+  const [fichaId, setFichaId]       = useState("")
+  const [seleccionados, setSeleccionados] = useState<Set<string>>(new Set())
+  const [canal, setCanal]           = useState<"email" | "zajuna">("email")
+  const [asunto, setAsunto]         = useState("")
+  const [cuerpo, setCuerpo]         = useState("")
+  const [templateKey, setTemplateKey] = useState<TemplateKey | "">("")
+  const [filtroPrev, setFiltroPrev] = useState<string>("")
+  const [syncJobId, setSyncJobId]   = useState<string | null>(null)
+  const [enviarJobId, setEnviarJobId] = useState<string | null>(null)
+
+  // ── Auth guard ───────────────────────────────────────────────────────────────
+  useEffect(() => {
+    const storedJwt = localStorage.getItem("zajuna_jwt")
+    if (!storedJwt) { navigate("/login"); return }
+    if (!user && storedJwt) {
+      try {
+        const payload = JSON.parse(atob(storedJwt.split(".")[1]))
+        setAuth(storedJwt, {
+          id: payload.id || "", nombre: payload.nombre || "", email: payload.email || "",
+          competenciaNombre: payload.competenciaNombre || "", competenciaCodigo: payload.competenciaCodigo || "",
+        })
+      } catch { clearAuth(); navigate("/login") }
+    }
+  }, [])
+
+  // ── Pre-filtros desde URL (?actaId=...&filtro=pendientes) ────────────────────
+  useEffect(() => {
+    const filtro = searchParams.get("filtro")
+    if (filtro) setFiltroPrev(filtro)
+    const actaId = searchParams.get("actaId")
+    if (actaId) {
+      // Cargar ficha del acta para preseleccionar
+      apiFetch<{ fichaId: string }>(`/api/actas/${actaId}`).then(a => {
+        if (a?.fichaId) setFichaId(a.fichaId)
+      }).catch(() => {})
+    }
+  }, [searchParams])
+
+  // ── Queries ──────────────────────────────────────────────────────────────────
+  const { data: fichasResp } = useQuery<{ fichas: Ficha[] }>({
+    queryKey: ["fichas-simple"],
+    queryFn:  () => apiFetch<{ fichas: Ficha[] }>("/api/fichas"),
+    enabled:  !!jwt,
+    staleTime: 60_000,
+  })
+  const fichas = fichasResp?.fichas ?? []
+
+  const { data: aprendices = [], isLoading: loadingAprendices, refetch: refetchAprendices } =
+    useQuery<Aprendiz[]>({
+      queryKey: ["mensajes-aprendices", fichaId],
+      queryFn:  () => apiFetch<Aprendiz[]>(`/api/mensajes/aprendices?fichaId=${fichaId}`),
+      enabled:  !!jwt && !!fichaId,
+    })
+
+  const { data: configCorreo } = useQuery<{ id: string } | null>({
+    queryKey: ["ajustes-correo"],
+    queryFn:  () => apiFetch<{ id: string } | null>("/api/ajustes/correo"),
+    enabled:  !!jwt,
+  })
+
+  const { data: historial = [], refetch: refetchHistorial } = useQuery<MensajeHistorial[]>({
+    queryKey: ["mensajes-historial"],
+    queryFn:  () => apiFetch<MensajeHistorial[]>("/api/mensajes/historial"),
+    enabled:  !!jwt && tab === "historial",
+  })
+
+  // ── Aplicar pre-filtro al cargar aprendices ──────────────────────────────────
+  useEffect(() => {
+    if (!aprendices.length) return
+    if (filtroPrev === "inactivos") {
+      const ids = aprendices
+        .filter(a => { const d = diasSinAcceso(a.ultimoAcceso); return d === null || d > 7 })
+        .map(a => a.id)
+      setSeleccionados(new Set(ids))
+      setTemplateKey("inactividad")
+    } else if (filtroPrev === "pendientes") {
+      // Selección no automática; el usuario puede marcar todos
+      setTemplateKey("pendientes")
+    }
+  }, [aprendices, filtroPrev])
+
+  // ── Aplicar template ─────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!templateKey) return
+    const t = TEMPLATES[templateKey]
+    setAsunto(t.asunto)
+    setCuerpo(t.cuerpo)
+  }, [templateKey])
+
+  // ── Mutations ────────────────────────────────────────────────────────────────
+  const syncMutation = useMutation({
+    mutationFn: () => apiFetch<{ jobId: string }>("/api/mensajes/sync-emails", {
+      method: "POST", body: JSON.stringify({ fichaId }),
+    }),
+    onSuccess: (r) => {
+      setSyncJobId(r.jobId)
+      toast.info("Sincronización en progreso (puede tardar 30-60s).")
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Error al sincronizar."),
+  })
+
+  // Polling sync job
+  const { data: syncStatus } = useQuery<{ state: string; result: any; error: string | null }>({
+    queryKey: ["sync-status", syncJobId],
+    queryFn:  () => apiFetch(`/api/mensajes/sync-emails/${syncJobId}`),
+    enabled:  !!syncJobId,
+    refetchInterval: 3000,
+  })
+
+  useEffect(() => {
+    if (!syncStatus) return
+    if (syncStatus.state === "completed") {
+      toast.success(`Sincronización OK: ${syncStatus.result?.actualizados ?? 0} aprendices actualizados.`)
+      setSyncJobId(null)
+      refetchAprendices()
+    } else if (syncStatus.state === "failed") {
+      toast.error(`Sincronización falló: ${syncStatus.error}`)
+      setSyncJobId(null)
+    }
+  }, [syncStatus])
+
+  const enviarMutation = useMutation({
+    mutationFn: () => {
+      const dest = aprendices
+        .filter(a => seleccionados.has(a.id))
+        .map(a => ({
+          aprendizId: a.id,
+          nombre:     a.nombre,
+          email:      a.email,
+          instructor: user?.nombre ?? "",
+          ficha:      fichas.find(f => f.id === fichaId)?.codigo ?? "",
+        }))
+      return apiFetch<{ jobId: string; mensajeFormativoId: string }>("/api/mensajes/enviar-masivo", {
+        method: "POST",
+        body: JSON.stringify({
+          fichaId, canal, asunto, cuerpo,
+          destinatarios: dest,
+          templateTipo:  templateKey || null,
+          actaId:        searchParams.get("actaId") || null,
+        }),
+      })
+    },
+    onSuccess: (r) => {
+      setEnviarJobId(r.jobId)
+      toast.info("Envío iniciado. Monitoreando estado...")
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Error al enviar."),
+  })
+
+  const { data: enviarStatus } = useQuery<{ state: string; result: any; error: string | null }>({
+    queryKey: ["enviar-status", enviarJobId],
+    queryFn:  () => apiFetch(`/api/mensajes/enviar-masivo/${enviarJobId}`),
+    enabled:  !!enviarJobId,
+    refetchInterval: 3000,
+  })
+
+  useEffect(() => {
+    if (!enviarStatus) return
+    if (enviarStatus.state === "completed") {
+      const r = enviarStatus.result || {}
+      toast.success(`Envío completado: ${r.enviados ?? 0}/${r.total ?? 0} entregados${r.errores ? `, ${r.errores} con error` : ""}.`)
+      setEnviarJobId(null)
+      queryClient.invalidateQueries({ queryKey: ["mensajes-historial"] })
+    } else if (enviarStatus.state === "failed") {
+      toast.error(`Envío falló: ${enviarStatus.error}`)
+      setEnviarJobId(null)
+    }
+  }, [enviarStatus])
+
+  // ── Helpers UI ───────────────────────────────────────────────────────────────
+  function toggleAprendiz(id: string) {
+    setSeleccionados(prev => {
+      const n = new Set(prev)
+      if (n.has(id)) n.delete(id); else n.add(id)
+      return n
+    })
+  }
+
+  function toggleAll() {
+    if (seleccionados.size === aprendices.length) setSeleccionados(new Set())
+    else setSeleccionados(new Set(aprendices.map(a => a.id)))
+  }
+
+  function seleccionarInactivos() {
+    const ids = aprendices.filter(a => {
+      const d = diasSinAcceso(a.ultimoAcceso); return d === null || d > 7
+    }).map(a => a.id)
+    setSeleccionados(new Set(ids))
+  }
+
+  const seleccionadosArr = useMemo(
+    () => aprendices.filter(a => seleccionados.has(a.id)),
+    [aprendices, seleccionados]
+  )
+
+  const sinEmail = canal === "email"
+    ? seleccionadosArr.filter(a => !a.email).length
+    : 0
+
+  function previewMensaje(): string {
+    const primero = seleccionadosArr[0]
+    if (!primero) return cuerpo
+    return cuerpo
+      .replace(/\{\{nombre\}\}/gi,     primero.nombre)
+      .replace(/\{\{ficha\}\}/gi,      fichas.find(f => f.id === fichaId)?.codigo ?? "")
+      .replace(/\{\{instructor\}\}/gi, user?.nombre ?? "")
+      .replace(/\{\{evidencias\}\}/gi, "(lista de evidencias del aprendiz)")
+  }
+
+  function handleEnviar() {
+    if (!fichaId) { toast.error("Selecciona una ficha."); return }
+    if (seleccionadosArr.length === 0) { toast.error("Selecciona al menos un destinatario."); return }
+    if (!asunto.trim() || !cuerpo.trim()) { toast.error("Asunto y cuerpo son obligatorios."); return }
+    if (canal === "email" && !configCorreo) {
+      toast.error("Configura el SMTP en Ajustes antes de enviar correos.")
+      return
+    }
+    if (canal === "email" && sinEmail > 0) {
+      if (!confirm(`${sinEmail} aprendices no tienen email. Solo se enviará a los que sí tienen. ¿Continuar?`)) return
+    }
+    enviarMutation.mutate()
+  }
+
+  // ── Render ───────────────────────────────────────────────────────────────────
+  return (
+    <Layout>
+      <div className="space-y-4">
+        {/* Header */}
+        <div className="bg-white rounded-lg border border-gray-200 p-4 flex items-center gap-3 flex-wrap">
+          <Mail className="w-4 h-4 text-sena-green" />
+          <h1 className="text-sm font-semibold text-gray-900">Mensajería masiva</h1>
+          <div className="ml-auto flex items-center gap-1 border border-gray-200 rounded-md p-0.5">
+            <button onClick={() => setTab("compositor")}
+              className={`flex items-center gap-1.5 text-xs px-3 py-1 rounded ${tab === "compositor" ? "bg-sena-green/10 text-sena-green" : "text-gray-600 hover:text-gray-900"}`}>
+              <Send className="w-3 h-3" /> Compositor
+            </button>
+            <button onClick={() => { setTab("historial"); refetchHistorial() }}
+              className={`flex items-center gap-1.5 text-xs px-3 py-1 rounded ${tab === "historial" ? "bg-sena-green/10 text-sena-green" : "text-gray-600 hover:text-gray-900"}`}>
+              <History className="w-3 h-3" /> Historial
+            </button>
+          </div>
+        </div>
+
+        {/* Aviso config SMTP */}
+        {canal === "email" && !configCorreo && (
+          <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 flex items-start gap-2">
+            <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            <div>
+              No tienes configurado el correo SMTP. <button className="underline font-semibold" onClick={() => navigate("/ajustes")}>Ir a Ajustes</button> para configurarlo antes de enviar correos.
+            </div>
+          </div>
+        )}
+
+        {tab === "compositor" ? (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* Sección 1: Destinatarios */}
+            <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
+              <div className="flex items-center gap-2 border-b border-gray-100 pb-2">
+                <Users className="w-4 h-4 text-sena-green" />
+                <h2 className="text-sm font-semibold text-gray-900">Destinatarios</h2>
+                <span className="ml-auto text-xs text-gray-500">{seleccionadosArr.length} seleccionados</span>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="ficha-msg">Ficha *</Label>
+                <select id="ficha-msg" value={fichaId} onChange={e => { setFichaId(e.target.value); setSeleccionados(new Set()) }}
+                  className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring">
+                  <option value="">Seleccionar ficha...</option>
+                  {fichas.map(f => <option key={f.id} value={f.id}>{f.codigo} — {f.nombre}</option>)}
+                </select>
+              </div>
+
+              {fichaId && (
+                <>
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="sm" variant="outline" className="text-xs gap-1.5"
+                      onClick={() => syncMutation.mutate()} disabled={!!syncJobId || syncMutation.isPending}>
+                      {syncJobId ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                      {syncJobId ? "Sincronizando..." : "Sincronizar emails desde Zajuna"}
+                    </Button>
+                    <Button size="sm" variant="outline" className="text-xs" onClick={toggleAll}>
+                      {seleccionados.size === aprendices.length ? "Deseleccionar todos" : "Seleccionar todos"}
+                    </Button>
+                    <Button size="sm" variant="outline" className="text-xs" onClick={seleccionarInactivos}>
+                      Inactivos &gt;7d
+                    </Button>
+                  </div>
+
+                  {loadingAprendices ? (
+                    <div className="flex items-center gap-2 text-xs text-gray-500"><Loader2 className="w-3 h-3 animate-spin" /> Cargando...</div>
+                  ) : aprendices.length === 0 ? (
+                    <p className="text-xs text-gray-400 italic">Sin aprendices. Escanea la ficha en la página Fichas.</p>
+                  ) : (
+                    <div className="border border-gray-200 rounded-md max-h-96 overflow-y-auto">
+                      <table className="w-full text-xs">
+                        <thead className="bg-gray-50 sticky top-0">
+                          <tr>
+                            <th className="w-8 px-2 py-2"></th>
+                            <th className="text-left px-2 py-2 font-semibold text-gray-500">Nombre</th>
+                            <th className="text-left px-2 py-2 font-semibold text-gray-500">Email</th>
+                            <th className="text-center px-2 py-2 font-semibold text-gray-500">Último acceso</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {aprendices.map(a => {
+                            const dias = diasSinAcceso(a.ultimoAcceso)
+                            return (
+                              <tr key={a.id} className="hover:bg-gray-50">
+                                <td className="px-2 py-1.5 text-center">
+                                  <input type="checkbox" checked={seleccionados.has(a.id)}
+                                    onChange={() => toggleAprendiz(a.id)}
+                                    className="h-3.5 w-3.5 rounded border-gray-300 text-sena-green" />
+                                </td>
+                                <td className="px-2 py-1.5 text-gray-700">{a.nombre}</td>
+                                <td className="px-2 py-1.5 text-gray-600">
+                                  {a.email || (
+                                    <span className="text-amber-600 inline-flex items-center gap-1" title="Sin email — sincroniza desde Zajuna">
+                                      <AlertCircle className="w-3 h-3" /> sin email
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="px-2 py-1.5 text-center">
+                                  {dias === null ? (
+                                    <span className="text-gray-400">—</span>
+                                  ) : dias > 7 ? (
+                                    <span className="text-red-600 font-medium">{dias}d</span>
+                                  ) : (
+                                    <span className="text-gray-500">{dias}d</span>
+                                  )}
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            {/* Sección 2: Mensaje */}
+            <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
+              <div className="flex items-center gap-2 border-b border-gray-100 pb-2">
+                <FileText className="w-4 h-4 text-sena-green" />
+                <h2 className="text-sm font-semibold text-gray-900">Mensaje</h2>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Canal</Label>
+                <div className="flex gap-3">
+                  <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                    <input type="radio" checked={canal === "email"} onChange={() => setCanal("email")} className="h-3.5 w-3.5" />
+                    Correo electrónico
+                  </label>
+                  <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                    <input type="radio" checked={canal === "zajuna"} onChange={() => setCanal("zajuna")} className="h-3.5 w-3.5" />
+                    Mensaje interno Zajuna
+                  </label>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="template">Plantilla (opcional)</Label>
+                <select id="template" value={templateKey}
+                  onChange={e => setTemplateKey(e.target.value as TemplateKey | "")}
+                  className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring">
+                  <option value="">— Sin plantilla —</option>
+                  {Object.entries(TEMPLATES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                </select>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="asunto">Asunto *</Label>
+                <Input id="asunto" value={asunto} onChange={e => setAsunto(e.target.value)} />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="cuerpo">Cuerpo * <span className="text-gray-400 font-normal">(variables: {"{{nombre}}"}, {"{{ficha}}"}, {"{{instructor}}"}, {"{{evidencias}}"})</span></Label>
+                <textarea id="cuerpo" value={cuerpo} onChange={e => setCuerpo(e.target.value)}
+                  rows={8}
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring resize-none font-mono" />
+              </div>
+
+              {seleccionadosArr.length > 0 && (
+                <details className="rounded-md border border-gray-200 bg-gray-50 p-2 text-xs">
+                  <summary className="cursor-pointer font-semibold text-gray-700">Vista previa (primer destinatario: {seleccionadosArr[0].nombre})</summary>
+                  <pre className="mt-2 whitespace-pre-wrap text-gray-600">{previewMensaje()}</pre>
+                </details>
+              )}
+
+              {sinEmail > 0 && canal === "email" && (
+                <div className="text-xs text-amber-700 flex items-center gap-1">
+                  <AlertCircle className="w-3 h-3" /> {sinEmail} de {seleccionadosArr.length} sin email — se omitirán.
+                </div>
+              )}
+
+              <div className="pt-2 border-t border-gray-100 flex items-center gap-2">
+                <Button size="sm" className="bg-sena-green hover:bg-sena-green/90 gap-1.5 text-xs"
+                  onClick={handleEnviar} disabled={enviarMutation.isPending || !!enviarJobId}>
+                  {(enviarMutation.isPending || enviarJobId) ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+                  Enviar a {seleccionadosArr.length}
+                </Button>
+                {enviarJobId && enviarStatus && (
+                  <span className="text-xs text-gray-500">Estado: {enviarStatus.state}</span>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : (
+          // ── Tab: Historial ─────────────────────────────────────────────────
+          <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+            {historial.length === 0 ? (
+              <p className="text-sm text-gray-500 p-8 text-center">Sin mensajes enviados aún.</p>
+            ) : (
+              <table className="w-full text-xs">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="text-left px-3 py-2 font-semibold text-gray-500">Fecha</th>
+                    <th className="text-left px-3 py-2 font-semibold text-gray-500">Canal</th>
+                    <th className="text-left px-3 py-2 font-semibold text-gray-500">Asunto</th>
+                    <th className="text-left px-3 py-2 font-semibold text-gray-500">Ficha</th>
+                    <th className="text-center px-3 py-2 font-semibold text-gray-500">Dest.</th>
+                    <th className="text-center px-3 py-2 font-semibold text-gray-500">Estado</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {historial.map(m => (
+                    <tr key={m.id}>
+                      <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{formatFecha(m.enviadoAt ?? m.creadoAt)}</td>
+                      <td className="px-3 py-2 text-gray-600">{m.canal}</td>
+                      <td className="px-3 py-2 text-gray-700">{m.asunto}</td>
+                      <td className="px-3 py-2 text-gray-600">{m.ficha?.codigo ?? "—"}</td>
+                      <td className="px-3 py-2 text-center text-gray-600">{m.destinatariosCount}</td>
+                      <td className="px-3 py-2 text-center">
+                        <Badge variant={estadoBadge(m.estado) as any} className="text-xs">{m.estado}</Badge>
+                        {m.errorMsg && <p className="text-[10px] text-red-600 mt-0.5" title={m.errorMsg}>{m.errorMsg.substring(0, 40)}{m.errorMsg.length > 40 ? "..." : ""}</p>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
+      </div>
+    </Layout>
+  )
+}
