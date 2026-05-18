@@ -1,4 +1,5 @@
 const prisma = require("../db/client");
+const { filtrarAprendicesValidos } = require("../lib/aprendices");
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -283,13 +284,12 @@ async function actasRoutes(fastify) {
 
     const todasEvidenciaIds = [...new Set([...relsConfirmadas, ...relsIA].map(r => r.evidenciaId))];
 
-    // ── Aprendices de la ficha (filtrando nombres inválidos: AA, AG, etc.) ─────
-    const NOMBRE_INVALIDO = /^[A-Z]{1,3}$|^.{1,4}$/;
+    // ── Aprendices de la ficha (filtrando nombres inválidos: AA, AG, ABALEJANDRO…)
     const aprendicesRaw = await prisma.aprendiz.findMany({
       where:  { fichaId: acta.fichaId },
       select: { id: true, nombre: true },
     });
-    const aprendices = aprendicesRaw.filter(a => !NOMBRE_INVALIDO.test((a.nombre || "").trim()));
+    const aprendices = filtrarAprendicesValidos(aprendicesRaw);
     const nFiltrados = aprendicesRaw.length - aprendices.length;
     const aprendizIds = aprendices.map(a => a.id);
 
