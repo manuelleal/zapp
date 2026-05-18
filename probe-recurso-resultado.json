@@ -1,0 +1,346 @@
+[
+  {
+    "etiqueta": "GA01",
+    "pdfUrl": "https://zajuna.sena.edu.co/Repositorio/Titulada/institution/SENA/Tecnologia/228118_1/Contenido/DocArtic/GUI1/Guia_aprendizaje_1.pdf",
+    "codigosSena": [
+      {
+        "codigo": "220501092-01",
+        "competencia": "220501092",
+        "rapNum": 1,
+        "descripcion": "Caracterizar los procesos de la organización de acuerdo con el software a"
+      },
+      {
+        "codigo": "220501092-02",
+        "competencia": "220501092",
+        "rapNum": 2,
+        "descripcion": "Recolectar información del software a construir de acuerdo con las necesidades"
+      },
+      {
+        "codigo": "220501092-03",
+        "competencia": "220501092",
+        "rapNum": 3,
+        "descripcion": "Establecer los requisitos del software de acuerdo con la información"
+      },
+      {
+        "codigo": "220501092-04",
+        "competencia": "220501092",
+        "rapNum": 4,
+        "descripcion": "Validar el informe de requisitos de acuerdo con las necesidades del cliente."
+      },
+      {
+        "codigo": "220501093-01",
+        "competencia": "220501093",
+        "rapNum": 1,
+        "descripcion": "Planear actividades de análisis de acuerdo con la metodología seleccionada."
+      },
+      {
+        "codigo": "220501046-01",
+        "competencia": "220501046",
+        "rapNum": 1,
+        "descripcion": "Alistar herramientas de tecnologías de la información y la comunicación (TIC),"
+      },
+      {
+        "codigo": "220501046-02",
+        "competencia": "220501046",
+        "rapNum": 2,
+        "descripcion": "Aplicar funcionalidades de herramientas y servicios TIC, de acuerdo con"
+      },
+      {
+        "codigo": "220501046-03",
+        "competencia": "220501046",
+        "rapNum": 3,
+        "descripcion": "Evaluar los resultados, de acuerdo con los requerimientos."
+      },
+      {
+        "codigo": "220501046-04",
+        "competencia": "220501046",
+        "rapNum": 4,
+        "descripcion": "Optimizar los resultados, de acuerdo con la verificación."
+      },
+      {
+        "codigo": "240202501-01",
+        "competencia": "240202501",
+        "rapNum": 1,
+        "descripcion": "Comprender información sobre situaciones cotidianas y laborales actuales y"
+      }
+    ],
+    "bloqueEncontrado": true,
+    "textoMuestra": "GFPI-F-135 V02\nPROCESO DE GESTIÓN DE FORMACIÓN PROFESIONAL INTEGRAL\nFORMATO GUÍA DE APRENDIZAJE\n1. IDENTIFICACIÓN DE LA GUÍA DE APRENDIZAJE\n• Denominación del programa de formación: Análisis y desarrollo de software\n• Código del programa de formación: 228118\n• Nombre del proyecto: Construcción de software integrador de tecnologías orientadas a servicios.\n• Fase del proyecto: Análisis.\n• Actividad "
+  },
+  {
+    "etiqueta": "GA02",
+    "pdfUrl": "https://zajuna.sena.edu.co/Repositorio/Titulada/institution/SENA/Tecnologia/228118_1/Contenido/DocArtic/GUI2/Guia_aprendizaje_2.pdf",
+    "codigosSena": [
+      {
+        "codigo": "220501093-04",
+        "competencia": "220501093",
+        "rapNum": 4,
+        "descripcion": "Verificar los modelos realizados en la fase de análisis de acuerdo con lo"
+      },
+      {
+        "codigo": "220501094-01",
+        "competencia": "220501094",
+        "rapNum": 1,
+        "descripcion": "Definir especificaciones técnicas del software de acuerdo con las características"
+      },
+      {
+        "codigo": "220501094-02",
+        "competencia": "220501094",
+        "rapNum": 2,
+        "descripcion": "Elaborar propuesta técnica del software de acuerdo con las especificaciones"
+      },
+      {
+        "codigo": "220501094-03",
+        "competencia": "220501094",
+        "rapNum": 3,
+        "descripcion": "Validar las condiciones de la propuesta técnica del software de acuerdo con los"
+      },
+      {
+        "codigo": "240201528-01",
+        "competencia": "240201528",
+        "rapNum": 1,
+        "descripcion": "Identificar modelos matemáticos de acuerdo con los requerimientos del"
+      },
+      {
+        "codigo": "240201528-02",
+        "competencia": "240201528",
+        "rapNum": 2,
+        "descripcion": "Plantear problemas matemáticos a partir de situaciones generadas en el"
+      },
+      {
+        "codigo": "240201528-03",
+        "competencia": "240201528",
+        "rapNum": 3,
+        "descripcion": "Resolver problemas matemáticos a partir de situaciones generadas en el"
+      },
+      {
+        "codigo": "240201528-04",
+        "competencia": "240201528",
+        "rapNum": 4,
+        "descripcion": "Proponer acciones de mejora frente a los resultados de los procedimientos"
+      },
+      {
+        "codigo": "240202501-02",
+        "competencia": "240202501",
+        "rapNum": 2,
+        "descripcion": "Intercambiar opiniones sobre situaciones cotidianas y laborales actuales,"
+      }
+    ],
+    "bloqueEncontrado": true,
+    "textoMuestra": "GFPI-F-135 V02\nPROCESO DE GESTIÓN DE FORMACIÓN PROFESIONAL INTEGRAL\nFORMATO GUÍA DE APRENDIZAJE\n1. IDENTIFICACIÓN DE LA GUÍA DE APRENDIZAJE\n• Denominación del programa de formación: Análisis y desarrollo de software\n• Código del programa de formación: 228118\n• Nombre del proyecto: Construcción de software integrador de tecnologías orientadas a servicios.\n• Fase del proyecto: Análisis.\n• Actividad "
+  },
+  {
+    "etiqueta": "GA03",
+    "pdfUrl": "https://zajuna.sena.edu.co/Repositorio/Titulada/institution/SENA/Tecnologia/228118_1/Contenido/DocArtic/GUI3/Guia_aprendizaje_3.pdf",
+    "codigosSena": [
+      {
+        "codigo": "220501093-03",
+        "competencia": "220501093",
+        "rapNum": 3,
+        "descripcion": "Desarrollar procesos lógicos a través de la implementación de algoritmos."
+      },
+      {
+        "codigo": "220201501-01",
+        "competencia": "220201501",
+        "rapNum": 1,
+        "descripcion": "Identificar los principios y leyes de la física en la solución de problemas de"
+      },
+      {
+        "codigo": "220201501-02",
+        "competencia": "220201501",
+        "rapNum": 2,
+        "descripcion": "Solucionar problemas asociados con el sector productivo con base en los"
+      },
+      {
+        "codigo": "220201501-03",
+        "competencia": "220201501",
+        "rapNum": 3,
+        "descripcion": "Verificar las transformaciones físicas de la materia utilizando herramientas."
+      },
+      {
+        "codigo": "220201501-04",
+        "competencia": "220201501",
+        "rapNum": 4,
+        "descripcion": "Proponer acciones de mejora en los procesos productivos de acuerdo con los"
+      },
+      {
+        "codigo": "240202501-03",
+        "competencia": "240202501",
+        "rapNum": 3,
+        "descripcion": "Discutir sobre posibles soluciones a problemas dentro de un rango variado de"
+      }
+    ],
+    "bloqueEncontrado": true,
+    "textoMuestra": "GFPI-F-135 V02\nPROCESO DE GESTIÓN DE FORMACIÓN PROFESIONAL INTEGRAL\nFORMATO GUÍA DE APRENDIZAJE\n1. IDENTIFICACIÓN DE LA GUÍA DE APRENDIZAJE\n• Denominación del programa de formación: Análisis y desarrollo de software\n• Código del programa de formación: 228118\n• Nombre del proyecto: Construcción de software integrador de tecnologías orientadas a servicios.\n• Fase del proyecto: Planeación.\n• Activida"
+  },
+  {
+    "etiqueta": "GA04",
+    "pdfUrl": "https://zajuna.sena.edu.co/Repositorio/Titulada/institution/SENA/Tecnologia/228118_1/Contenido/DocArtic/GUI4/Guia_aprendizaje_4.pdf",
+    "codigosSena": [
+      {
+        "codigo": "220501095-02",
+        "competencia": "220501095",
+        "rapNum": 2,
+        "descripcion": "Estructurar el modelo de datos del software de acuerdo con las especificaciones"
+      },
+      {
+        "codigo": "220501095-01",
+        "competencia": "220501095",
+        "rapNum": 1,
+        "descripcion": "Elaborar los artefactos de diseño del software siguiendo las prácticas de la"
+      },
+      {
+        "codigo": "220501095-04",
+        "competencia": "220501095",
+        "rapNum": 4,
+        "descripcion": "Verificar los entregables de la fase de diseño del software de acuerdo con lo"
+      },
+      {
+        "codigo": "240201524-01",
+        "competencia": "240201524",
+        "rapNum": 1,
+        "descripcion": "Analizar los componentes de la comunicación según sus características,"
+      },
+      {
+        "codigo": "240201524-02",
+        "competencia": "240201524",
+        "rapNum": 2,
+        "descripcion": "Argumentar en forma oral y escrita atendiendo las exigencias y particularidades"
+      },
+      {
+        "codigo": "240201524-03",
+        "competencia": "240201524",
+        "rapNum": 3,
+        "descripcion": "Relacionar los procesos comunicativos teniendo en cuenta criterios de lógica y"
+      },
+      {
+        "codigo": "240201524-04",
+        "competencia": "240201524",
+        "rapNum": 4,
+        "descripcion": "Establecer procesos de enriquecimiento lexical y acciones de mejoramiento en"
+      },
+      {
+        "codigo": "240202501-04",
+        "competencia": "240202501",
+        "rapNum": 4,
+        "descripcion": "Implementar acciones de mejora relacionadas con el uso de expresiones,"
+      }
+    ],
+    "bloqueEncontrado": true,
+    "textoMuestra": "GFPI-F-135 V02\nPROCESO DE GESTIÓN DE FORMACIÓN PROFESIONAL INTEGRAL\nFORMATO GUÍA DE APRENDIZAJE\n1. IDENTIFICACIÓN DE LA GUÍA DE APRENDIZAJE\n• Denominación del programa de formación: Análisis y desarrollo de software\n• Código del programa de formación: 228118\n• Nombre del proyecto: Construcción de software integrador de tecnologías orientadas a servicios.\n• Fase del proyecto: Planeación.\n• Activida"
+  },
+  {
+    "etiqueta": "GA05",
+    "pdfUrl": "https://zajuna.sena.edu.co/Repositorio/Titulada/institution/SENA/Tecnologia/228118_1/Contenido/DocArtic/GUI5/Guia_aprendizaje_5.pdf",
+    "codigosSena": [
+      {
+        "codigo": "220501095-03",
+        "competencia": "220501095",
+        "rapNum": 3,
+        "descripcion": "Determinar las características técnicas de la interfaz gráfica del software"
+      },
+      {
+        "codigo": "240201064-01",
+        "competencia": "240201064",
+        "rapNum": 1,
+        "descripcion": "Analizar el contexto productivo según sus características y necesidades."
+      },
+      {
+        "codigo": "240201064-02",
+        "competencia": "240201064",
+        "rapNum": 2,
+        "descripcion": "Estructurar el proyecto de acuerdo a criterios de la investigación."
+      },
+      {
+        "codigo": "240201064-03",
+        "competencia": "240201064",
+        "rapNum": 3,
+        "descripcion": "Argumentar aspectos teóricos del proyecto según referentes nacionales e"
+      },
+      {
+        "codigo": "240201064-04",
+        "competencia": "240201064",
+        "rapNum": 4,
+        "descripcion": "Proponer soluciones a las necesidades del contexto según resultados de la"
+      },
+      {
+        "codigo": "240202501-05",
+        "competencia": "240202501",
+        "rapNum": 5,
+        "descripcion": "Presentar un proceso para la realización de una actividad en su quehacer laboral"
+      }
+    ],
+    "bloqueEncontrado": true,
+    "textoMuestra": "GFPI-F-135 V02\nPROCESO DE GESTIÓN DE FORMACIÓN PROFESIONAL INTEGRAL\nFORMATO GUÍA DE APRENDIZAJE\n1. IDENTIFICACIÓN DE LA GUÍA DE APRENDIZAJE\n• Denominación del programa de formación: Análisis y desarrollo de software\n• Código del programa de formación: 228118\n• Nombre del proyecto: Construcción de software integrador de tecnologías orientadas a servicios.\n• Fase del proyecto: Planeación.\n• Activida"
+  },
+  {
+    "etiqueta": "GA06",
+    "pdfUrl": "https://zajuna.sena.edu.co/Repositorio/Titulada/institution/SENA/Tecnologia/228118_1/Contenido/DocArtic/GUI6/Guia_aprendizaje_6.pdf",
+    "codigosSena": [
+      {
+        "codigo": "220501096-02",
+        "competencia": "220501096",
+        "rapNum": 2,
+        "descripcion": "Construir la base de datos para el software a partir del modelo de datos."
+      },
+      {
+        "codigo": "220501096-03",
+        "competencia": "220501096",
+        "rapNum": 3,
+        "descripcion": "Crear componentes front-end del software de acuerdo con el diseño."
+      },
+      {
+        "codigo": "230101507-01",
+        "competencia": "230101507",
+        "rapNum": 1,
+        "descripcion": "Desarrollar habilidades psicomotrices en el contexto productivo y social."
+      },
+      {
+        "codigo": "230101507-02",
+        "competencia": "230101507",
+        "rapNum": 2,
+        "descripcion": "Practicar hábitos saludables mediante la aplicación de fundamentos de"
+      },
+      {
+        "codigo": "230101507-03",
+        "competencia": "230101507",
+        "rapNum": 3,
+        "descripcion": "Ejecutar actividades de acondicionamiento físico orientadas hacia el"
+      },
+      {
+        "codigo": "230101507-04",
+        "competencia": "230101507",
+        "rapNum": 4,
+        "descripcion": "Implementar un plan de ergonomía y pausas activas según las características de"
+      },
+      {
+        "codigo": "240202501-06",
+        "competencia": "240202501",
+        "rapNum": 6,
+        "descripcion": "Explicar las funciones de su ocupación laboral usando expresiones de acuerdo"
+      }
+    ],
+    "bloqueEncontrado": true,
+    "textoMuestra": "GFPI-F-135 V02\nPROCESO DE GESTIÓN DE FORMACIÓN PROFESIONAL INTEGRAL\nFORMATO GUÍA DE APRENDIZAJE\n1. IDENTIFICACIÓN DE LA GUÍA DE APRENDIZAJE\n• Denominación del programa de formación: Análisis y desarrollo de software\n• Código del programa de formación: 228118\n• Nombre del proyecto: Construcción de software integrador de tecnologías orientadas a servicios.\n• Fase del proyecto: Ejecución.\n• Actividad"
+  },
+  {
+    "etiqueta": "GA07",
+    "pdfUrl": "https://zajuna.sena.edu.co/Repositorio/Titulada/institution/SENA/Tecnologia/228118_1/Contenido/DocArtic/GUI7/Guia_aprendizaje_7.pdf",
+    "codigosSena": [
+      {
+        "codigo": "220501096-01",
+        "competencia": "220501096",
+        "rapNum": 1,
+        "descripcion": "Planear actividades de construcción del software de acuerdo con el diseño"
+      },
+      {
+        "codigo": "220501096-04",
+        "competencia": "220501096",
+        "rapNum": 4,
+        "descripcion": "Codificar el software de acuerdo con el diseño establecido."
+      }
+    ],
+    "bloqueEncontrado": true,
+    "textoMuestra": "GFPI-F-135 V02\nPROCESO DE GESTIÓN DE FORMACIÓN PROFESIONAL INTEGRAL\nFORMATO GUÍA DE APRENDIZAJE\n1. IDENTIFICACIÓN DE LA GUÍA DE APRENDIZAJE\n• Denominación del programa de formación: Análisis y desarrollo de software.\n• Código del programa de formación: 228118.\n• Nombre del proyecto: Construcción de software integrador de tecnologías orientadas a servicios.\n• Fase del proyecto: Ejecución.\n• Activid"
+  }
+]

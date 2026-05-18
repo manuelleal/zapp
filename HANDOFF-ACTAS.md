@@ -2,14 +2,14 @@
 
 > Documento de sprint para el módulo de Actas de Seguimiento institucionales.
 > Léelo COMPLETO antes de tocar cualquier archivo.
-> **Última actualización: 17 mayo 2026 — Plan refinado post-análisis, listo para implementar.**
+> **Última actualización: 18 mayo 2026 — Sprint Actas v2 COMPLETO. Smoke test 13/13 OK.**
 
 ---
 
 ## Estado actual de la rama
 
 - **Rama:** `feat/frontend-resilience-e2e`
-- **Último commit:** `64feb0d` — feat(actas): CSV import GOR-F-084 V02 — Fase 1 completa
+- **Último commit:** `3ccd899` — feat(actas): Actas v2 — rapStatus por RAP, 3 estados, archive, delete, notas
 
 ---
 
