@@ -73,6 +73,8 @@ async function actasRoutes(fastify) {
   fastify.get("/api/actas", { preHandler: fastify.authenticate }, async (req) => {
     const where = { userId: req.user.id };
     if (req.query?.fichaId) where.fichaId = req.query.fichaId;
+    const incluirArchivadas = req.query?.incluirArchivadas === "1";
+    where.archivadaAt = incluirArchivadas ? undefined : null;
 
     const actas = await prisma.actaSeguimiento.findMany({
       where,
@@ -95,9 +97,15 @@ async function actasRoutes(fastify) {
       where:   { id: acta.id },
       include: {
         participantes: {
-          include: {
+          select: {
+            id:          true,
+            aprendizId:  true,
+            juicio:      true,
+            rapStatus:   true,
+            hasUngraded: true,
             aprendiz: { select: { nombre: true, moodleId: true } },
           },
+          orderBy: { aprendiz: { nombre: "asc" } },
         },
         mensajes: {
           select: {
@@ -143,19 +151,22 @@ async function actasRoutes(fastify) {
     const acta = await verificarActaDelUsuario(req.params.id, req.user.id, reply);
     if (!acta) return;
 
-    if (acta.estado !== "borrador") {
+    const { conclusiones, compromisos, hora, lugar, objetivo, rapIds, archivada, notas } = req.body || {};
+
+    // archivada toggle works for any estado; other edits require borrador
+    if (acta.estado !== "borrador" && typeof archivada !== "boolean") {
       return reply.code(422).send({ error: "Solo se pueden editar actas en estado borrador." });
     }
 
-    const { conclusiones, compromisos, hora, lugar, objetivo, rapIds } = req.body || {};
-
     const data = {};
+    if (typeof archivada === "boolean")  data.archivadaAt  = archivada ? new Date() : null;
     if (conclusiones !== undefined) data.conclusiones = conclusiones;
     if (compromisos  !== undefined) data.compromisos  = compromisos;
     if (hora         !== undefined) data.hora         = hora;
     if (lugar        !== undefined) data.lugar        = lugar;
     if (objetivo     !== undefined) data.objetivo     = objetivo;
     if (rapIds       !== undefined) data.rapIds       = rapIds;
+    if (notas        !== undefined) data.notas        = notas;
 
     const actualizada = await prisma.actaSeguimiento.update({
       where: { id: acta.id },
@@ -179,7 +190,7 @@ async function actasRoutes(fastify) {
       return reply.code(400).send({ error: "Se requiere un array de { aprendizId, juicio }." });
     }
 
-    const JUICIOS_VALIDOS = ["APROBÓ", "EVIDENCIAS PENDIENTES", "NO PARTICIPÓ", "NO ASISTIÓ", "PENDIENTE"];
+    const JUICIOS_VALIDOS = ["APROBÓ", "PENDIENTE", "NO PARTICIPÓ"];
 
     for (const j of juicios) {
       if (!j.aprendizId || !JUICIOS_VALIDOS.includes(j.juicio)) {
@@ -190,13 +201,44 @@ async function actasRoutes(fastify) {
     await Promise.all(juicios.map(j =>
       prisma.actaParticipante.upsert({
         where:  { actaId_aprendizId: { actaId: acta.id, aprendizId: j.aprendizId } },
-        create: { actaId: acta.id, aprendizId: j.aprendizId, juicio: j.juicio },
-        update: { juicio: j.juicio },
+        create: { actaId: acta.id, aprendizId: j.aprendizId, juicio: j.juicio, rapStatus: j.rapStatus ?? undefined },
+        update: { juicio: j.juicio, ...(j.rapStatus !== undefined && { rapStatus: j.rapStatus }) },
       })
     ));
 
     const count = await prisma.actaParticipante.count({ where: { actaId: acta.id } });
     return { participantesCount: count };
+  });
+
+  // ── DELETE /api/actas/:id ────────────────────────────────────────────────────
+  fastify.delete("/api/actas/:id", { preHandler: fastify.authenticate }, async (req, reply) => {
+    const acta = await verificarActaDelUsuario(req.params.id, req.user.id, reply);
+    if (!acta) return;
+
+    await prisma.actaParticipante.deleteMany({ where: { actaId: acta.id } });
+    await prisma.actaSeguimiento.delete({ where: { id: acta.id } });
+
+    return reply.code(200).send({ deleted: true });
+  });
+
+  // ── DELETE /api/actas/:id/participantes/:participanteId ───────────────────────
+  fastify.delete("/api/actas/:id/participantes/:participanteId", { preHandler: fastify.authenticate }, async (req, reply) => {
+    const acta = await verificarActaDelUsuario(req.params.id, req.user.id, reply);
+    if (!acta) return;
+
+    if (acta.estado !== "borrador") {
+      return reply.code(422).send({ error: "Solo se pueden eliminar participantes en actas borrador." });
+    }
+
+    const participante = await prisma.actaParticipante.findUnique({
+      where: { id: req.params.participanteId },
+    });
+    if (!participante || participante.actaId !== acta.id) {
+      return reply.code(404).send({ error: "Participante no encontrado en esta acta." });
+    }
+
+    await prisma.actaParticipante.delete({ where: { id: req.params.participanteId } });
+    return reply.code(200).send({ deleted: true });
   });
 
   // ── POST /api/actas/:id/auto-poblar ─────────────────────────────────────────
@@ -213,91 +255,113 @@ async function actasRoutes(fastify) {
       return reply.code(422).send({ error: "El acta no tiene RAPs asociados." });
     }
 
-    // Buscar evidencias asociadas a los RAPs que pertenezcan a la ficha del acta
-    const rels = await prisma.rapEvidenciaRel.findMany({
-      where:   { rapId: { in: rapIds } },
-      include: { evidencia: { select: { id: true, fichaId: true } } },
+    // ── Obtener RAPs con su código ──────────────────────────────────────────────
+    const rapsInfo = await prisma.rAP.findMany({
+      where:  { id: { in: rapIds } },
+      select: { id: true, codigo: true },
     });
+    const rapCodigoPorId = new Map(rapsInfo.map(r => [r.id, r.codigo]));
 
-    const evidenciaIds = [
-      ...new Set(
-        rels
-          .filter(r => r.evidencia.fichaId === acta.fichaId)
-          .map(r => r.evidencia.id)
-      ),
-    ];
+    // ── Evidencias por RAP (confirmadas + IA aceptadas) ────────────────────────
+    const [relsConfirmadas, relsIA] = await Promise.all([
+      prisma.rapEvidenciaRel.findMany({
+        where:  { rapId: { in: rapIds }, evidencia: { fichaId: acta.fichaId } },
+        select: { rapId: true, evidenciaId: true },
+      }),
+      prisma.matchingPropuesta.findMany({
+        where:  { rapId: { in: rapIds }, estado: "aceptado", evidencia: { fichaId: acta.fichaId } },
+        select: { rapId: true, evidenciaId: true },
+      }),
+    ]);
 
-    // Obtener aprendices de la ficha
+    // Mapa: rapId → Set<evidenciaId>
+    const mapaRapEvidencias = new Map();
+    for (const rel of [...relsConfirmadas, ...relsIA]) {
+      if (!mapaRapEvidencias.has(rel.rapId)) mapaRapEvidencias.set(rel.rapId, new Set());
+      mapaRapEvidencias.get(rel.rapId).add(rel.evidenciaId);
+    }
+
+    const todasEvidenciaIds = [...new Set([...relsConfirmadas, ...relsIA].map(r => r.evidenciaId))];
+
+    // ── Aprendices de la ficha ─────────────────────────────────────────────────
     const aprendices = await prisma.aprendiz.findMany({
-      where: { fichaId: acta.fichaId },
+      where:  { fichaId: acta.fichaId },
       select: { id: true },
     });
-
     const aprendizIds = aprendices.map(a => a.id);
 
-    // 1 query para todas las entregas relevantes (antes: 1 query × N aprendices)
-    const todasEntregas = evidenciaIds.length > 0
+    // ── Todas las entregas relevantes en una query ─────────────────────────────
+    const todasEntregas = todasEvidenciaIds.length > 0
       ? await prisma.entrega.findMany({
           where: {
             aprendizId:  { in: aprendizIds },
-            evidenciaId: { in: evidenciaIds },
+            evidenciaId: { in: todasEvidenciaIds },
           },
-          select: { aprendizId: true, estado: true, notaActual: true },
+          select: { aprendizId: true, evidenciaId: true, estado: true, notaActual: true },
         })
       : [];
 
-    // Agrupar en memoria por aprendizId
-    const entregasPorAprendiz = new Map();
+    // Agrupar entregas: aprendizId → evidenciaId → entrega
+    const entregasMap = new Map();
     for (const e of todasEntregas) {
-      if (!entregasPorAprendiz.has(e.aprendizId)) entregasPorAprendiz.set(e.aprendizId, []);
-      entregasPorAprendiz.get(e.aprendizId).push(e);
+      if (!entregasMap.has(e.aprendizId)) entregasMap.set(e.aprendizId, new Map());
+      entregasMap.get(e.aprendizId).set(e.evidenciaId, e);
     }
 
-    // Calcular juicio GOR-F-084 V02 (4 estados) y preparar upserts
-    let aprobaron          = 0;
-    let evidenciasPendientes = 0;
-    let noParticiparon     = 0;
+    // ── Calcular rapStatus + juicio + hasUngraded por aprendiz ─────────────────
+    function esAprobada(e) {
+      return (e.notaActual !== null && e.notaActual > 0) || /aprobad|^A$/i.test(e.estado ?? "");
+    }
+
+    let nAprobaron = 0, nPendientes = 0, nNoParticiparon = 0, nWarnings = 0;
 
     const upserts = aprendices.map(aprendiz => {
-      const entregas = entregasPorAprendiz.get(aprendiz.id) ?? [];
-      let juicio;
+      const entregasAprendiz = entregasMap.get(aprendiz.id) ?? new Map();
+      const rapStatus = {};
+      let hasUngraded = false;
 
-      if (entregas.length === 0) {
-        // Regla 4: sin ningún registro → No participó
-        juicio = "NO PARTICIPÓ";
-        noParticiparon++;
-      } else {
-        const todasAprobadas = entregas.every(e =>
-          (e.notaActual !== null && e.notaActual > 0) ||
-          /aprobad|^A$/i.test(e.estado ?? "")
-        );
-        if (todasAprobadas) {
-          // Regla 1: todos aprobados
-          juicio = "APROBÓ";
-          aprobaron++;
+      for (const rapId of rapIds) {
+        const codigo = rapCodigoPorId.get(rapId) ?? rapId;
+        const evidIds = mapaRapEvidencias.get(rapId) ?? new Set();
+
+        const entregasDelRap = [...evidIds]
+          .map(eid => entregasAprendiz.get(eid))
+          .filter(Boolean);
+
+        if (entregasDelRap.length === 0) {
+          rapStatus[codigo] = "NO PARTICIPÓ";
         } else {
-          // Reglas 2/3: tiene registros pero no todo aprobado
-          juicio = "EVIDENCIAS PENDIENTES";
-          evidenciasPendientes++;
+          const tieneAprobada = entregasDelRap.some(e => esAprobada(e));
+          rapStatus[codigo] = tieneAprobada ? "APROBÓ" : "PENDIENTE";
+          if (entregasDelRap.some(e => e.estado === "pendiente")) hasUngraded = true;
         }
       }
 
+      // Juicio global desde rapStatus
+      const valores = Object.values(rapStatus);
+      let juicio;
+      if (valores.every(v => v === "APROBÓ"))         { juicio = "APROBÓ";       nAprobaron++; }
+      else if (valores.every(v => v === "NO PARTICIPÓ")) { juicio = "NO PARTICIPÓ"; nNoParticiparon++; }
+      else                                              { juicio = "PENDIENTE";   nPendientes++; }
+
+      if (hasUngraded) nWarnings++;
+
       return prisma.actaParticipante.upsert({
         where:  { actaId_aprendizId: { actaId: acta.id, aprendizId: aprendiz.id } },
-        create: { actaId: acta.id, aprendizId: aprendiz.id, juicio },
-        update: { juicio },
+        create: { actaId: acta.id, aprendizId: aprendiz.id, juicio, rapStatus, hasUngraded },
+        update: { juicio, rapStatus, hasUngraded },
       });
     });
 
-    // 1 transacción atómica para todos los upserts
     await prisma.$transaction(upserts);
 
     return {
-      poblados:             aprendices.length,
-      aprobaron,
-      evidenciasPendientes,
-      noParticiparon,
-      evidenciasVinculadas: evidenciaIds.length,
+      poblados:            aprendices.length,
+      aprobaron:           nAprobaron,
+      pendientes:          nPendientes,
+      noParticiparon:      nNoParticiparon,
+      warnings:            nWarnings,
+      evidenciasVinculadas: todasEvidenciaIds.length,
     };
   });
 
@@ -586,7 +650,14 @@ async function actasRoutes(fastify) {
       include: {
         ficha:        { select: { codigo: true, nombre: true, programa: true } },
         participantes: {
-          include: { aprendiz: { select: { nombre: true, documento: true } } },
+          select: {
+            id:          true,
+            aprendizId:  true,
+            juicio:      true,
+            rapStatus:   true,
+            hasUngraded: true,
+            aprendiz: { select: { nombre: true, documento: true } },
+          },
           orderBy: { aprendiz: { nombre: "asc" } },
         },
       },
@@ -761,13 +832,32 @@ async function actasRoutes(fastify) {
     participantes.forEach((p, idx) => {
       const nombre = p.aprendiz?.nombre || "";
       const doc    = p.aprendiz?.documento || "—";
-      const juicio = p.juicio;
+      const rapStatus = p.rapStatus && typeof p.rapStatus === "object" ? p.rapStatus : null;
 
       let estadoTexto;
-      if (juicio === "APROBÓ")                                   estadoTexto = "Aprobó";
-      else if (juicio === "EVIDENCIAS PENDIENTES" || juicio === "PENDIENTE") estadoTexto = "Evidencias pendientes";
-      else if (juicio === "NO PARTICIPÓ" || juicio === "NO ASISTIÓ") estadoTexto = "No participó";
-      else                                                        estadoTexto = juicio;
+      if (rapStatus) {
+        const pendientesRaps = Object.entries(rapStatus)
+          .filter(([, v]) => v === "PENDIENTE")
+          .map(([k]) => k);
+        const noParticipoPorRap = Object.values(rapStatus).every(v => v === "NO PARTICIPÓ");
+        const todosAprobados   = Object.values(rapStatus).every(v => v === "APROBÓ");
+        if (todosAprobados)       estadoTexto = "Aprobó";
+        else if (noParticipoPorRap) estadoTexto = "No participó";
+        else if (pendientesRaps.length > 0) {
+          const rapsNombres = pendientesRaps.map(c => {
+            const m = c.match(/-?(\d+)$/);
+            return m ? `RAP ${m[1]}` : c;
+          }).join(", ");
+          estadoTexto = `Evidencias pendientes (${rapsNombres})`;
+        } else {
+          estadoTexto = "Pendiente";
+        }
+      } else {
+        const j = p.juicio;
+        if (j === "APROBÓ")        estadoTexto = "Aprobó";
+        else if (j === "PENDIENTE") estadoTexto = "Evidencias pendientes";
+        else                        estadoTexto = "No participó";
+      }
 
       partFilas.push(fila(
         celda(String(idx + 1), { center: true }),
@@ -845,7 +935,13 @@ async function actasRoutes(fastify) {
     }
     const compromisosTabla = tabla(compromisosFilas);
 
-    // ── Sección 10: Firma ──────────────────────────────────────────────────────
+    // ── Sección 10: Notas / Aclaraciones (opcional) ─────────────────────────
+    const notasAclaraciones = acta.notas ? tabla([
+      fila(celda("NOTAS / ACLARACIONES", { bold: true, center: true, bg: GRIS_HEADER })),
+      fila(celda(acta.notas, { size: 18 })),
+    ]) : null;
+
+    // ── Sección 11: Firma ─────────────────────────────────────────────────────
     const user = await prisma.user.findUnique({
       where:  { id: acta.userId },
       select: { nombre: true },
@@ -893,6 +989,7 @@ async function actasRoutes(fastify) {
           espacio,
           compromisosTabla,
           espacio,
+          ...(notasAclaraciones ? [notasAclaraciones, espacio] : []),
           firmaTabla,
         ],
       }],

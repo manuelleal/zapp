@@ -247,6 +247,8 @@ model ActaSeguimiento {
   compromisos  Json?
   rapIds       Json
   estado       String   @default("borrador")
+  notas        String?
+  archivadaAt  DateTime?
   creadoAt     DateTime @default(now())
   user          User               @relation(fields: [userId],  references: [id])
   ficha         Ficha              @relation(fields: [fichaId], references: [id])
@@ -255,10 +257,12 @@ model ActaSeguimiento {
 }
 
 model ActaParticipante {
-  id         String @id @default(cuid())
-  actaId     String
-  aprendizId String
-  juicio     String
+  id          String  @id @default(cuid())
+  actaId      String
+  aprendizId  String
+  juicio      String
+  rapStatus   Json?
+  hasUngraded Boolean @default(false)
   acta     ActaSeguimiento @relation(fields: [actaId],     references: [id])
   aprendiz Aprendiz        @relation(fields: [aprendizId], references: [id])
 

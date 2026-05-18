@@ -2,7 +2,8 @@ import { useState, useEffect } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   ClipboardList, Plus, Loader2, AlertCircle, Users,
-  MessageSquare, ChevronDown, ChevronRight, Lock, Download, Upload, FileText,
+  MessageSquare, ChevronDown, ChevronRight, Lock, Download, FileText,
+  Trash2, Archive, ArchiveRestore, AlertTriangle,
 } from "lucide-react"
 import Layout from "@/components/Layout"
 import { Button } from "@/components/ui/button"
@@ -32,16 +33,17 @@ interface RapSummary {
 }
 
 interface ActaSummary {
-  id:        string
-  numero:    string
-  fecha:     string
-  hora:      string
-  lugar:     string
-  objetivo:  string
-  estado:    "borrador" | "cerrada"
-  creadoAt:  string
-  ficha:     { codigo: string; nombre: string }
-  _count:    { participantes: number; mensajes: number }
+  id:          string
+  numero:      string
+  fecha:       string
+  hora:        string
+  lugar:       string
+  objetivo:    string
+  estado:      "borrador" | "cerrada"
+  creadoAt:    string
+  archivadaAt: string | null
+  ficha:       { codigo: string; nombre: string }
+  _count:      { participantes: number; mensajes: number }
 }
 
 interface Compromiso {
@@ -50,17 +52,22 @@ interface Compromiso {
   responsable:  string
 }
 
+type Juicio = "APROBÓ" | "PENDIENTE" | "NO PARTICIPÓ"
+
 interface ActaDetalle extends ActaSummary {
   fichaId:      string
   conclusiones: string | null
   compromisos:  Compromiso[] | null
   rapIds:       string[]
   rapsInfo:     RapSummary[]
+  notas:        string | null
   participantes: {
-    id:        string
-    aprendizId: string
-    juicio:    "APROBÓ" | "EVIDENCIAS PENDIENTES" | "NO PARTICIPÓ" | "NO ASISTIÓ" | "PENDIENTE"
-    aprendiz:  { nombre: string; moodleId: string | null }
+    id:          string
+    aprendizId:  string
+    juicio:      Juicio
+    rapStatus:   Record<string, Juicio> | null
+    hasUngraded: boolean
+    aprendiz:    { nombre: string; moodleId: string | null }
   }[]
   mensajes: {
     id:               string
@@ -82,9 +89,19 @@ function formatFecha(iso: string): string {
 }
 
 function juicioBadgeVariant(juicio: string): "green" | "yellow" | "gray" {
-  if (juicio === "APROBÓ")    return "green"
-  if (juicio === "PENDIENTE") return "yellow"
+  if (juicio === "APROBÓ")       return "green"
+  if (juicio === "PENDIENTE")    return "yellow"
   return "gray"
+}
+
+const JUICIOS: Juicio[] = ["APROBÓ", "PENDIENTE", "NO PARTICIPÓ"]
+
+function calcularJuicioGlobal(rapStatus: Record<string, Juicio>): Juicio {
+  const vals = Object.values(rapStatus)
+  if (vals.length === 0)                        return "PENDIENTE"
+  if (vals.every(v => v === "APROBÓ"))         return "APROBÓ"
+  if (vals.every(v => v === "NO PARTICIPÓ")) return "NO PARTICIPÓ"
+  return "PENDIENTE"
 }
 
 // ─── Modal Nueva Acta ─────────────────────────────────────────────────────────
@@ -269,219 +286,6 @@ function NuevaActaModal({ open, onClose, fichas, raps }: NuevaActaModalProps) {
   )
 }
 
-// ─── Import CSV Modal ─────────────────────────────────────────────────────────
-
-interface FilaClasificada {
-  nombre:         string
-  documento:      string | null
-  estado:         string
-  rapsAprobados:  string[]
-  rapsPendientes: string[]
-  warningCount:   number
-}
-
-interface PreviewResult {
-  filas:              FilaClasificada[]
-  resumen:            { total: number; aprobaron: number; pendientes: number; noParticiparon: number }
-  errores:            string[]
-  columnasDetectadas: { nombre: string | null; documento: string | null; raps: string[] }
-}
-
-interface ImportCSVModalProps {
-  open:    boolean
-  actaId:  string
-  fichaId: string
-  onClose: () => void
-}
-
-function ImportCSVModal({ open, actaId, fichaId, onClose }: ImportCSVModalProps) {
-  const queryClient = useQueryClient()
-  const [preview,      setPreview]      = useState<PreviewResult | null>(null)
-  const [loading,      setLoading]      = useState(false)
-  const [importing,    setImporting]    = useState(false)
-  const [error,        setError]        = useState("")
-
-  useEffect(() => {
-    if (!open) { setPreview(null); setError("") }
-  }, [open])
-
-  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!file) return
-    setLoading(true)
-    setError("")
-    setPreview(null)
-    try {
-      const text = await file.text()
-      const res = await fetch("/api/actas/import-csv/preview", {
-        method:  "POST",
-        headers: {
-          "Content-Type":  "application/json",
-          "Authorization": `Bearer ${localStorage.getItem("zajuna_jwt")}`,
-        },
-        body: JSON.stringify({ csv: text, fichaId }),
-      })
-      const data = await res.json() as PreviewResult & { error?: string }
-      if (!res.ok) throw new Error(data.error || `Error ${res.status}`)
-      setPreview(data)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Error al procesar el CSV.")
-    } finally {
-      setLoading(false)
-      e.target.value = ""
-    }
-  }
-
-  async function handleConfirmar() {
-    if (!preview) return
-    setImporting(true)
-    try {
-      const res = await fetch(`/api/actas/${encodeURIComponent(actaId)}/import-csv`, {
-        method:  "POST",
-        headers: {
-          "Content-Type":  "application/json",
-          "Authorization": `Bearer ${localStorage.getItem("zajuna_jwt")}`,
-        },
-        body: JSON.stringify({ filas: preview.filas }),
-      })
-      const data = await res.json() as { importados?: number; errores?: string[]; error?: string }
-      if (!res.ok) throw new Error(data.error || `Error ${res.status}`)
-      toast.success(`${data.importados} aprendices importados correctamente.`)
-      queryClient.invalidateQueries({ queryKey: ["acta-detalle", actaId] })
-      queryClient.invalidateQueries({ queryKey: ["actas"] })
-      onClose()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Error al importar.")
-    } finally {
-      setImporting(false)
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={v => { if (!v && !loading && !importing) onClose() }}>
-      <DialogContent className="max-w-lg max-h-[90vh] flex flex-col">
-        <DialogHeader className="flex-shrink-0">
-          <DialogTitle>Importar participantes desde CSV</DialogTitle>
-          <DialogDescription>
-            Sube el CSV exportado del libro de calificaciones de Zajuna.
-            Se clasificarán los aprendices según los RAPs de inglés (240202501-01 a 06).
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="flex-1 overflow-y-auto space-y-4 pr-1">
-          {/* Selector de archivo */}
-          {!preview && (
-            <label className="flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-lg p-8 cursor-pointer hover:bg-gray-50 transition-colors">
-              <Upload className="w-8 h-8 text-gray-400 mb-2" />
-              <span className="text-sm text-gray-600">Haz clic para seleccionar el CSV de Zajuna</span>
-              <span className="text-xs text-gray-400 mt-1">Formato: libro de calificaciones exportado de Moodle</span>
-              <input type="file" accept=".csv,text/csv" className="sr-only" onChange={handleFile} disabled={loading} />
-            </label>
-          )}
-
-          {loading && (
-            <div className="flex items-center justify-center gap-2 text-sm text-gray-500 py-4">
-              <Loader2 className="w-4 h-4 animate-spin" />
-              Analizando CSV...
-            </div>
-          )}
-
-          {error && (
-            <div className="flex items-start gap-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded-md px-3 py-2">
-              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-              <span>{error}</span>
-            </div>
-          )}
-
-          {preview && (
-            <div className="space-y-3">
-              {/* Columnas detectadas */}
-              <div className="text-xs text-gray-500 bg-gray-50 rounded-md p-3 space-y-1">
-                <p><span className="font-medium">Nombre:</span> {preview.columnasDetectadas.nombre || <span className="text-red-500">No detectada</span>}</p>
-                <p><span className="font-medium">Documento:</span> {preview.columnasDetectadas.documento || "No detectada (opcional)"}</p>
-                <p><span className="font-medium">RAPs:</span> {preview.columnasDetectadas.raps.length > 0 ? preview.columnasDetectadas.raps.join(", ") : <span className="text-red-500">Ninguno — verificar cabeceras</span>}</p>
-              </div>
-
-              {/* Resumen */}
-              <div className="grid grid-cols-4 gap-2 text-center">
-                {[
-                  { label: "Total",        val: preview.resumen.total,          color: "text-gray-900" },
-                  { label: "Aprobó",       val: preview.resumen.aprobaron,      color: "text-green-600" },
-                  { label: "Pendientes",   val: preview.resumen.pendientes,     color: "text-yellow-600" },
-                  { label: "No participó", val: preview.resumen.noParticiparon, color: "text-gray-500" },
-                ].map(({ label, val, color }) => (
-                  <div key={label} className="bg-gray-50 rounded-md p-2">
-                    <p className={`text-lg font-bold ${color}`}>{val}</p>
-                    <p className="text-xs text-gray-500">{label}</p>
-                  </div>
-                ))}
-              </div>
-
-              {/* Advertencias del parser */}
-              {preview.errores.length > 0 && (
-                <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md p-3 space-y-1">
-                  {preview.errores.map((e, i) => <p key={i}>⚠ {e}</p>)}
-                </div>
-              )}
-
-              {/* Muestra de primeras filas */}
-              <div className="overflow-x-auto rounded-md border border-gray-200 max-h-48">
-                <table className="w-full text-xs">
-                  <thead className="bg-gray-50 sticky top-0">
-                    <tr>
-                      <th className="text-left px-2 py-1.5 font-semibold text-gray-500">Nombre</th>
-                      <th className="text-left px-2 py-1.5 font-semibold text-gray-500">Doc.</th>
-                      <th className="text-left px-2 py-1.5 font-semibold text-gray-500">Estado</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {preview.filas.slice(0, 8).map((f, i) => (
-                      <tr key={i}>
-                        <td className="px-2 py-1 text-gray-800">{f.nombre}</td>
-                        <td className="px-2 py-1 text-gray-500 font-mono">{f.documento || "—"}</td>
-                        <td className="px-2 py-1 text-gray-600">{f.estado}</td>
-                      </tr>
-                    ))}
-                    {preview.filas.length > 8 && (
-                      <tr>
-                        <td colSpan={3} className="px-2 py-1 text-gray-400 italic text-center">
-                          ... y {preview.filas.length - 8} más
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-
-              {/* Reset */}
-              <button
-                onClick={() => setPreview(null)}
-                className="text-xs text-gray-400 hover:text-gray-600 underline"
-              >
-                Subir otro CSV
-              </button>
-            </div>
-          )}
-        </div>
-
-        <DialogFooter className="flex-shrink-0">
-          <Button variant="outline" onClick={onClose} disabled={importing}>Cancelar</Button>
-          {preview && (
-            <Button
-              className="bg-sena-green hover:bg-sena-green/90"
-              onClick={handleConfirmar}
-              disabled={importing || preview.filas.length === 0}
-            >
-              {importing && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-              Confirmar import ({preview.filas.length} aprendices)
-            </Button>
-          )}
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
 // ─── Panel de detalle del acta ────────────────────────────────────────────────
 
 interface ActaDetailPanelProps {
@@ -493,13 +297,15 @@ interface ActaDetailPanelProps {
 
 function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaDetailPanelProps) {
   const queryClient = useQueryClient()
-  const [juiciosLocales, setJuiciosLocales] = useState<Record<string, "APROBÓ" | "NO ASISTIÓ" | "PENDIENTE" | "EVIDENCIAS PENDIENTES" | "NO PARTICIPÓ">>({})
-  const [conclusiones,   setConclusiones]   = useState("")
-  const [compromisos,    setCompromisos]    = useState<Compromiso[]>([])
-  const [rapIdsLocales,  setRapIdsLocales]  = useState<string[]>([])
-  const [patchError,     setPatchError]     = useState("")
-  const [cerrarConfirm,  setCerrarConfirm]  = useState(false)
-  const [importCSVOpen,  setImportCSVOpen]  = useState(false)
+  const [juiciosLocales,    setJuiciosLocales]    = useState<Record<string, Juicio>>({})
+  const [rapStatusLocales,  setRapStatusLocales]  = useState<Record<string, Record<string, Juicio>>>({})
+  const [conclusiones,      setConclusiones]      = useState("")
+  const [notas,             setNotas]             = useState("")
+  const [compromisos,       setCompromisos]       = useState<Compromiso[]>([])
+  const [rapIdsLocales,     setRapIdsLocales]     = useState<string[]>([])
+  const [patchError,        setPatchError]        = useState("")
+  const [cerrarConfirm,     setCerrarConfirm]     = useState(false)
+  const [deletePartId,      setDeletePartId]      = useState<string | null>(null)
 
   const { data: acta, isLoading } = useQuery<ActaDetalle>({
     queryKey: ["acta-detalle", actaId],
@@ -509,10 +315,16 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
 
   useEffect(() => {
     if (!acta) return
-    const mapa: Record<string, "APROBÓ" | "EVIDENCIAS PENDIENTES" | "NO PARTICIPÓ" | "NO ASISTIÓ" | "PENDIENTE"> = {}
-    acta.participantes.forEach(p => { mapa[p.aprendizId] = p.juicio })
-    setJuiciosLocales(mapa)
+    const mapaJuicios: Record<string, Juicio> = {}
+    const mapaRapStatus: Record<string, Record<string, Juicio>> = {}
+    acta.participantes.forEach(p => {
+      mapaJuicios[p.aprendizId] = p.juicio
+      if (p.rapStatus) mapaRapStatus[p.aprendizId] = { ...p.rapStatus }
+    })
+    setJuiciosLocales(mapaJuicios)
+    setRapStatusLocales(mapaRapStatus)
     setConclusiones(acta.conclusiones ?? "")
+    setNotas(acta.notas ?? "")
     setCompromisos(acta.compromisos ?? [])
     setRapIdsLocales(acta.rapIds ?? [])
   }, [acta])
@@ -532,7 +344,7 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
   })
 
   const juiciosMutation = useMutation({
-    mutationFn: (participantes: { aprendizId: string; juicio: string }[]) =>
+    mutationFn: (participantes: { aprendizId: string; juicio: Juicio; rapStatus?: Record<string, Juicio> }[]) =>
       apiFetch(`/api/actas/${actaId}/participantes`, { method: "POST", body: JSON.stringify(participantes) }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["acta-detalle", actaId] }),
     onError: (e) => {
@@ -542,9 +354,23 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
     },
   })
 
+  const deleteParticipanteMutation = useMutation({
+    mutationFn: (participanteId: string) =>
+      apiFetch(`/api/actas/${actaId}/participantes/${participanteId}`, { method: "DELETE" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["acta-detalle", actaId] })
+      setDeletePartId(null)
+      toast.success("Participante eliminado.")
+    },
+    onError: (e) => {
+      const msg = e instanceof ApiError ? e.message : "Error al eliminar participante."
+      toast.error(msg)
+    },
+  })
+
   const autoPoblarMutation = useMutation({
     mutationFn: () =>
-      apiFetch<{ poblados: number; aprobaron: number; pendientes: number; noAsistieron: number; evidenciasVinculadas: number }>(
+      apiFetch<{ poblados: number; aprobaron: number; pendientes: number; noParticiparon: number; warnings: number; evidenciasVinculadas: number }>(
         `/api/actas/${actaId}/auto-poblar`, { method: "POST" }
       ),
     onSuccess: (result) => {
@@ -553,8 +379,10 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
         toast.warning("No hay aprendices registrados en esta ficha. Escanea la ficha primero.")
       } else if (result.evidenciasVinculadas === 0) {
         toast.warning(
-          "No se encontraron RAPs asociados. Asegúrate de haber unificado los reportes de Zajuna y Sofía para esta ficha."
+          "No se encontraron RAPs asociados. Asegúrate de haber vinculado evidencias a los RAPs del acta."
         )
+      } else {
+        toast.success(`Poblado: ${result.poblados} aprendices. ${result.aprobaron} aprobaron, ${result.pendientes} pendientes, ${result.noParticiparon} no participaron.${ result.warnings > 0 ? ` ⚠ ${result.warnings} con entregas sin calificar.` : ""}`)
       }
     },
     onError: (e) => {
@@ -599,11 +427,16 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
   }
 
   function guardarConclusiones() {
-    patchMutation.mutate({ conclusiones, compromisos })
+    patchMutation.mutate({ conclusiones, compromisos, notas })
   }
 
   function guardarJuicios() {
-    const payload = Object.entries(juiciosLocales).map(([aprendizId, juicio]) => ({ aprendizId, juicio }))
+    if (!acta) return
+    const payload = acta.participantes.map(p => {
+      const rs = rapStatusLocales[p.aprendizId] ?? p.rapStatus ?? undefined
+      const juicio: Juicio = rs ? calcularJuicioGlobal(rs) : (juiciosLocales[p.aprendizId] ?? p.juicio)
+      return { aprendizId: p.aprendizId, juicio, rapStatus: rs }
+    })
     juiciosMutation.mutate(payload)
   }
 
@@ -620,17 +453,13 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
 
   const esBorrador = acta.estado === "borrador"
   const nAprobaron   = acta.participantes.filter(p => p.juicio === "APROBÓ").length
-  const nPendientes  = acta.participantes.filter(p => p.juicio === "EVIDENCIAS PENDIENTES" || p.juicio === "PENDIENTE").length
-  const nNoParticipo = acta.participantes.filter(p => p.juicio === "NO PARTICIPÓ" || p.juicio === "NO ASISTIÓ").length
+  const nPendientes  = acta.participantes.filter(p => p.juicio === "PENDIENTE").length
+  const nNoParticipo = acta.participantes.filter(p => p.juicio === "NO PARTICIPÓ").length
+
+  // RAPs del acta (para columnas dinámicas)
+  const rapsDelActa = acta.rapsInfo ?? []
 
   return (
-    <>
-    <ImportCSVModal
-      open={importCSVOpen}
-      actaId={actaId}
-      fichaId={acta.fichaId}
-      onClose={() => setImportCSVOpen(false)}
-    />
     <div className="border-t border-gray-100 bg-gray-50/40 p-5 space-y-6">
 
       {/* ── Info general ── */}
@@ -665,13 +494,7 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
               ))}
             </div>
             {esBorrador && (
-              <Button
-                size="sm"
-                variant="outline"
-                className="text-xs"
-                onClick={guardarInfoGeneral}
-                disabled={patchMutation.isPending}
-              >
+              <Button size="sm" variant="outline" className="text-xs" onClick={guardarInfoGeneral} disabled={patchMutation.isPending}>
                 {patchMutation.isPending && <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />}
                 Guardar RAPs
               </Button>
@@ -685,35 +508,14 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
         <div className="flex items-center justify-between flex-wrap gap-2">
           <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Participantes</h3>
           {esBorrador && (
-            <div className="flex items-center gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                className="text-xs gap-1.5"
-                onClick={() => autoPoblarMutation.mutate()}
-                disabled={autoPoblarMutation.isPending}
-              >
-                {autoPoblarMutation.isPending
-                  ? <Loader2 className="w-3 h-3 animate-spin" />
-                  : <Users className="w-3 h-3" />}
-                Auto-poblar desde evidencias
+            <div className="flex items-center gap-2 flex-wrap">
+              <Button size="sm" variant="outline" className="text-xs gap-1.5"
+                onClick={() => autoPoblarMutation.mutate()} disabled={autoPoblarMutation.isPending}>
+                {autoPoblarMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Users className="w-3 h-3" />}
+                Auto-poblar
               </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                className="text-xs gap-1.5"
-                onClick={() => setImportCSVOpen(true)}
-              >
-                <Upload className="w-3 h-3" />
-                Importar CSV
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                className="text-xs"
-                onClick={guardarJuicios}
-                disabled={juiciosMutation.isPending || acta.participantes.length === 0}
-              >
+              <Button size="sm" variant="outline" className="text-xs"
+                onClick={guardarJuicios} disabled={juiciosMutation.isPending || acta.participantes.length === 0}>
                 {juiciosMutation.isPending && <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />}
                 Guardar juicios
               </Button>
@@ -723,55 +525,129 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
 
         {acta.participantes.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-2">
-            <Badge variant="green"  className="text-xs">{nAprobaron}   aprobaron</Badge>
-            <Badge variant="yellow" className="text-xs">{nPendientes}  pendientes</Badge>
+            <Badge variant="green"  className="text-xs">{nAprobaron} aprobaron</Badge>
+            <Badge variant="yellow" className="text-xs">{nPendientes} pendientes</Badge>
             <Badge variant="gray"   className="text-xs">{nNoParticipo} no participaron</Badge>
+          </div>
+        )}
+
+        {/* Confirm eliminar participante */}
+        {deletePartId && (
+          <div className="flex items-center gap-3 bg-red-50 border border-red-200 rounded-md px-3 py-2 text-sm flex-wrap">
+            <span className="text-red-700 font-medium">¿Eliminar este participante del acta?</span>
+            <Button size="sm" className="bg-red-600 hover:bg-red-700 text-white text-xs"
+              onClick={() => deleteParticipanteMutation.mutate(deletePartId)}
+              disabled={deleteParticipanteMutation.isPending}>
+              {deleteParticipanteMutation.isPending && <Loader2 className="w-3 h-3 mr-1 animate-spin" />}
+              Sí, eliminar
+            </Button>
+            <Button size="sm" variant="outline" className="text-xs" onClick={() => setDeletePartId(null)}>Cancelar</Button>
           </div>
         )}
 
         {acta.participantes.length === 0 ? (
           <p className="text-sm text-gray-400 italic">
-            Sin participantes.
-            {esBorrador && " Usa 'Auto-poblar' o agrega participantes manualmente."}
+            Sin participantes.{esBorrador && " Usa 'Auto-poblar' para cargar desde evidencias."}
           </p>
         ) : (
           <div className="overflow-x-auto rounded-md border border-gray-200">
             <table className="w-full text-sm">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500">Aprendiz</th>
-                  <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500">Juicio</th>
+                  <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 min-w-[180px]">Aprendiz</th>
+                  {rapsDelActa.map(r => (
+                    <th key={r.id} className="text-center px-2 py-2 text-xs font-semibold text-gray-500 whitespace-nowrap">
+                      {r.codigo.match(/-?(\d+)$/)?.[1] ? `RAP ${r.codigo.match(/-?(\d+)$/)![1]}` : r.codigo}
+                    </th>
+                  ))}
+                  <th className="text-center px-2 py-2 text-xs font-semibold text-gray-500">Juicio</th>
+                  <th className="text-center px-2 py-2 text-xs font-semibold text-gray-500 w-6">⚠</th>
+                  {esBorrador && <th className="w-6 px-2 py-2" />}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {acta.participantes.map(p => (
-                  <tr key={p.id} className="bg-white hover:bg-gray-50">
-                    <td className="px-3 py-2 text-gray-700">{p.aprendiz.nombre}</td>
-                    <td className="px-3 py-2">
-                      {esBorrador ? (
-                        <select
-                          value={juiciosLocales[p.aprendizId] ?? p.juicio}
-                          onChange={e => setJuiciosLocales(prev => ({
-                            ...prev,
-                            [p.aprendizId]: e.target.value as "APROBÓ" | "EVIDENCIAS PENDIENTES" | "NO PARTICIPÓ" | "NO ASISTIÓ" | "PENDIENTE",
-                          }))}
-                          className="h-7 rounded border border-input bg-background px-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-                        >
-                          <option value="APROBÓ">APROBÓ</option>
-                          <option value="EVIDENCIAS PENDIENTES">EVIDENCIAS PENDIENTES</option>
-                          <option value="NO PARTICIPÓ">NO PARTICIPÓ</option>
-                          <option value="PENDIENTE">PENDIENTE</option>
-                          <option value="NO ASISTIÓ">NO ASISTIÓ</option>
-                        </select>
-                      ) : (
-                        <Badge variant={juicioBadgeVariant(p.juicio)} className="text-xs">{p.juicio}</Badge>
+                {acta.participantes.map(p => {
+                  const rsLocal = rapStatusLocales[p.aprendizId] ?? p.rapStatus ?? {}
+                  const juicioGlobal: Juicio = Object.keys(rsLocal).length > 0
+                    ? calcularJuicioGlobal(rsLocal)
+                    : (juiciosLocales[p.aprendizId] ?? p.juicio)
+                  return (
+                    <tr key={p.id} className="bg-white hover:bg-gray-50">
+                      <td className="px-3 py-2 text-gray-700 text-xs">{p.aprendiz.nombre}</td>
+                      {rapsDelActa.map(r => {
+                        const estadoRap = (rsLocal as Record<string, Juicio>)[r.codigo] ?? "NO PARTICIPÓ"
+                        return (
+                          <td key={r.id} className="px-2 py-1 text-center">
+                            {esBorrador ? (
+                              <select
+                                value={estadoRap}
+                                onChange={e => setRapStatusLocales(prev => ({
+                                  ...prev,
+                                  [p.aprendizId]: { ...(prev[p.aprendizId] ?? rsLocal), [r.codigo]: e.target.value as Juicio },
+                                }))}
+                                className={`h-6 rounded border px-1 text-xs focus:outline-none focus:ring-1 focus:ring-ring ${
+                                  estadoRap === "APROBÓ"       ? "bg-green-50  border-green-300 text-green-800" :
+                                  estadoRap === "PENDIENTE"    ? "bg-yellow-50 border-yellow-300 text-yellow-800" :
+                                                                 "bg-gray-50   border-gray-300  text-gray-500"
+                                }`}
+                              >
+                                {JUICIOS.map(j => <option key={j} value={j}>{j}</option>)}
+                              </select>
+                            ) : (
+                              <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-medium ${
+                                estadoRap === "APROBÓ"    ? "bg-green-100 text-green-700" :
+                                estadoRap === "PENDIENTE" ? "bg-yellow-100 text-yellow-700" :
+                                                             "bg-gray-100 text-gray-500"
+                              }`}>{estadoRap}</span>
+                            )}
+                          </td>
+                        )
+                      })}
+                      <td className="px-2 py-2 text-center">
+                        <Badge variant={juicioBadgeVariant(juicioGlobal)} className="text-xs whitespace-nowrap">{juicioGlobal}</Badge>
+                      </td>
+                      <td className="px-2 py-2 text-center">
+                        {p.hasUngraded && (
+                          <span title="Tiene entregas sin calificar — revisar en Dashboard">
+                            <AlertTriangle className="w-3.5 h-3.5 text-orange-400" />
+                          </span>
+                        )}
+                      </td>
+                      {esBorrador && (
+                        <td className="px-2 py-2 text-center">
+                          <button
+                            onClick={() => setDeletePartId(p.id)}
+                            className="text-gray-300 hover:text-red-500"
+                            title="Eliminar participante"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </td>
                       )}
-                    </td>
-                  </tr>
-                ))}
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
+        )}
+      </section>
+
+      {/* ── Notas / Aclaraciones ── */}
+      <section className="space-y-2">
+        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Notas / Aclaraciones</h3>
+        {esBorrador ? (
+          <textarea
+            value={notas}
+            onChange={e => setNotas(e.target.value)}
+            rows={3}
+            placeholder="Notas adicionales (ej. aprendiz solicitó prórroga, grupo trasladado de jornada...)..."
+            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring resize-none"
+          />
+        ) : acta.notas ? (
+          <p className="text-sm text-gray-700 whitespace-pre-wrap bg-white border border-gray-100 rounded-md p-3">{acta.notas}</p>
+        ) : (
+          <p className="text-sm text-gray-400 italic">Sin notas registradas.</p>
         )}
       </section>
 
@@ -825,43 +701,22 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
                     <tr key={idx} className="bg-white">
                       <td className="px-3 py-1.5">
                         {esBorrador ? (
-                          <Input
-                            value={c.actividad}
-                            onChange={e => actualizarCompromiso(idx, "actividad", e.target.value)}
-                            className="h-7 text-xs"
-                            placeholder="Actividad..."
-                          />
+                          <Input value={c.actividad} onChange={e => actualizarCompromiso(idx, "actividad", e.target.value)} className="h-7 text-xs" placeholder="Actividad..." />
                         ) : c.actividad}
                       </td>
                       <td className="px-3 py-1.5">
                         {esBorrador ? (
-                          <Input
-                            type="date"
-                            value={c.fecha}
-                            onChange={e => actualizarCompromiso(idx, "fecha", e.target.value)}
-                            className="h-7 text-xs"
-                          />
+                          <Input type="date" value={c.fecha} onChange={e => actualizarCompromiso(idx, "fecha", e.target.value)} className="h-7 text-xs" />
                         ) : c.fecha}
                       </td>
                       <td className="px-3 py-1.5">
                         {esBorrador ? (
-                          <Input
-                            value={c.responsable}
-                            onChange={e => actualizarCompromiso(idx, "responsable", e.target.value)}
-                            className="h-7 text-xs"
-                            placeholder="Responsable..."
-                          />
+                          <Input value={c.responsable} onChange={e => actualizarCompromiso(idx, "responsable", e.target.value)} className="h-7 text-xs" placeholder="Responsable..." />
                         ) : c.responsable}
                       </td>
                       {esBorrador && (
                         <td className="px-3 py-1.5 text-center">
-                          <button
-                            onClick={() => eliminarCompromiso(idx)}
-                            className="text-gray-400 hover:text-red-500 text-xs"
-                            title="Eliminar fila"
-                          >
-                            ✕
-                          </button>
+                          <button onClick={() => eliminarCompromiso(idx)} className="text-gray-400 hover:text-red-500 text-xs" title="Eliminar fila">✕</button>
                         </td>
                       )}
                     </tr>
@@ -873,20 +728,14 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
         </div>
 
         {esBorrador && (
-          <Button
-            size="sm"
-            variant="outline"
-            className="text-xs"
-            onClick={guardarConclusiones}
-            disabled={patchMutation.isPending}
-          >
+          <Button size="sm" variant="outline" className="text-xs" onClick={guardarConclusiones} disabled={patchMutation.isPending}>
             {patchMutation.isPending && <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />}
-            Guardar conclusiones y compromisos
+            Guardar conclusiones, compromisos y notas
           </Button>
         )}
       </section>
 
-      {/* ── Errores globales de mutaciones ── */}
+      {/* ── Errores globales ── */}
       {patchError && (
         <div className="flex items-center gap-2 text-sm text-red-600">
           <AlertCircle className="w-4 h-4 shrink-0" />
@@ -898,52 +747,40 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
       {esBorrador && (
         <section className="pt-2 border-t border-gray-200">
           {!cerrarConfirm ? (
-            <Button
-              size="sm"
-              variant="outline"
-              className="text-xs gap-1.5 text-red-600 border-red-300 hover:bg-red-50"
-              onClick={() => setCerrarConfirm(true)}
-            >
+            <Button size="sm" variant="outline" className="text-xs gap-1.5 text-red-600 border-red-300 hover:bg-red-50" onClick={() => setCerrarConfirm(true)}>
               <Lock className="w-3 h-3" />
               Cerrar Acta
             </Button>
           ) : (
             <div className="flex items-center gap-3 flex-wrap">
-              <p className="text-sm text-red-600 font-medium">
-                Esta acción es irreversible. ¿Confirmas cerrar el acta?
-              </p>
-              <Button
-                size="sm"
-                className="bg-red-600 hover:bg-red-700 text-white text-xs"
-                onClick={() => cerrarMutation.mutate()}
-                disabled={cerrarMutation.isPending}
-              >
+              <p className="text-sm text-red-600 font-medium">Esta acción es irreversible. ¿Confirmas cerrar el acta?</p>
+              <Button size="sm" className="bg-red-600 hover:bg-red-700 text-white text-xs" onClick={() => cerrarMutation.mutate()} disabled={cerrarMutation.isPending}>
                 {cerrarMutation.isPending && <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />}
                 Sí, cerrar
               </Button>
-              <Button size="sm" variant="outline" className="text-xs" onClick={() => setCerrarConfirm(false)}>
-                Cancelar
-              </Button>
+              <Button size="sm" variant="outline" className="text-xs" onClick={() => setCerrarConfirm(false)}>Cancelar</Button>
             </div>
           )}
         </section>
       )}
 
     </div>
-    </>
   )
 }
 
 // ─── Componente principal ─────────────────────────────────────────────────────
 
 export default function ActasPage() {
+  const queryClient = useQueryClient()
   const navigate    = useNavigate()
   const { jwt, user, clearAuth, setAuth } = useAuthStore()
-  const [fichaFiltro,   setFichaFiltro]   = useState("")
-  const [expandedActa,  setExpandedActa]  = useState<string | null>(null)
-  const [nuevaActaOpen, setNuevaActaOpen] = useState(false)
-  const [downloadingId,    setDownloadingId]    = useState<string | null>(null)
-  const [downloadingGorId, setDownloadingGorId] = useState<string | null>(null)
+  const [fichaFiltro,       setFichaFiltro]       = useState("")
+  const [incluirArchivadas, setIncluirArchivadas]  = useState(false)
+  const [expandedActa,      setExpandedActa]       = useState<string | null>(null)
+  const [nuevaActaOpen,     setNuevaActaOpen]      = useState(false)
+  const [downloadingId,     setDownloadingId]      = useState<string | null>(null)
+  const [downloadingGorId,  setDownloadingGorId]   = useState<string | null>(null)
+  const [deleteActaId,      setDeleteActaId]       = useState<string | null>(null)
 
   useEffect(() => {
     const storedJwt = localStorage.getItem("zajuna_jwt")
@@ -978,10 +815,37 @@ export default function ActasPage() {
   })
 
   const { data: actas = [], isLoading } = useQuery<ActaSummary[]>({
-    queryKey: ["actas", fichaFiltro],
-    queryFn:  () => apiFetch<ActaSummary[]>(`/api/actas${fichaFiltro ? `?fichaId=${fichaFiltro}` : ""}`),
+    queryKey: ["actas", fichaFiltro, incluirArchivadas],
+    queryFn:  () => {
+      const params = new URLSearchParams()
+      if (fichaFiltro)       params.set("fichaId", fichaFiltro)
+      if (incluirArchivadas) params.set("incluirArchivadas", "1")
+      const qs = params.toString()
+      return apiFetch<ActaSummary[]>(`/api/actas${qs ? `?${qs}` : ""}`)
+    },
     enabled:  !!jwt,
     staleTime: 30_000,
+  })
+
+  const archivaMutation = useMutation({
+    mutationFn: ({ id, archivada }: { id: string; archivada: boolean }) =>
+      apiFetch(`/api/actas/${id}`, { method: "PATCH", body: JSON.stringify({ archivada }) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["actas"] })
+      toast.success("Acta actualizada.")
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Error al archivar."),
+  })
+
+  const deleteActaMutation = useMutation({
+    mutationFn: (id: string) => apiFetch(`/api/actas/${id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["actas"] })
+      setDeleteActaId(null)
+      setExpandedActa(null)
+      toast.success("Acta eliminada.")
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Error al eliminar el acta."),
   })
 
   function toggleActa(id: string) {
@@ -1003,9 +867,7 @@ export default function ActasPage() {
       const match = cd.match(/filename="([^"]+)"/)
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
-      a.href = url
-      a.download = match?.[1] ?? "acta.docx"
-      a.click()
+      a.href = url; a.download = match?.[1] ?? "acta.docx"; a.click()
       URL.revokeObjectURL(url)
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Error al descargar el documento.")
@@ -1052,7 +914,7 @@ export default function ActasPage() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2 flex-shrink-0">
+          <div className="flex items-center gap-2 flex-shrink-0 flex-wrap">
             <select
               value={fichaFiltro}
               onChange={e => { setFichaFiltro(e.target.value); setExpandedActa(null) }}
@@ -1064,16 +926,38 @@ export default function ActasPage() {
               ))}
             </select>
 
-            <Button
-              size="sm"
-              className="bg-sena-green hover:bg-sena-green/90 gap-1.5 text-xs"
-              onClick={() => setNuevaActaOpen(true)}
+            <button
+              onClick={() => setIncluirArchivadas(v => !v)}
+              className={`flex items-center gap-1.5 h-8 px-3 rounded-md border text-xs transition-colors ${
+                incluirArchivadas
+                  ? "bg-gray-100 border-gray-400 text-gray-700"
+                  : "border-input text-gray-400 hover:text-gray-600"
+              }`}
             >
+              <Archive className="w-3.5 h-3.5" />
+              {incluirArchivadas ? "Ocultar archivadas" : "Ver archivadas"}
+            </button>
+
+            <Button size="sm" className="bg-sena-green hover:bg-sena-green/90 gap-1.5 text-xs" onClick={() => setNuevaActaOpen(true)}>
               <Plus className="w-3.5 h-3.5" />
               Nueva Acta
             </Button>
           </div>
         </div>
+
+        {/* ── Confirm eliminar acta ── */}
+        {deleteActaId && (
+          <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 flex items-center gap-3 flex-wrap text-sm">
+            <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0" />
+            <span className="text-red-700 font-medium flex-1">¿Eliminar esta acta permanentemente? Se borrarán todos sus participantes.</span>
+            <Button size="sm" className="bg-red-600 hover:bg-red-700 text-white text-xs"
+              onClick={() => deleteActaMutation.mutate(deleteActaId)} disabled={deleteActaMutation.isPending}>
+              {deleteActaMutation.isPending && <Loader2 className="w-3 h-3 mr-1 animate-spin" />}
+              Sí, eliminar
+            </Button>
+            <Button size="sm" variant="outline" className="text-xs" onClick={() => setDeleteActaId(null)}>Cancelar</Button>
+          </div>
+        )}
 
         {/* ── Lista de actas ── */}
         {isLoading ? (
@@ -1086,13 +970,9 @@ export default function ActasPage() {
             <ClipboardList className="w-10 h-10 text-gray-300 mx-auto" />
             <p className="text-gray-600 text-sm font-medium">No hay actas registradas aún.</p>
             <p className="text-gray-400 text-xs max-w-sm mx-auto">
-              Usa el botón <strong>Nueva Acta</strong> para crear el primer borrador. Después podrás auto-poblar los participantes, enviarles mensajes formales y cerrar el acta como evidencia legal.
+              Usa el botón <strong>Nueva Acta</strong> para crear el primer borrador.
             </p>
-            <Button
-              size="sm"
-              className="bg-sena-green hover:bg-sena-green/90 gap-1.5 mt-2"
-              onClick={() => setNuevaActaOpen(true)}
-            >
+            <Button size="sm" className="bg-sena-green hover:bg-sena-green/90 gap-1.5 mt-2" onClick={() => setNuevaActaOpen(true)}>
               <Plus className="w-3.5 h-3.5" />
               Nueva Acta
             </Button>
@@ -1100,78 +980,53 @@ export default function ActasPage() {
         ) : (
           <div className="space-y-2">
             {actas.map(acta => {
-              const isExpanded = expandedActa === acta.id
+              const isExpanded  = expandedActa === acta.id
+              const isArchivada = !!acta.archivadaAt
               return (
-                <div key={acta.id} className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                <div key={acta.id} className={`bg-white rounded-lg border overflow-hidden ${isArchivada ? "border-gray-200 opacity-75" : "border-gray-200"}`}>
                   <div className="px-4 py-3 flex items-start gap-3">
-                    <button
-                      className="mt-0.5 text-gray-400 hover:text-gray-600 flex-shrink-0"
-                      onClick={() => toggleActa(acta.id)}
-                    >
-                      {isExpanded
-                        ? <ChevronDown className="w-4 h-4" />
-                        : <ChevronRight className="w-4 h-4" />}
+                    <button className="mt-0.5 text-gray-400 hover:text-gray-600 flex-shrink-0" onClick={() => toggleActa(acta.id)}>
+                      {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                     </button>
 
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-semibold text-sm text-gray-900">
-                          Acta N° {acta.numero}
-                        </span>
+                        <span className="font-semibold text-sm text-gray-900">Acta N° {acta.numero}</span>
                         <span className="text-xs text-gray-500 font-mono">{acta.ficha.codigo}</span>
-                        <Badge
-                          variant={acta.estado === "borrador" ? "yellow" : "green"}
-                          className="text-xs"
-                        >
-                          {acta.estado}
-                        </Badge>
+                        <Badge variant={acta.estado === "borrador" ? "yellow" : "green"} className="text-xs">{acta.estado}</Badge>
+                        {isArchivada && <Badge variant="gray" className="text-xs">archivada</Badge>}
                       </div>
                       <p className="text-xs text-gray-500 mt-0.5 truncate">{acta.ficha.nombre}</p>
                       <div className="flex items-center gap-3 mt-1 text-xs text-gray-500">
                         <span>{formatFecha(acta.fecha)} · {acta.hora}</span>
-                        <span className="flex items-center gap-1">
-                          <Users className="w-3 h-3" />
-                          {acta._count.participantes}
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <MessageSquare className="w-3 h-3" />
-                          {acta._count.mensajes}
-                        </span>
+                        <span className="flex items-center gap-1"><Users className="w-3 h-3" />{acta._count.participantes}</span>
+                        <span className="flex items-center gap-1"><MessageSquare className="w-3 h-3" />{acta._count.mensajes}</span>
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="text-xs gap-1.5"
-                        onClick={() => handleDescargar(acta.id, acta.numero)}
-                        disabled={downloadingId === acta.id}
-                      >
-                        {downloadingId === acta.id
-                          ? <Loader2 className="w-3 h-3 animate-spin" />
-                          : <Download className="w-3 h-3" />}
+                    <div className="flex items-center gap-1.5 flex-shrink-0 flex-wrap justify-end">
+                      <Button size="sm" variant="outline" className="text-xs gap-1" onClick={() => handleDescargar(acta.id, acta.numero)} disabled={downloadingId === acta.id}>
+                        {downloadingId === acta.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
                         Word
                       </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="text-xs gap-1.5"
-                        onClick={() => handleDescargarGOR(acta.id, acta.numero)}
-                        disabled={downloadingGorId === acta.id}
-                      >
-                        {downloadingGorId === acta.id
-                          ? <Loader2 className="w-3 h-3 animate-spin" />
-                          : <FileText className="w-3 h-3" />}
+                      <Button size="sm" variant="outline" className="text-xs gap-1" onClick={() => handleDescargarGOR(acta.id, acta.numero)} disabled={downloadingGorId === acta.id}>
+                        {downloadingGorId === acta.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <FileText className="w-3 h-3" />}
                         GOR-F-084
                       </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="text-xs"
-                        onClick={() => toggleActa(acta.id)}
+                      <Button size="sm" variant="outline" className="text-xs gap-1"
+                        onClick={() => archivaMutation.mutate({ id: acta.id, archivada: !isArchivada })}
+                        disabled={archivaMutation.isPending}
+                        title={isArchivada ? "Restaurar acta" : "Archivar acta"}
                       >
-                        {isExpanded ? "Ocultar" : "Ver detalle"}
+                        {isArchivada ? <ArchiveRestore className="w-3 h-3" /> : <Archive className="w-3 h-3" />}
+                        {isArchivada ? "Restaurar" : "Archivar"}
+                      </Button>
+                      <Button size="sm" variant="outline" className="text-xs gap-1 text-red-500 border-red-200 hover:bg-red-50"
+                        onClick={() => setDeleteActaId(acta.id)} title="Eliminar acta">
+                        <Trash2 className="w-3 h-3" />
+                      </Button>
+                      <Button size="sm" variant="outline" className="text-xs" onClick={() => toggleActa(acta.id)}>
+                        {isExpanded ? "Ocultar" : "Detalle"}
                       </Button>
                     </div>
                   </div>
