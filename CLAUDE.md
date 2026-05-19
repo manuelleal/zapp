@@ -14,7 +14,7 @@ Desarrollador: instructor SENA Bucaramanga — inglés y otras competencias.
 - **IA:** Claude API — fase 2 (no implementado)
 - **Deploy objetivo:** Railway (Postgres + Redis nativos)
 - **Dev local:** Docker Compose (Postgres 16 + Redis 7)
-- **Rama activa:** `feature/frontend-react` (Sprint 1 completo)
+- **Rama activa:** `feat/frontend-resilience-e2e`
 
 ---
 
@@ -26,20 +26,68 @@ C:\zajuna\
 │       ├── server.js              ← Fastify, puerto 3000
 │       ├── routes/
 │       │   ├── auth.js            ← POST /api/auth/register | POST /api/auth/login
-│       │   ├── fichas.js          ← POST /api/fichas/scan | GET /api/fichas
-│       │   └── jobs.js            ← GET /api/jobs/:id
+│       │   ├── fichas.js          ← POST/GET /api/fichas, PATCH /api/fichas/:id
+│       │   ├── scan.js            ← POST /api/fichas/:fichaId/evidencias/scan
+│       │   ├── archivar.js        ← PATCH /api/fichas/:id (archiva/restaura)
+│       │   ├── evidencias.js      ← GET/PATCH evidencias, GET entregas
+│       │   ├── jobs.js            ← GET /api/jobs/:id
+│       │   ├── configEvidencias.js← GET/POST config de una evidencia (fechas, intentos)
+│       │   ├── batchConfig.js     ← POST /api/evidencias/batch/duedate | /batch/config
+│       │   ├── raps.js            ← CRUD RAPs + criterios + asociaciones RAP↔Evidencia
+│       │   ├── matchingIa.js      ← POST /api/matching/iniciar, GET propuestas/historial, PATCH decisión
+│       │   ├── foroRating.js      ← PATCH /api/evidencias/:id/foro/calificar
+│       │   ├── actas.js           ← CRUD actas, participantes, auto-poblar, cerrar, download DOCX
+│       │   ├── actasImport.js     ← POST /api/actas/import-csv/preview | /api/actas/:id/import-csv
+│       │   ├── mensajes.js        ← POST/GET mensajes, enviar-masivo (zajuna+email), sync-emails
+│       │   └── ajustes.js         ← GET/POST/DELETE /api/ajustes/correo (SMTP), probar conexión
 │       ├── workers/
-│       │   └── fichasWorker.js    ← BullMQ worker: login → descubrirFichas → upsert DB
+│       │   ├── fichasWorker.js        ← BullMQ: login → descubrirFichas → upsert DB
+│       │   ├── evidenciasWorker.js    ← scrapea entregas + estados + moodleId
+│       │   ├── autoScanWorker.js      ← re-scan automático programado
+│       │   ├── configWorker.js        ← lee config actual de una evidencia (Playwright)
+│       │   ├── leerConfigEvidenciaWorker.js ← lee campos de config individual
+│       │   ├── cambiarFechaWorker.js  ← cambia fecha de entrega (batch duedate)
+│       │   ├── cambiarConfigWorker.js ← cambia config masiva de evidencias
+│       │   ├── matchingIaWorker.js    ← propone asociaciones RAP↔Evidencia con IA
+│       │   ├── foroRatingWorker.js    ← califica posts de foro vía Playwright
+│       │   ├── mensajeFormativoWorker.js ← envía mensajes internos Moodle (zajuna)
+│       │   ├── emailMasivoWorker.js   ← envío masivo por SMTP (nodemailer)
+│       │   └── syncParticipantesWorker.js ← sincroniza emails de aprendices desde Zajuna
 │       ├── db/
 │       │   └── client.js          ← singleton PrismaClient
 │       └── lib/
 │           ├── crypto.js          ← AES-256-GCM encrypt/decrypt credenciales Zajuna
-│           └── queue.js           ← BullMQ Queue + Redis connection (ioredis)
+│           ├── queue.js           ← BullMQ Queue + Redis connection (ioredis)
+│           └── aprendices.js      ← filtrarAprendicesValidos() — filtra nombres inválidos
 ├── prisma/
-│   └── schema.prisma              ← 8 tablas: User Ficha Job Evidencia Aprendiz Entrega Historial AIFeedback
+│   └── schema.prisma              ← tablas: User Ficha Job Evidencia Aprendiz Entrega
+│                                    Historial AIFeedback RAP Criterio Competencia
+│                                    RapEvidenciaRel MatchingPropuesta ConfigChangeJob
+│                                    ActaSeguimiento ActaParticipante MensajeFormativo
+│                                    ConfigCorreo
 ├── scraper/
 │   ├── auth.js                    ← login(), cerrarModal(), BASE_URL, TIMEOUT, log
-│   └── fichas.js                  ← descubrirFichas(page, competenciaCodigo) → {fichas, otrosCursos}
+│   ├── fichas.js                  ← descubrirFichas(page, competenciaCodigo)
+│   ├── evidencias.js              ← scrapea actividades y entregas de una ficha
+│   ├── mensajes.js                ← enviarMensaje() interno Moodle (usado por worker)
+│   ├── configEvidencias.js        ← lee y escribe config de evidencia en Zajuna
+│   ├── csvParser.js               ← parsearCSVActa() — importa CSV GOR-F-084 V02
+│   ├── foroRating.js              ← califica posts de foro Moodle
+│   ├── extractGuiaRaps.js         ← extrae RAPs desde PDFs de guías (script utilidad)
+│   ├── seedRapsIngles.js          ← siembra RAPs inglés en DB desde JSON
+│   └── probes/                    ← scripts de prueba/investigación (NO producción)
+│       ├── probeRaps.js
+│       ├── probeH1DbAnalysis.js
+│       ├── probeH1v2Analysis.js
+│       ├── probeH2GuiasIterator.js
+│       ├── probeH3PdfBatch.js
+│       ├── probeCourseScan.js
+│       ├── probeGuiaHtmlExtract.js
+│       ├── probeClicAqui.js
+│       ├── probeGuiaRecurso.js
+│       ├── probeCompetencias.js
+│       ├── probeCursosOtros.js
+│       └── probe-participantes.js
 ├── web/
 │   └── src/
 │       ├── components/            ← EvidenciasModal.tsx, AprendicesPanel.tsx + shadcn ui/
@@ -48,6 +96,7 @@ C:\zajuna\
 │       └── main.tsx
 ├── zajuna-evidencias.js           ← CLI original FUNCIONAL — NO TOCAR
 ├── ARCHITECTURE.md                ← diseño completo del sistema (leer antes de cualquier feature)
+├── HANDOFF-ACTAS.md               ← handoff sprint Actas v2
 ├── docker-compose.yml             ← postgres:16-alpine + redis:7-alpine
 └── .env                           ← ZAJUNA_USER, ZAJUNA_PASS, DATABASE_URL, REDIS_URL, JWT_SECRET, ENCRYPTION_KEY
 ```
@@ -102,7 +151,50 @@ ENCRYPTION_KEY=        ← 64 chars hex (32 bytes) para AES-256-GCM
 | PATCH | `/api/evidencias/:id` | JWT | `{cerrada: bool}` — cerrar/reabrir manualmente |
 | PATCH | `/api/evidencias/bulk` | JWT | `{ids: string[], cerrada: bool}` — bulk cerrar/reabrir N evidencias |
 | GET | `/api/evidencias/:id/entregas?estado=...` | JWT | Aprendices con estado + moodleId + actId para URL grader |
+| GET | `/api/evidencias/:id/config` | JWT | Lee config actual de una evidencia (fechas, intentos) |
+| POST | `/api/evidencias/:id/config` | JWT | Encola escritura de config en Zajuna (Playwright) |
+| POST | `/api/evidencias/batch/duedate` | JWT | Cambio masivo de fecha de entrega (M2) |
+| GET | `/api/evidencias/batch/duedate/:id` | JWT | Estado de un job de batch duedate |
+| POST | `/api/evidencias/batch/config` | JWT | Cambio masivo de múltiples campos de config (M3) |
+| PATCH | `/api/evidencias/:id/foro/calificar` | JWT | Califica posts de un foro Moodle vía Playwright |
 | GET | `/api/jobs/:id` | JWT | Polling de job: queued → running → done/error |
+| GET | `/api/raps` | JWT | Lista RAPs de la competencia del usuario (con criterios) |
+| GET | `/api/raps/export` | JWT | Exporta RAPs+criterios como JSON descargable |
+| POST | `/api/raps/import` | JWT | Importa RAPs desde JSON; upsert por código |
+| GET | `/api/raps/:rapId` | JWT | Detalle de un RAP con criterios y evidencias asociadas |
+| GET | `/api/raps/:rapId/evidencias` | JWT | Evidencias asociadas a un RAP |
+| POST | `/api/raps/:rapId/evidencias/:evidenciaId` | JWT | Asocia una evidencia a un RAP |
+| DELETE | `/api/raps/:rapId/evidencias/:evidenciaId` | JWT | Quita asociación RAP↔Evidencia |
+| POST | `/api/matching/iniciar` | JWT | Encola job de matching IA (propone RAP↔Evidencia) |
+| GET | `/api/matching/propuestas` | JWT | Lista propuestas pendientes del matching IA |
+| GET | `/api/matching/historial` | JWT | Lista propuestas aprobadas/rechazadas |
+| PATCH | `/api/matching/propuestas/:id` | JWT | `{decision: "aprobado"\|"rechazado"}` — acepta o rechaza propuesta |
+| POST | `/api/actas` | JWT | Crea acta de seguimiento (borrador) |
+| GET | `/api/actas?fichaId=...&incluirArchivadas=1` | JWT | Lista actas del usuario |
+| GET | `/api/actas/:id` | JWT | Detalle de acta con participantes, mensajes y RAPs |
+| PATCH | `/api/actas/:id` | JWT | Edita acta: conclusiones, compromisos, rapIds, archivada, notas |
+| DELETE | `/api/actas/:id` | JWT | Elimina acta y sus participantes |
+| POST | `/api/actas/:id/participantes` | JWT | Upsert participantes con juicio y rapStatus |
+| DELETE | `/api/actas/:id/participantes/:participanteId` | JWT | Elimina un participante del acta |
+| POST | `/api/actas/:id/auto-poblar` | JWT | Auto-puebla participantes calculando juicio desde entregas |
+| POST | `/api/actas/:id/cerrar` | JWT | Cierra el acta (estado: borrador → cerrada) |
+| GET | `/api/actas/:id/download` | JWT | Descarga acta como DOCX (formato libre) |
+| GET | `/api/actas/:id/download/gor-f-084` | JWT | Descarga acta en formato institucional GOR-F-084 V02 |
+| POST | `/api/actas/import-csv/preview` | JWT | Parsea CSV GOR-F-084 y clasifica filas SIN escribir en DB |
+| POST | `/api/actas/:id/import-csv` | JWT | Confirma import CSV: upsert Aprendiz + ActaParticipante |
+| POST | `/api/mensajes` | JWT | Crea y encola mensaje formativo (canal: zajuna\|manual) |
+| GET | `/api/mensajes?actaId=...&fichaId=...` | JWT | Lista mensajes del usuario |
+| GET | `/api/mensajes/:id` | JWT | Detalle de un mensaje |
+| GET | `/api/mensajes/aprendices?fichaId=...` | JWT | Lista aprendices de una ficha (para seleccionar destinatarios) |
+| GET | `/api/mensajes/historial?fichaId=...` | JWT | Historial de mensajes con ficha embebida (últimos 100) |
+| POST | `/api/mensajes/sync-emails` | JWT | Encola job de sincronización de emails desde Zajuna |
+| GET | `/api/mensajes/sync-emails/:jobId` | JWT | Estado del job de sincronización de emails |
+| POST | `/api/mensajes/enviar-masivo` | JWT | Crea y encola envío masivo (canal: email\|zajuna) |
+| GET | `/api/mensajes/enviar-masivo/:jobId` | JWT | Estado del job de envío masivo |
+| GET | `/api/ajustes/correo` | JWT | Lee configuración SMTP del usuario |
+| POST | `/api/ajustes/correo` | JWT | Guarda/actualiza configuración SMTP (upsert) |
+| POST | `/api/ajustes/correo/probar` | JWT | Verifica conexión SMTP con nodemailer |
+| DELETE | `/api/ajustes/correo` | JWT | Elimina configuración SMTP |
 
 ---
 
