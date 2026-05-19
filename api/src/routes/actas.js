@@ -313,7 +313,12 @@ async function actasRoutes(fastify) {
 
     // ── Calcular rapStatus + juicio + hasUngraded por aprendiz ─────────────────
     function esAprobada(e) {
-      return (e.notaActual !== null && e.notaActual > 0) || /aprobad|^A$/i.test(e.estado ?? "");
+      return e.notaActual === 100 || e.estado === "A" ||
+        (e.notaActual !== null && e.notaActual > 0) || /aprobad|^A$/i.test(e.estado ?? "");
+    }
+
+    function esDesaprobada(e) {
+      return e.notaActual === 0 || e.estado === "D" || /desaprobad|^D$/i.test(e.estado ?? "");
     }
 
     let nAprobaron = 0, nPendientes = 0, nNoParticiparon = 0, nWarnings = 0;
@@ -334,8 +339,15 @@ async function actasRoutes(fastify) {
         if (entregasDelRap.length === 0) {
           rapStatus[codigo] = "NO PARTICIPÓ";
         } else {
-          const tieneAprobada = entregasDelRap.some(e => esAprobada(e));
-          rapStatus[codigo] = tieneAprobada ? "APROBÓ" : "PENDIENTE";
+          const tieneAprobada  = entregasDelRap.some(e => esAprobada(e));
+          const todasDesaprobadas = entregasDelRap.every(e => esDesaprobada(e));
+          if (tieneAprobada) {
+            rapStatus[codigo] = "APROBÓ";
+          } else if (todasDesaprobadas) {
+            rapStatus[codigo] = "NO PARTICIPÓ";
+          } else {
+            rapStatus[codigo] = "PENDIENTE";
+          }
           if (entregasDelRap.some(e => e.estado === "pendiente")) hasUngraded = true;
         }
       }
