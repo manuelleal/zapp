@@ -283,69 +283,134 @@ async function actasRoutes(fastify) {
 
     const todasEvidenciaIds = [...new Set([...relsConfirmadas, ...relsIA].map(r => r.evidenciaId))];
 
-    // ── Aprendices de la ficha (filtrando nombres inválidos: AA, AG, etc.) ─────
-    const NOMBRE_INVALIDO = /^[A-Z]{1,3}$|^.{1,4}$/;
+    // ── Aprendices de la ficha (filtrando nombres inválidos: AA, AG, ABALEJANDRO…)
+    // Priorizamos los que tienen al menos una entrega (vienen del evidenciasWorker
+    // con nombres limpios) sobre los que no tienen ninguna entrega.
     const aprendicesRaw = await prisma.aprendiz.findMany({
       where:  { fichaId: acta.fichaId },
-      select: { id: true, nombre: true },
+      select: { id: true, nombre: true, entregas: { select: { id: true }, take: 1 } },
     });
-    const aprendices = aprendicesRaw.filter(a => !NOMBRE_INVALIDO.test((a.nombre || "").trim()));
+    const aprendicesValidos = filtrarAprendicesValidos(aprendicesRaw);
+    // Orden: con entregas primero
+    const aprendices = [
+      ...aprendicesValidos.filter(a => a.entregas.length > 0),
+      ...aprendicesValidos.filter(a => a.entregas.length === 0),
+    ].map(a => ({ id: a.id, nombre: a.nombre }));
     const nFiltrados = aprendicesRaw.length - aprendices.length;
     const aprendizIds = aprendices.map(a => a.id);
 
-    // ── Todas las entregas relevantes en una query ─────────────────────────────
-    const todasEntregas = todasEvidenciaIds.length > 0
-      ? await prisma.entrega.findMany({
-          where: {
-            aprendizId:  { in: aprendizIds },
-            evidenciaId: { in: todasEvidenciaIds },
-          },
-          select: { aprendizId: true, evidenciaId: true, estado: true, notaActual: true },
-        })
-      : [];
+    // ── Decidir modo: per-RAP (si hay vinculaciones) o fallback global ─────────
+    // RapEvidenciaRel + MatchingPropuesta están vacíos en muchos despliegues
+    // porque el linking RAP↔Evidencia no se ha hecho aún (ni por UI ni por IA).
+    // En ese caso caemos a un cálculo "best-effort" sobre TODAS las entregas
+    // del aprendiz en la ficha del acta, aplicando el mismo juicio en cada RAP
+    // por consistencia visual. El instructor puede sobreescribir por RAP.
+    const modoPerRap = todasEvidenciaIds.length > 0;
 
-    // Agrupar entregas: aprendizId → evidenciaId → entrega
-    const entregasMap = new Map();
+    // ── Cargar entregas relevantes ──────────────────────────────────────────────
+    // En modo per-RAP: solo entregas de evidencias vinculadas a los RAPs.
+    // En modo fallback: todas las entregas del aprendiz en evidencias de la ficha.
+    let todasEntregas;
+    if (modoPerRap) {
+      todasEntregas = await prisma.entrega.findMany({
+        where: {
+          aprendizId:  { in: aprendizIds },
+          evidenciaId: { in: todasEvidenciaIds },
+        },
+        select: { aprendizId: true, evidenciaId: true, estado: true, notaActual: true },
+      });
+    } else {
+      todasEntregas = await prisma.entrega.findMany({
+        where: {
+          aprendizId: { in: aprendizIds },
+          evidencia:  { fichaId: acta.fichaId },
+        },
+        select: { aprendizId: true, evidenciaId: true, estado: true, notaActual: true },
+      });
+    }
+
+    // Agrupar entregas: aprendizId → array (modo fallback) o aprendizId → evidenciaId → entrega (per-RAP)
+    const entregasPorAprendiz = new Map();
     for (const e of todasEntregas) {
-      if (!entregasMap.has(e.aprendizId)) entregasMap.set(e.aprendizId, new Map());
-      entregasMap.get(e.aprendizId).set(e.evidenciaId, e);
+      if (!entregasPorAprendiz.has(e.aprendizId)) entregasPorAprendiz.set(e.aprendizId, []);
+      entregasPorAprendiz.get(e.aprendizId).push(e);
+    }
+
+    // ── Helpers ────────────────────────────────────────────────────────────────
+    // Estado canónico de una entrega Moodle:
+    //   - "calificado" → instructor ya calificó (asumimos APROBADO; se puede ajustar manualmente)
+    //   - notaActual > 0 → APROBADO
+    //   - estado contiene "aprobad" o estado === "A" → APROBADO
+    //   - "pendiente" → instructor aún no califica → cuenta como PENDIENTE
+    //   - "sin_entregar" / "" → aprendiz no entregó → cuenta como SIN_ENTREGAR
+    function esAprobada(e) {
+      if (e.notaActual !== null && e.notaActual > 0) return true;
+      const est = (e.estado ?? "").toLowerCase();
+      if (est === "calificado") return true;
+      if (/aprobad/.test(est)) return true;
+      if (est === "a") return true;
+      return false;
+    }
+    function esPendiente(e) {
+      const est = (e.estado ?? "").toLowerCase();
+      return est === "pendiente";
+    }
+
+    /**
+     * Aplica la regla del usuario sobre un conjunto de entregas:
+     *   - todas APROBADO        → "APROBÓ"
+     *   - alguna PENDIENTE/SIN  → "PENDIENTE"
+     *   - ninguna entrega       → "NO PARTICIPÓ"
+     */
+    function calcularEstado(entregas) {
+      if (!entregas || entregas.length === 0) return { estado: "NO PARTICIPÓ", hasUngraded: false };
+      const tienePendiente   = entregas.some(esPendiente);
+      const tieneAprobada    = entregas.some(esAprobada);
+      const tieneSinEntregar = entregas.some(e => !esAprobada(e) && !esPendiente(e));
+      if (tienePendiente || tieneSinEntregar) {
+        return { estado: "PENDIENTE", hasUngraded: tienePendiente };
+      }
+      if (tieneAprobada) return { estado: "APROBÓ", hasUngraded: false };
+      return { estado: "NO PARTICIPÓ", hasUngraded: false };
     }
 
     // ── Calcular rapStatus + juicio + hasUngraded por aprendiz ─────────────────
-    function esAprobada(e) {
-      return (e.notaActual !== null && e.notaActual > 0) || /aprobad|^A$/i.test(e.estado ?? "");
-    }
-
     let nAprobaron = 0, nPendientes = 0, nNoParticiparon = 0, nWarnings = 0;
 
     const upserts = aprendices.map(aprendiz => {
-      const entregasAprendiz = entregasMap.get(aprendiz.id) ?? new Map();
+      const entregasAprendiz = entregasPorAprendiz.get(aprendiz.id) ?? [];
       const rapStatus = {};
       let hasUngraded = false;
 
-      for (const rapId of rapIds) {
-        const codigo = rapCodigoPorId.get(rapId) ?? rapId;
-        const evidIds = mapaRapEvidencias.get(rapId) ?? new Set();
-
-        const entregasDelRap = [...evidIds]
-          .map(eid => entregasAprendiz.get(eid))
-          .filter(Boolean);
-
-        if (entregasDelRap.length === 0) {
-          rapStatus[codigo] = "NO PARTICIPÓ";
-        } else {
-          const tieneAprobada = entregasDelRap.some(e => esAprobada(e));
-          rapStatus[codigo] = tieneAprobada ? "APROBÓ" : "PENDIENTE";
-          if (entregasDelRap.some(e => e.estado === "pendiente")) hasUngraded = true;
+      if (modoPerRap) {
+        // Modo preciso: una columna por RAP basada en sus evidencias vinculadas.
+        const entregasMap = new Map(entregasAprendiz.map(e => [e.evidenciaId, e]));
+        for (const rapId of rapIds) {
+          const codigo = rapCodigoPorId.get(rapId) ?? rapId;
+          const evidIds = mapaRapEvidencias.get(rapId) ?? new Set();
+          const entregasDelRap = [...evidIds].map(eid => entregasMap.get(eid)).filter(Boolean);
+          const r = calcularEstado(entregasDelRap);
+          rapStatus[codigo] = r.estado;
+          if (r.hasUngraded) hasUngraded = true;
         }
+      } else {
+        // Fallback: juicio global desde TODAS las entregas del aprendiz en la
+        // ficha. Lo replicamos en cada RAP del acta para que la UI tenga celda
+        // por RAP y el instructor pueda overridear manualmente.
+        const r = calcularEstado(entregasAprendiz);
+        for (const rapId of rapIds) {
+          const codigo = rapCodigoPorId.get(rapId) ?? rapId;
+          rapStatus[codigo] = r.estado;
+        }
+        if (r.hasUngraded) hasUngraded = true;
       }
 
-      // Juicio global desde rapStatus
+      // Juicio global = peor estado entre RAPs (PENDIENTE > NO PARTICIPÓ > APROBÓ)
       const valores = Object.values(rapStatus);
       let juicio;
-      if (valores.every(v => v === "APROBÓ"))         { juicio = "APROBÓ";       nAprobaron++; }
-      else if (valores.every(v => v === "NO PARTICIPÓ")) { juicio = "NO PARTICIPÓ"; nNoParticiparon++; }
-      else                                              { juicio = "PENDIENTE";   nPendientes++; }
+      if (valores.includes("PENDIENTE"))           { juicio = "PENDIENTE";    nPendientes++; }
+      else if (valores.every(v => v === "APROBÓ")) { juicio = "APROBÓ";       nAprobaron++; }
+      else                                          { juicio = "NO PARTICIPÓ"; nNoParticiparon++; }
 
       if (hasUngraded) nWarnings++;
 
@@ -359,13 +424,14 @@ async function actasRoutes(fastify) {
     await prisma.$transaction(upserts);
 
     return {
-      poblados:            aprendices.length,
-      aprobaron:           nAprobaron,
-      pendientes:          nPendientes,
-      noParticiparon:      nNoParticiparon,
-      warnings:            nWarnings,
-      filtrados:           nFiltrados,
+      poblados:             aprendices.length,
+      aprobaron:            nAprobaron,
+      pendientes:           nPendientes,
+      noParticiparon:       nNoParticiparon,
+      warnings:             nWarnings,
+      filtrados:            nFiltrados,
       evidenciasVinculadas: todasEvidenciaIds.length,
+      modo:                 modoPerRap ? "per-rap" : "global-fallback",
     };
   });
 
