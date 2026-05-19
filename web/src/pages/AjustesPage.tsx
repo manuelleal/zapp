@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Settings, Loader2, Mail, CheckCircle2, AlertCircle, Trash2 } from "lucide-react"
+import { Settings, Loader2, Mail, CheckCircle2, Trash2 } from "lucide-react"
 import Layout from "@/components/Layout"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -20,16 +20,30 @@ interface ConfigCorreo {
   actualizadaAt: string
 }
 
+const PROVEEDORES = [
+  { label: "Outlook / Office 365 (SENA)",  host: "smtp.office365.com", port: 587 },
+  { label: "Gmail",                         host: "smtp.gmail.com",     port: 587 },
+  { label: "Otro (avanzado)",               host: "",                   port: 587 },
+] as const
+
+function detectarProveedor(host: string): number {
+  if (host === "smtp.office365.com") return 0
+  if (host === "smtp.gmail.com")     return 1
+  if (host)                          return 2
+  return 0
+}
+
 export default function AjustesPage() {
   const queryClient = useQueryClient()
   const navigate    = useNavigate()
   const { jwt, user, clearAuth, setAuth } = useAuthStore()
 
-  const [smtpHost,   setSmtpHost]   = useState("")
-  const [smtpPort,   setSmtpPort]   = useState(587)
-  const [smtpUser,   setSmtpUser]   = useState("")
-  const [smtpPass,   setSmtpPass]   = useState("")
-  const [fromNombre, setFromNombre] = useState("")
+  const [proveedorIdx, setProveedorIdx] = useState(0)
+  const [smtpHost,     setSmtpHost]     = useState("smtp.office365.com")
+  const [smtpPort,     setSmtpPort]     = useState(587)
+  const [smtpUser,     setSmtpUser]     = useState("")
+  const [smtpPass,     setSmtpPass]     = useState("")
+  const [fromNombre,   setFromNombre]   = useState("")
 
   useEffect(() => {
     const storedJwt = localStorage.getItem("zajuna_jwt")
@@ -38,11 +52,8 @@ export default function AjustesPage() {
       try {
         const payload = JSON.parse(atob(storedJwt.split(".")[1]))
         setAuth(storedJwt, {
-          id:                payload.id || "",
-          nombre:            payload.nombre || "",
-          email:             payload.email || "",
-          competenciaNombre: payload.competenciaNombre || "",
-          competenciaCodigo: payload.competenciaCodigo || "",
+          id: payload.id || "", nombre: payload.nombre || "", email: payload.email || "",
+          competenciaNombre: payload.competenciaNombre || "", competenciaCodigo: payload.competenciaCodigo || "",
         })
       } catch { clearAuth(); navigate("/login") }
     }
@@ -56,6 +67,8 @@ export default function AjustesPage() {
 
   useEffect(() => {
     if (config) {
+      const idx = detectarProveedor(config.smtpHost)
+      setProveedorIdx(idx)
       setSmtpHost(config.smtpHost)
       setSmtpPort(config.smtpPort)
       setSmtpUser(config.smtpUser)
@@ -63,26 +76,30 @@ export default function AjustesPage() {
     }
   }, [config])
 
+  function handleProveedorChange(idx: number) {
+    setProveedorIdx(idx)
+    const p = PROVEEDORES[idx]
+    if (p.host) { setSmtpHost(p.host); setSmtpPort(p.port) }
+  }
+
   const guardarMutation = useMutation({
     mutationFn: () => apiFetch("/api/ajustes/correo", {
       method: "POST",
-      body:   JSON.stringify({ smtpHost, smtpPort, smtpUser, smtpPass, fromNombre }),
+      body:   JSON.stringify({ smtpHost, smtpPort, smtpUser, smtpPass: smtpPass || undefined, fromNombre }),
     }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["ajustes-correo"] })
       setSmtpPass("")
-      toast.success("Configuración SMTP guardada.")
+      toast.success("Correo configurado correctamente.")
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Error al guardar."),
   })
 
   const probarMutation = useMutation({
-    mutationFn: () => apiFetch<{ ok: boolean; error?: string }>(
-      "/api/ajustes/correo/probar", { method: "POST" }
-    ),
+    mutationFn: () => apiFetch<{ ok: boolean; error?: string }>("/api/ajustes/correo/probar", { method: "POST" }),
     onSuccess: (r) => {
-      if (r.ok) toast.success("Conexión SMTP verificada correctamente.")
-      else      toast.error(`Conexión falló: ${r.error}`)
+      if (r.ok) toast.success("Conexión verificada. El correo está listo para enviar.")
+      else      toast.error(`No se pudo conectar: ${r.error}`)
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Error al probar."),
   })
@@ -91,36 +108,40 @@ export default function AjustesPage() {
     mutationFn: () => apiFetch("/api/ajustes/correo", { method: "DELETE" }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["ajustes-correo"] })
-      setSmtpHost(""); setSmtpPort(587); setSmtpUser(""); setSmtpPass(""); setFromNombre("")
+      setProveedorIdx(0); setSmtpHost("smtp.office365.com"); setSmtpPort(587)
+      setSmtpUser(""); setSmtpPass(""); setFromNombre("")
       toast.success("Configuración eliminada.")
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Error al eliminar."),
   })
 
   function handleGuardar() {
-    if (!smtpHost.trim() || !smtpUser.trim()) {
-      toast.error("Servidor SMTP y usuario son obligatorios.")
-      return
-    }
-    if (!config && !smtpPass.trim()) {
-      toast.error("La contraseña es obligatoria al crear la configuración.")
-      return
-    }
+    if (!smtpUser.trim()) { toast.error("El correo electrónico es obligatorio."); return }
+    if (!config && !smtpPass.trim()) { toast.error("La contraseña es obligatoria."); return }
     guardarMutation.mutate()
   }
 
+  const esAvanzado = proveedorIdx === 2
+
+  // Nota de ayuda según proveedor
+  const notaProveedor = proveedorIdx === 0
+    ? "Usa tu correo y contraseña normales del SENA. Si no funciona, es probable que tu cuenta tenga verificación en dos pasos — contacta al área de sistemas del SENA."
+    : proveedorIdx === 1
+    ? "Gmail requiere una contraseña de aplicación, no tu contraseña normal. Activa la verificación en 2 pasos en myaccount.google.com y luego genera una contraseña de aplicación."
+    : "Consulta con tu proveedor de correo el servidor SMTP y el puerto correctos."
+
   return (
     <Layout>
-      <div className="space-y-4 max-w-2xl">
+      <div className="space-y-4 max-w-xl">
         <div className="bg-white rounded-lg border border-gray-200 p-4 flex items-center gap-2">
           <Settings className="w-4 h-4 text-sena-green" />
           <h1 className="text-sm font-semibold text-gray-900">Ajustes</h1>
         </div>
 
-        <div className="bg-white rounded-lg border border-gray-200 p-5 space-y-4">
+        <div className="bg-white rounded-lg border border-gray-200 p-5 space-y-5">
           <div className="flex items-center gap-2 border-b border-gray-100 pb-3">
             <Mail className="w-4 h-4 text-sena-green" />
-            <h2 className="text-sm font-semibold text-gray-900">Configuración de correo saliente</h2>
+            <h2 className="text-sm font-semibold text-gray-900">Correo para notificaciones</h2>
             {config && (
               <span className="ml-auto inline-flex items-center gap-1 text-xs text-green-700 bg-green-50 border border-green-200 px-2 py-0.5 rounded">
                 <CheckCircle2 className="w-3 h-3" /> Configurado
@@ -134,47 +155,72 @@ export default function AjustesPage() {
             </div>
           ) : (
             <div className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="space-y-1.5 sm:col-span-2">
-                  <Label htmlFor="smtp-host">Servidor SMTP *</Label>
-                  <Input id="smtp-host" value={smtpHost} onChange={e => setSmtpHost(e.target.value)}
-                    placeholder="smtp.gmail.com" />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="smtp-port">Puerto</Label>
-                  <Input id="smtp-port" type="number" value={smtpPort}
-                    onChange={e => setSmtpPort(Number(e.target.value) || 587)} />
+
+              {/* Selector de proveedor */}
+              <div className="space-y-1.5">
+                <Label>¿Con qué correo vas a enviar las notificaciones?</Label>
+                <div className="flex flex-col gap-2">
+                  {PROVEEDORES.map((p, i) => (
+                    <label key={i} className="flex items-center gap-2.5 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="proveedor"
+                        checked={proveedorIdx === i}
+                        onChange={() => handleProveedorChange(i)}
+                        className="h-4 w-4 text-sena-green"
+                      />
+                      <span className="text-sm text-gray-700">{p.label}</span>
+                    </label>
+                  ))}
                 </div>
               </div>
 
+              {/* Campos avanzados solo si elige Otro */}
+              {esAvanzado && (
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="space-y-1.5 col-span-2">
+                    <Label htmlFor="smtp-host">Servidor SMTP *</Label>
+                    <Input id="smtp-host" value={smtpHost} onChange={e => setSmtpHost(e.target.value)}
+                      placeholder="smtp.ejemplo.com" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="smtp-port">Puerto</Label>
+                    <Input id="smtp-port" type="number" value={smtpPort}
+                      onChange={e => setSmtpPort(Number(e.target.value) || 587)} />
+                  </div>
+                </div>
+              )}
+
+              {/* Correo y contraseña */}
               <div className="space-y-1.5">
-                <Label htmlFor="smtp-user">Usuario (email) *</Label>
+                <Label htmlFor="smtp-user">Tu correo electrónico *</Label>
                 <Input id="smtp-user" type="email" value={smtpUser}
                   onChange={e => setSmtpUser(e.target.value)}
                   placeholder="instructor@sena.edu.co" />
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="smtp-pass">Contraseña</Label>
+                <Label htmlFor="smtp-pass">
+                  {proveedorIdx === 1 ? "Contraseña de aplicación *" : "Contraseña *"}
+                </Label>
                 <Input id="smtp-pass" type="password" value={smtpPass}
                   onChange={e => setSmtpPass(e.target.value)}
-                  placeholder={config ? "••••••••  (dejar vacío para no cambiar)" : "Contraseña de aplicación (no tu contraseña normal)"} />
+                  placeholder={config ? "Dejar vacío para no cambiar" : "Tu contraseña"} />
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="from-nombre">Nombre del remitente</Label>
+                <Label htmlFor="from-nombre">Tu nombre (aparece en los correos enviados)</Label>
                 <Input id="from-nombre" value={fromNombre}
                   onChange={e => setFromNombre(e.target.value)}
-                  placeholder="Christiam Puentes — SENA" />
+                  placeholder="Christiam Puentes — Instructor SENA" />
               </div>
 
-              <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800 space-y-1">
-                <p className="font-semibold flex items-center gap-1"><AlertCircle className="w-3.5 h-3.5" /> Cómo obtener una contraseña SMTP</p>
-                <p><strong>Gmail:</strong> activa la verificación en 2 pasos y genera una <em>Contraseña de aplicación</em> en <a className="underline" href="https://myaccount.google.com" target="_blank" rel="noreferrer">myaccount.google.com</a>.</p>
-                <p><strong>Outlook / Office 365:</strong> usa <code>smtp.office365.com</code> en puerto <code>587</code>.</p>
-                <p>La contraseña se guarda cifrada con AES-256-GCM en el servidor.</p>
-              </div>
+              {/* Nota contextual */}
+              <p className="text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-md px-3 py-2">
+                {notaProveedor}
+              </p>
 
+              {/* Acciones */}
               <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-gray-100">
                 <Button size="sm" className="bg-sena-green hover:bg-sena-green/90 text-xs"
                   onClick={handleGuardar} disabled={guardarMutation.isPending}>
@@ -182,18 +228,21 @@ export default function AjustesPage() {
                   Guardar
                 </Button>
                 <Button size="sm" variant="outline" className="text-xs"
-                  onClick={() => probarMutation.mutate()} disabled={probarMutation.isPending || !config}>
+                  onClick={() => probarMutation.mutate()}
+                  disabled={probarMutation.isPending || !config}>
                   {probarMutation.isPending && <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />}
                   Probar conexión
                 </Button>
                 {config && (
-                  <Button size="sm" variant="outline" className="text-xs gap-1.5 text-red-600 border-red-300 hover:bg-red-50 ml-auto"
-                    onClick={() => { if (confirm("¿Eliminar configuración SMTP?")) eliminarMutation.mutate() }}
+                  <Button size="sm" variant="outline"
+                    className="text-xs gap-1.5 text-red-600 border-red-300 hover:bg-red-50 ml-auto"
+                    onClick={() => { if (confirm("¿Eliminar la configuración de correo?")) eliminarMutation.mutate() }}
                     disabled={eliminarMutation.isPending}>
                     <Trash2 className="w-3 h-3" /> Eliminar
                   </Button>
                 )}
               </div>
+
             </div>
           )}
         </div>
