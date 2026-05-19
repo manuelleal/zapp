@@ -1,5 +1,6 @@
 const prisma = require("../db/client");
 const { mensajesQueue, syncParticipantesQueue, emailMasivoQueue } = require("../lib/queue");
+const { filtrarAprendicesValidos } = require("../lib/aprendices");
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
@@ -132,14 +133,12 @@ async function mensajesRoutes(fastify) {
     if (!ficha)                       return reply.code(404).send({ error: "Ficha no encontrada." });
     if (ficha.userId !== req.user.id) return reply.code(403).send({ error: "Sin acceso a esta ficha." });
 
-    const NOMBRE_INVALIDO = /^[A-Z]{1,3}$|^.{1,4}$/;
     const aprendicesRaw = await prisma.aprendiz.findMany({
       where:  { fichaId },
       select: { id: true, nombre: true, email: true, moodleId: true, ultimoAcceso: true },
       orderBy: { nombre: "asc" },
     });
-    const aprendices = aprendicesRaw.filter(a => !NOMBRE_INVALIDO.test((a.nombre || "").trim()));
-    return aprendices;
+    return filtrarAprendicesValidos(aprendicesRaw);
   });
 
   // ── POST /api/mensajes/sync-emails ───────────────────────────────────────────
@@ -226,6 +225,27 @@ async function mensajesRoutes(fastify) {
         instructor: d.instructor ?? null,
       };
     });
+
+    // ── Validación por canal ────────────────────────────────────────────────────
+    // canal=email → requiere al menos un destinatario con email.
+    // canal=zajuna → requiere al menos un destinatario con moodleId
+    //   (el worker `mensajeFormativoWorker` exige moodleId para abrir el chat
+    //    Moodle; sin él el envío falla silenciosamente).
+    if (canal === "email") {
+      const conEmail = destinatariosEnriquecidos.filter(d => d.email).length;
+      if (conEmail === 0) {
+        return reply.code(422).send({
+          error: "Ningún destinatario tiene email. Sincroniza los emails desde Zajuna primero (botón 'Sincronizar emails' en la página Mensajes).",
+        });
+      }
+    } else if (canal === "zajuna") {
+      const conMoodle = destinatariosEnriquecidos.filter(d => d.moodleId).length;
+      if (conMoodle === 0) {
+        return reply.code(422).send({
+          error: "Ningún destinatario tiene moodleId. Re-escanea las evidencias de la ficha para poblar los moodleId de los aprendices.",
+        });
+      }
+    }
 
     const mensaje = await prisma.mensajeFormativo.create({
       data: {
