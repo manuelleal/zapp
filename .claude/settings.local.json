@@ -65,7 +65,11 @@
       "PowerShell(node --check \"C:\\\\zajuna\\\\scraper\\\\extractGuiaRaps.js\" 2>&1)",
       "PowerShell(cd C:\\\\zajuna; node scraper/probeGuiaRecurso.js 2>&1 | Select-String -Pattern \"\\(═══|Botón|window\\\\.open|URL|Navegando|pestaña|RAP|BLOQUE|RESUMEN|PDF|✅|⚠|Texto en\\)\" | ForEach-Object { $_.Line })",
       "Bash(find C:\\\\\\\\zajuna -type f -name \"*acta*\")",
-      "Bash(grep *)"
+      "Bash(grep *)",
+      "PowerShell(\\(Get-Item \"C:\\\\zajuna\\\\output\\\\agent1\\\\root.pretty.js\"\\).Length; \\(Get-Content \"C:\\\\zajuna\\\\output\\\\agent1\\\\root.pretty.js\"\\).Count)",
+      "Bash(New-Item -ItemType Directory -Force -Path \"C:\\\\zajuna\\\\output\\\\agent3\")",
+      "Bash(Out-Null)",
+      "Bash(Write-Output \"Directory ready\")"
     ]
   }
 }
