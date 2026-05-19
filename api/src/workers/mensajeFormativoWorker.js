@@ -9,6 +9,15 @@ const prisma = require("../db/client");
 const { login, cerrarModal, BASE_URL, log } = require("../../../scraper/auth");
 const { enviarMensajeMoodle } = require("../../../scraper/mensajes");
 
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function personalizarCuerpo(cuerpo, dest, ficha, instructor) {
+  return String(cuerpo ?? "")
+    .replace(/\{\{nombre\}\}/gi,     dest.nombre ?? "")
+    .replace(/\{\{ficha\}\}/gi,      ficha)
+    .replace(/\{\{instructor\}\}/gi, instructor);
+}
+
 // ─── Worker ───────────────────────────────────────────────────────────────────
 
 const worker = new Worker("mensajes", async (job) => {
@@ -58,6 +67,18 @@ const worker = new Worker("mensajes", async (job) => {
     throw err;
   }
 
+  // ─── Cargar ficha e instructor ────────────────────────────────────────────
+
+  const mf = await prisma.mensajeFormativo.findUnique({
+    where: { id: mensajeId },
+    include: {
+      ficha: { select: { codigo: true } },
+      user:  { select: { nombre: true } },
+    },
+  });
+  const fichaCode        = mf?.ficha?.codigo ?? "";
+  const instructorNombre = mf?.user?.nombre  ?? "";
+
   // ─── Envío por destinatario ────────────────────────────────────────────────
 
   let enviados  = 0;
@@ -72,7 +93,8 @@ const worker = new Worker("mensajes", async (job) => {
       }
 
       try {
-        const resultado = await enviarMensajeMoodle(page, dest.moodleId, cuerpo);
+        const cuerpoPersonalizado = personalizarCuerpo(cuerpo, dest, fichaCode, instructorNombre);
+        const resultado = await enviarMensajeMoodle(page, dest.moodleId, cuerpoPersonalizado);
         if (resultado.ok) {
           enviados++;
         } else {
