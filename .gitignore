@@ -1,2 +1,14 @@
 node_modules/
 .env
+probe-*.png
+probe-*.json
+probe-*.pdf
+*.log
+server.err
+server.log
+server-err.log
+*.docx
+acta_*.pdf
+output/
+outputagent*.js
+web/dist/
