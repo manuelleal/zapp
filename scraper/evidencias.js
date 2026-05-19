@@ -227,6 +227,7 @@ async function obtenerMatriculados(page, courseId) {
     const userRows = Array.from(document.querySelectorAll("tr[data-uid].userrow"));
     if (userRows.length > 0) {
       return userRows.map(row => {
+        if (row.querySelector('th.usersuspended')) return null;
         const uid = row.getAttribute("data-uid");
         if (!uid) return null;
         const profileLink = row.querySelector(
@@ -248,6 +249,8 @@ async function obtenerMatriculados(page, courseId) {
     ));
     const map = new Map();
     for (const a of links) {
+      const tr = a.closest('tr');
+      if (tr?.querySelector('th.usersuspended')) continue;
       const m = a.href.match(/[?&]id=(\d+)/);
       if (!m) continue;
       const id = m[1];
