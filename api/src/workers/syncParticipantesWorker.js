@@ -6,7 +6,7 @@ const { connection } = require("../lib/queue");
 const { decrypt } = require("../lib/crypto");
 const prisma = require("../db/client");
 const { login, log } = require("../../../scraper/auth");
-const { sincronizarParticipantes, parseUltimoAcceso } = require("../../../scraper/mensajes");
+const { obtenerMatriculados } = require("../../../scraper/evidencias");
 
 // ─── Worker ───────────────────────────────────────────────────────────────────
 // Sincroniza emails y último acceso de los aprendices de una ficha desde Moodle.
@@ -29,23 +29,23 @@ const worker = new Worker("syncParticipantes", async (job) => {
 
   try {
     await login(page, zajunaUser, zajunaPass);
-    const participantes = await sincronizarParticipantes(page, courseId);
+    const participantes = await obtenerMatriculados(page, courseId);
 
     let actualizados   = 0;
     let creadosEmails  = 0;
     let sinMatch       = 0;
 
     for (const p of participantes) {
-      if (!p.email || !p.moodleId) continue;
+      if (!p.moodleUserId) continue;
 
-      // Parseo robusto es-CO de "Último acceso" ("hace 2 días", "Nunca", abs, etc.)
-      const ultimoAcceso = parseUltimoAcceso(p.ultimoAcceso);
+      const updateData = {};
+      if (p.email)     updateData.email     = p.email;
+      if (p.documento) updateData.documento = p.documento;
 
-      const updateData = { email: p.email };
-      if (ultimoAcceso) updateData.ultimoAcceso = ultimoAcceso;
+      if (Object.keys(updateData).length === 0) continue;
 
       const r = await prisma.aprendiz.updateMany({
-        where: { fichaId, moodleId: String(p.moodleId) },
+        where: { fichaId, moodleId: String(p.moodleUserId) },
         data:  updateData,
       });
 
@@ -54,7 +54,7 @@ const worker = new Worker("syncParticipantes", async (job) => {
         if (p.email) creadosEmails++;
       } else {
         sinMatch++;
-        log(`[syncParticipantesWorker] sin match en DB para moodleId=${p.moodleId} (${p.nombre})`);
+        log(`[syncParticipantesWorker] sin match en DB para moodleId=${p.moodleUserId} (${p.nombre})`);
       }
     }
 

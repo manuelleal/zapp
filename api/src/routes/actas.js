@@ -355,22 +355,23 @@ async function actasRoutes(fastify) {
       const est = (e.estado ?? "").toLowerCase();
       return est === "pendiente";
     }
+    function esDesaprobada(e) {
+      if (e.notaActual === 0) return true;
+      const est = (e.estado ?? "").toLowerCase();
+      return est === "d" || /desaprobad/.test(est);
+    }
 
-    /**
-     * Aplica la regla del usuario sobre un conjunto de entregas:
-     *   - todas APROBADO        → "APROBÓ"
-     *   - alguna PENDIENTE/SIN  → "PENDIENTE"
-     *   - ninguna entrega       → "NO PARTICIPÓ"
-     */
     function calcularEstado(entregas) {
       if (!entregas || entregas.length === 0) return { estado: "NO PARTICIPÓ", hasUngraded: false };
-      const tienePendiente   = entregas.some(esPendiente);
-      const tieneAprobada    = entregas.some(esAprobada);
-      const tieneSinEntregar = entregas.some(e => !esAprobada(e) && !esPendiente(e));
+      const tienePendiente      = entregas.some(esPendiente);
+      const tieneAprobada       = entregas.some(esAprobada);
+      const todasDesaprobadas   = entregas.length > 0 && entregas.every(esDesaprobada);
+      const tieneSinEntregar    = entregas.some(e => !esAprobada(e) && !esPendiente(e) && !esDesaprobada(e));
       if (tienePendiente || tieneSinEntregar) {
         return { estado: "PENDIENTE", hasUngraded: tienePendiente };
       }
       if (tieneAprobada) return { estado: "APROBÓ", hasUngraded: false };
+      if (todasDesaprobadas)  return { estado: "NO PARTICIPÓ", hasUngraded: false };
       return { estado: "NO PARTICIPÓ", hasUngraded: false };
     }
 
