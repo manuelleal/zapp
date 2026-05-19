@@ -211,7 +211,7 @@ async function extraerPostsForo(page) {
  *
  * @param {import('playwright').Page} page
  * @param {string|number} courseId
- * @returns {Promise<Array<{ moodleUserId: string, nombre: string }>>}
+ * @returns {Promise<Array<{ moodleUserId: string, nombre: string, email: string, documento: string }>>}
  */
 async function obtenerMatriculados(page, courseId) {
   // perpage=5000 evita el render "all" (perpage=0) que en cursos grandes
@@ -221,6 +221,28 @@ async function obtenerMatriculados(page, courseId) {
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 90_000 });
   await cerrarModal(page);
   return await page.evaluate(() => {
+    const txt = (el) => (el?.textContent ?? "").replace(/\s+/g, " ").trim();
+
+    // Primary: tr[data-uid].userrow — stable data-* selector (REUSE.md §Student Email Source)
+    const userRows = Array.from(document.querySelectorAll("tr[data-uid].userrow"));
+    if (userRows.length > 0) {
+      return userRows.map(row => {
+        const uid = row.getAttribute("data-uid");
+        if (!uid) return null;
+        const profileLink = row.querySelector(
+          'a[href*="/user/view.php?id="], a[href*="/user/profile.php?id="]'
+        );
+        const m = profileLink?.href.match(/[?&]id=(\d+)/);
+        const moodleUserId = m?.[1] ?? uid;
+        const nombre    = txt(profileLink) || txt(row.querySelector("a.username")) || "";
+        const email     = txt(row.querySelector('td[data-col="email"]'));
+        const documento = txt(row.querySelector('td[data-col="username"]'));
+        if (nombre.length < 3) return null;
+        return { moodleUserId, nombre, email, documento };
+      }).filter(Boolean);
+    }
+
+    // Fallback: th[scope="row"] profile links (older layout without data-uid rows)
     const links = Array.from(document.querySelectorAll(
       'th[scope="row"] a[href*="/user/view.php?id="], th.userfield a[href*="/user/view.php?id="], th[scope="row"] a[href*="/user/profile.php?id="]'
     ));
@@ -232,7 +254,7 @@ async function obtenerMatriculados(page, courseId) {
       if (map.has(id)) continue;
       const nombre = (a.textContent || "").replace(/\s+/g, " ").trim();
       if (nombre.length < 3) continue;
-      map.set(id, { moodleUserId: id, nombre });
+      map.set(id, { moodleUserId: id, nombre, email: "", documento: "" });
     }
     return Array.from(map.values());
   });
