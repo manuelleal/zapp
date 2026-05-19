@@ -33,15 +33,18 @@ function esNombreValido(nombreRaw) {
   // 2. Patrón legacy: 1-3 mayúsculas sueltas ("AA", "AG", "ABC") → inválido
   if (/^[A-Z]{1,3}$/.test(nombre)) return false;
 
-  // 3. Sin espacios + > 6 chars → sospechoso, requiere análisis adicional
+  // 3. Perfil incompleto de Moodle: "Aprendiz " seguido de dígitos (ej. "Aprendiz 1104287")
+  if (/^Aprendiz\s+\d+$/.test(nombre)) return false;
+
+  // 4. Sin espacios + > 6 chars → sospechoso, requiere análisis adicional
   if (!/\s/.test(nombre) && nombre.length > 6) {
-    // 3a. "ABALEJANDRO" → empieza con 2+ mayúsculas seguidas pegadas a más letras.
+    // 4a. "ABALEJANDRO" → empieza con 2+ mayúsculas seguidas pegadas a más letras.
     //     Si después de las primeras 2-3 mayúsculas sigue una cadena con
     //     mayúscula(s) más minúscula(s) o más mayúsculas, es probablemente
     //     un código + nombre concatenado.
     if (/^[A-Z]{2,3}[A-Z]/.test(nombre)) return false;
 
-    // 3b. Todo mayúsculas pegado, sin espacio, > 8 chars → sospechoso pero
+    // 4b. Todo mayúsculas pegado, sin espacio, > 8 chars → sospechoso pero
     //     ambiguo (puede ser apellido compuesto). Ser conservadores: aceptar.
   }
 
