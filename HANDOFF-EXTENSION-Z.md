@@ -1,6 +1,6 @@
 # Handoff — Ingeniería inversa Extension Z + Plan de implementación
 
-## Estado: ✅ Análisis completo | 🔧 Implementación en curso
+## Estado: ✅ Análisis completo | ✅ Fase 1 implementada | 🔧 Fase 2 pendiente
 
 ---
 
@@ -19,72 +19,103 @@ Reportes completos en `output/`:
 
 ---
 
-## Estado de ramas (Windsurf, 2026-05-18)
+## Estado por rama (19 mayo 2026)
 
-| Rama | Commit | Estado |
-|---|---|---|
-| `fix/hide-ia-matching` | 6169fe6 | ✅ OK — IA Matching comentado en Layout.tsx |
-| `fix/mensajes-bugs` | 46de0dd | ⚠️ Parcial — Bug 1 (subject) OK; Bug 2 (email) usa `/user/index.php` en vez del grade report |
-| `fix/actas-autopoblar` | 897f11c | ✅ OK — dual mode per-RAP / global-fallback, lógica correcta |
-
-**Pendiente de merge a `feat/frontend-resilience-e2e`:** las 3 ramas de Windsurf.
-**Pendiente de commit:** `web/src/pages/AjustesPage.tsx` (PROVEEDORES dropdown — working tree).
-
----
-
-## El bug crítico que Windsurf NO resolvió
-
-`sincronizarParticipantes` sigue usando `/user/index.php` con selectores que no existen en Zajuna.
-
-**Fix confirmado por ingeniería inversa (REUSE.md):**
-```
-URL: GET /grade/report/grader/index.php?id={courseId}&perpage=0&sifirst&silast
-Selector email:     tr[data-uid].userrow > td[data-col="email"]
-Selector cédula:    tr[data-uid].userrow > td[data-col="username"]
-Selector nombre:    tr[data-uid].userrow  a.username (textContent)
-Selector moodleId:  tr[data-uid] → atributo data-uid
-```
-Archivo a modificar: `scraper/evidencias.js` función `obtenerMatriculados`.
-Worker a actualizar: `api/src/workers/syncParticipantesWorker.js`.
+| Rama | Estado |
+|---|---|
+| `fix/hide-ia-matching` | ✅ mergeada — IA Matching comentado en Layout.tsx |
+| `fix/mensajes-bugs` | ✅ mergeada |
+| `fix/actas-autopoblar` | ✅ mergeada |
+| `fix/email-grade-report` | ✅ mergeada — `obtenerMatriculados` usa grade report |
+| `fix/grade-avsd` | ✅ mergeada — `esDesaprobada()` implementado |
+| `fix/actas-autopoblar-v2` | ✅ mergeada — Rule 5, dedup, calcularEstado, per-rap-inferido |
 
 ---
 
-## Plan de implementación
+## Hallazgo nuevo — CSV export Moodle (19 mayo 2026)
 
-### Fase 1 — Quick wins (esta semana)
+**Extension Z genera su Excel así:**
+1. Scraping HTML del grade report → nombre + cédula + email + calificaciones (A/D/-)
+2. Para celdas vacías (`-`): llama `mod_assign_list_participants` AJAX → distingue SC/SN/RV/BR
+3. Mapea a colores Excel: verde=A, rojo=D/SC, amarillo=SN/RV/BR
+4. Genera Excel client-side (en el browser del instructor)
 
-**P1-4 — Fix email scraper** | Esfuerzo: S | Modelo Windsurf: Sonnet
-- Rama: `fix/email-grade-report`
-- Extiende `obtenerMatriculados` con el selector confirmado arriba
-- Desbloquea TODO el módulo de mensajería masiva
+**Nosotros podemos hacerlo mejor:** Moodle tiene un endpoint de exportación CSV oficial:
+```
+GET /grade/export/txt/index.php?id={courseId}
+```
+CSV incluye: `Nombre(s)`, `Apellido(s)`, `Nombre de usuario` (cédula+cc), `Correo electrónico`, calificación por evidencia (A/-).
+**Opciones clave:** ✅ "Excluir usuarios suspendidos" | ✅ "Mostrar tipo: Letra"
 
-**P1-1 — Distinguir A vs D en entregas** | Esfuerzo: S | Modelo: Sonnet
-- Rama: `fix/grade-avsd`
-- `revisarEntregas` en `scraper/evidencias.js`: leer cols[6], guardar "A"/"D" en estado
-- `esAprobada()` en `actas.js`: notaActual===100 o estado==="A" → APROBÓ
-- `esDesaprobada()` nuevo: notaActual===0 o estado==="D" → NO PARTICIPÓ (no PENDIENTE)
+**Formato real del CSV (confirmado en Zajuna, courseId=16327):**
+```
+Nombre(s),Apellido(s),"Nombre de usuario",Institución,Departamento,"Correo electrónico","Evidencia:... (Letra)"
+"ESTEBAN ANDRES","BEDOYA ORDOÑEZ ",1096189936cc,,,bedoyaesteban201@gmail.com,A
+```
 
-**P2-2 — Parser "hace X días"** | Esfuerzo: S | Modelo: Haiku
-- Rama: `fix/lastaccess-parser`
-- `syncParticipantesWorker.js`: regex para "hace N días/horas/minutos"
+**Ventaja sobre scraping HTML:** Un fetch autenticado reemplaza toda la lógica de `obtenerMatriculados`. Sin selectores frágiles. Sin nombres sucios. Cédula directa.
 
-### Fase 2 — AJAX Moodle (próxima semana)
+**Limitación:** `-` no distingue "no entregó" de "entregó sin calificar" → para eso sigue siendo necesario `mod_assign_list_participants` (P1-2).
+
+---
+
+## Cuentas suspendidas — causa raíz de nombres sucios
+
+Extension Z excluye suspendidos en la exportación. Nosotros no lo hacemos en `obtenerMatriculados`.
+Consecuencia: aprendices como "KAREN YULIETH HERRERA JARAMILLO" (suspendida) aparecen en nuestras actas pero no en el Excel de Extension Z.
+
+**Fix inmediato** (una línea, rama `fix/skip-suspended-users`):
+```js
+// En obtenerMatriculados → page.evaluate() → loop de userRows:
+if (row.querySelector('th.usersuspended')) return null;
+```
+
+---
+
+## Plan de implementación actualizado
+
+### ✅ Fase 1 — Completada
+
+| Item | Estado |
+|---|---|
+| P1-4 — Fix email scraper (grade report) | ✅ |
+| P1-1 — Distinguir A vs D | ✅ |
+| fix/actas-autopoblar-v2 — nombres, dedup, estados | ✅ |
+| syncParticipantesWorker — fallback por nombre, escribe moodleId | ✅ |
+| canal=zajuna mensajes internos funcionando | ✅ |
+
+### 🔧 Pendientes inmediatos (esta semana)
+
+**fix/skip-suspended-users** | Esfuerzo: XS | Modelo: Haiku
+- Una línea en `obtenerMatriculados`: saltar filas con `th.usersuspended`
+- Elimina cuentas suspendidas antes de que entren a DB
+
+**fix/mensaje-template-vars** | Esfuerzo: S | Modelo: Sonnet
+- `mensajeFormativoWorker.js` + `emailMasivoWorker.js`
+- Reemplazar `{{nombre}}`, `{{ficha}}`, `{{instructor}}` por valores reales antes de enviar
+- Leer `fichaId` y `userId` del `MensajeFormativo` para obtener ficha.codigo y user.nombre
+
+### 🗓 Fase 2 — Próxima semana
+
+**feat/csv-export-sync** | Esfuerzo: M | Modelo: Sonnet
+- Reemplazar `obtenerMatriculados` con descarga del CSV oficial de Moodle
+- Filtro suspendidos nativo, cédula, email, calificaciones A/-
+- Poblar `Aprendiz.documento` (cédula) → habilita dedup exacto en DB
 
 **P1-2 — mod_assign_list_participants** | Esfuerzo: M | Modelo: Sonnet
-- Detectar BR (borrador) / SN (sin nota) / RV (revisión) por aprendiz
+- Detectar BR/SN/RV por aprendiz
 - Payload en `output/agent3/REUSE.md` sección "Moodle AJAX Calls"
-- Requiere extraer sesskey: `window.M?.cfg?.sesskey` vía page.evaluate()
+- Requiere sesskey: `window.M?.cfg?.sesskey`
 
 **P1-3 — lastaccess desde AJAX** | Esfuerzo: M | Modelo: Sonnet
 - `core_grades_get_enrolled_users_for_selector` → `Aprendiz.ultimoAcceso`
-- Payload en REUSE.md
 
-### Fase 3 — Reporte Excel (cuando actas esté estable)
+### 📅 Fase 3 — Cuando actas esté estable en producción
 
 **P1-5 — Excel con exceljs** | Esfuerzo: M | Modelo: Sonnet
 - `GET /api/actas/:id/download/excel`
 - Verde=APROBÓ / Amarillo=PENDIENTE / Rojo=NO PARTICIPÓ
-- Sin SaaS — 100% server-side
+- Mismo esquema que Extension Z pero 100% server-side, sin SaaS
 
 ---
 
@@ -96,13 +127,5 @@ Worker a actualizar: `api/src/workers/syncParticipantesWorker.js`.
 4. Workers BullMQ — async, la extensión bloquea el navegador 5-10 min
 5. Multitenant — múltiples instructores en el mismo deploy
 6. Auditoría e historial — la extensión no tiene logs
-7. `mod_assign_list_participants` sin dirty state — la extensión V1 deja Moodle sucio
-
----
-
-## Orden de trabajo acordado
-
-1. Windsurf implementa P1-4 y P1-1 (en ramas separadas)
-2. Claude audita ambas ramas
-3. Si pasan → merge a feat/frontend-resilience-e2e
-4. Seguir con P1-2 (AJAX) + P1-5 (Excel)
+7. CSV export oficial → datos más limpios que scraping HTML
+8. `mod_assign_list_participants` sin dirty state — Extension Z V1 deja Moodle sucio

@@ -38,16 +38,24 @@ const worker = new Worker("syncParticipantes", async (job) => {
     for (const p of participantes) {
       if (!p.moodleUserId) continue;
 
-      const updateData = {};
+      const updateData = { moodleId: String(p.moodleUserId) };
       if (p.email)     updateData.email     = p.email;
       if (p.documento) updateData.documento = p.documento;
 
-      if (Object.keys(updateData).length === 0) continue;
-
-      const r = await prisma.aprendiz.updateMany({
+      // Primary: match by moodleId (fast path — already synced before)
+      let r = await prisma.aprendiz.updateMany({
         where: { fichaId, moodleId: String(p.moodleUserId) },
         data:  updateData,
       });
+
+      // Fallback: match by nombre when moodleId still null in DB
+      // (happens when evidencias scan ran before the grade-report fix)
+      if (r.count === 0 && p.nombre) {
+        r = await prisma.aprendiz.updateMany({
+          where: { fichaId, moodleId: null, nombre: p.nombre },
+          data:  updateData,
+        });
+      }
 
       if (r.count > 0) {
         actualizados++;
