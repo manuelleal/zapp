@@ -285,27 +285,105 @@ async function actasRoutes(fastify) {
     const todasEvidenciaIds = [...new Set([...relsConfirmadas, ...relsIA].map(r => r.evidenciaId))];
 
     // ── Aprendices de la ficha (filtrando nombres inválidos: AA, AG, ABALEJANDRO…)
-    // Priorizamos los que tienen al menos una entrega (vienen del evidenciasWorker
-    // con nombres limpios) sobre los que no tienen ninguna entrega.
+    // Cargamos el conteo de entregas para poder deduplicar (sucio vs limpio).
     const aprendicesRaw = await prisma.aprendiz.findMany({
       where:  { fichaId: acta.fichaId },
-      select: { id: true, nombre: true, entregas: { select: { id: true }, take: 1 } },
+      select: { id: true, nombre: true, _count: { select: { entregas: true } } },
     });
     const aprendicesValidos = filtrarAprendicesValidos(aprendicesRaw);
-    const aprendices = [
-      ...aprendicesValidos.filter(a => a.entregas.length > 0),
-      ...aprendicesValidos.filter(a => a.entregas.length === 0),
-    ].map(a => ({ id: a.id, nombre: a.nombre }));
+
+    // ── Deduplicar: eliminar variantes sucias que son el mismo aprendiz ─────────
+    // "ACADRIAN MAURICIO CALDERON" y "ADRIAN MAURICIO CALDERON" son el mismo
+    // aprendiz — uno tiene prefijo de iniciales en el primer token.
+    // Estrategia: si el primer token de un nombre A, al quitarle 2-3 chars
+    // iniciales, coincide con el primer token de un nombre B en la misma ficha,
+    // son duplicados. Quedarse con el que tiene más entregas; si empatan, el más
+    // corto (el limpio). El otro se excluye del resultado (NO se borra de DB).
+    function nucleoPrimerToken(nombre) {
+      const tok = nombre.split(/\s+/)[0];
+      const m = tok.match(/^[A-Z]{2,3}([A-Z].*)$/);
+      return m ? m[1] : tok;
+    }
+
+    // Agrupar por (fichaId implícita + núcleo del primer token + resto del nombre)
+    // Clave = núcleo primer token + tokens 2+ en minúsculas para comparación flexible
+    function claveNombre(nombre) {
+      const tokens = nombre.trim().split(/\s+/);
+      const nucleo = nucleoPrimerToken(nombre);
+      const resto  = tokens.slice(1).join(" ").toLowerCase();
+      return `${nucleo.toLowerCase()}|${resto}`;
+    }
+
+    const grupoDuplicados = new Map(); // clave → [aprendiz, ...]
+    for (const a of aprendicesValidos) {
+      const k = claveNombre(a.nombre);
+      if (!grupoDuplicados.has(k)) grupoDuplicados.set(k, []);
+      grupoDuplicados.get(k).push(a);
+    }
+
+    const aprendicesFinal = [];
+    for (const grupo of grupoDuplicados.values()) {
+      if (grupo.length === 1) {
+        aprendicesFinal.push(grupo[0]);
+      } else {
+        // Múltiples aprendices con el mismo nombre canónico → elegir el mejor
+        grupo.sort((a, b) => {
+          const diffEntregas = (b._count.entregas) - (a._count.entregas);
+          if (diffEntregas !== 0) return diffEntregas;   // más entregas primero
+          return a.nombre.length - b.nombre.length;      // más corto (limpio) primero
+        });
+        aprendicesFinal.push(grupo[0]);
+      }
+    }
+
+    const aprendices = aprendicesFinal.map(a => ({ id: a.id, nombre: a.nombre }));
     const nFiltrados = aprendicesRaw.length - aprendices.length;
     const aprendizIds = aprendices.map(a => a.id);
 
-    // ── Decidir modo: per-RAP (si hay vinculaciones) o fallback global ─────────
-    // RapEvidenciaRel + MatchingPropuesta están vacíos en muchos despliegues
-    // porque el linking RAP↔Evidencia no se ha hecho aún (ni por UI ni por IA).
-    // En ese caso caemos a un cálculo "best-effort" sobre TODAS las entregas
-    // del aprendiz en la ficha del acta, aplicando el mismo juicio en cada RAP
-    // por consistencia visual. El instructor puede sobreescribir por RAP.
-    const modoPerRap = todasEvidenciaIds.length > 0;
+    // ── Decidir modo: per-RAP (si hay vinculaciones explícitas) ─────────────────
+    // RapEvidenciaRel + MatchingPropuesta pueden estar vacíos si el linking no
+    // se ha hecho aún. Intentamos un tercer modo: inferir la vinculación RAP↔
+    // Evidencia por nombre de la evidencia. Evidencias inglés tienen el patrón
+    // "GA{N}-240202501-..." y los RAPs tienen código "240202501-0{N}", de modo
+    // que GA1→RAP01, GA2→RAP02, etc.
+    let modoPerRap = todasEvidenciaIds.length > 0;
+    let modoInferido = false;
+
+    if (!modoPerRap) {
+      // Intentar inferir vinculación por nombre de evidencia ↔ código de RAP
+      const evidenciasDelaFicha = await prisma.evidencia.findMany({
+        where:  { fichaId: acta.fichaId },
+        select: { id: true, nombre: true },
+      });
+
+      // Mapa: sufijo numérico del RAP (ej "04") → rapId
+      const rapPorSufijo = new Map();
+      for (const rap of rapsInfo) {
+        const m = rap.codigo.match(/-0*(\d+)$/);
+        if (m) rapPorSufijo.set(m[1], rap.id);
+      }
+
+      // Asignar cada evidencia al RAP cuyo sufijo coincide con el GA-número
+      for (const ev of evidenciasDelaFicha) {
+        const m = ev.nombre.match(/\bGA(\d+)-\d{9}/);
+        if (!m) continue;
+        const gaNum = String(parseInt(m[1], 10));  // "04" → "4"
+        const rapId = rapPorSufijo.get(gaNum);
+        if (!rapId) continue;
+        if (!mapaRapEvidencias.has(rapId)) mapaRapEvidencias.set(rapId, new Set());
+        mapaRapEvidencias.get(rapId).add(ev.id);
+        todasEvidenciaIds.push(ev.id);
+      }
+
+      if (todasEvidenciaIds.length > 0) {
+        // Deduplicar (múltiples evidencias del mismo RAP pueden repetirse)
+        const uniq = [...new Set(todasEvidenciaIds)];
+        todasEvidenciaIds.length = 0;
+        todasEvidenciaIds.push(...uniq);
+        modoPerRap   = true;
+        modoInferido = true;
+      }
+    }
 
     // ── Cargar entregas relevantes ──────────────────────────────────────────────
     // En modo per-RAP: solo entregas de evidencias vinculadas a los RAPs.
@@ -329,7 +407,7 @@ async function actasRoutes(fastify) {
       });
     }
 
-    // Agrupar entregas: aprendizId → array (modo fallback) o aprendizId → evidenciaId → entrega (per-RAP)
+    // Agrupar entregas: aprendizId → array
     const entregasPorAprendiz = new Map();
     for (const e of todasEntregas) {
       if (!entregasPorAprendiz.has(e.aprendizId)) entregasPorAprendiz.set(e.aprendizId, []);
@@ -338,11 +416,9 @@ async function actasRoutes(fastify) {
 
     // ── Helpers ────────────────────────────────────────────────────────────────
     // Estado canónico de una entrega Moodle:
-    //   - "calificado" → instructor ya calificó (asumimos APROBADO; se puede ajustar manualmente)
-    //   - notaActual > 0 → APROBADO
-    //   - estado contiene "aprobad" o estado === "A" → APROBADO
-    //   - "pendiente" → instructor aún no califica → cuenta como PENDIENTE
-    //   - "sin_entregar" / "" → aprendiz no entregó → cuenta como SIN_ENTREGAR
+    //   - "calificado" o notaActual > 0 o estado "aprobad"/estado "A" → APROBÓ
+    //   - "pendiente" → el aprendiz entregó pero el instructor no ha calificado → PENDIENTE
+    //   - "sin_entregar" / cualquier otro → aprendiz no entregó → NO PARTICIPÓ
     function esAprobada(e) {
       if (e.notaActual !== null && e.notaActual > 0) return true;
       const est = (e.estado ?? "").toLowerCase();
@@ -361,18 +437,17 @@ async function actasRoutes(fastify) {
       return est === "d" || /desaprobad/.test(est);
     }
 
+    // Para un RAP dado un aprendiz:
+    //   - Si tiene al menos una entrega calificada/aprobada → APROBÓ
+    //   - Si tiene alguna pendiente (entregó, sin calificar) → PENDIENTE
+    //   - Todo lo demás (sin_entregar, desaprobado, sin entregas) → NO PARTICIPÓ
     function calcularEstado(entregas) {
       if (!entregas || entregas.length === 0) return { estado: "NO PARTICIPÓ", hasUngraded: false };
-      const tienePendiente      = entregas.some(esPendiente);
-      const tieneAprobada       = entregas.some(esAprobada);
-      const todasDesaprobadas   = entregas.length > 0 && entregas.every(esDesaprobada);
-      const tieneSinEntregar    = entregas.some(e => !esAprobada(e) && !esPendiente(e) && !esDesaprobada(e));
-      if (tienePendiente || tieneSinEntregar) {
-        return { estado: "PENDIENTE", hasUngraded: tienePendiente };
-      }
-      if (tieneAprobada) return { estado: "APROBÓ", hasUngraded: false };
-      if (todasDesaprobadas)  return { estado: "NO PARTICIPÓ", hasUngraded: false };
-      return { estado: "NO PARTICIPÓ", hasUngraded: false };
+      const tieneAprobada = entregas.some(esAprobada);
+      const tienePendiente = entregas.some(esPendiente);
+      if (tieneAprobada)  return { estado: "APROBÓ",       hasUngraded: false };
+      if (tienePendiente) return { estado: "PENDIENTE",     hasUngraded: true  };
+      return                     { estado: "NO PARTICIPÓ",  hasUngraded: false };
     }
 
     // ── Calcular rapStatus + juicio + hasUngraded por aprendiz ─────────────────
@@ -432,7 +507,7 @@ async function actasRoutes(fastify) {
       warnings:             nWarnings,
       filtrados:            nFiltrados,
       evidenciasVinculadas: todasEvidenciaIds.length,
-      modo:                 modoPerRap ? "per-rap" : "global-fallback",
+      modo:                 modoPerRap ? (modoInferido ? "per-rap-inferido" : "per-rap") : "global-fallback",
     };
   });
 

@@ -48,6 +48,41 @@ function esNombreValido(nombreRaw) {
     //     ambiguo (puede ser apellido compuesto). Ser conservadores: aceptar.
   }
 
+  // 5. Nombre con espacios pero el primer token tiene prefijo de iniciales pegadas.
+  //    Casos reales: "MMMAURICIO FABIAN MONCAYO" → prefijo "MM" (repetido)
+  //                  "AAALIRIO ANTONIO ABADIA"   → prefijo "AA" (repetido)
+  //                  "JBJESSICA JANETH BARRIOS"  → prefijo "JB"; "JB" = J(esica) + J(aneth?) no
+  //                                                pero primera letra del resto "J" coincide con "J"
+  //                                                del prefijo → prefijo[0] == resto[0]
+  //                  "PCPAOLA ANDREA CANO"       → prefijo "PC"; "P"=resto[0]="P"
+  //                  "DMDEYLER ANTONIO MOSQUERA" → prefijo "DM"; "D"=resto[0]="D"
+  //                  "WAWILSON ELIECER AGUDELO"  → prefijo "WA"; "W"=resto[0]="W"
+  //                  "SLSTEVEN NICOLAS LADINO"   → prefijo "SL"; "S"=resto[0]="S"
+  //                  "DJDANIEL STEVEN JIMENEZ"   → prefijo "DJ"; "D"=resto[0]="D"
+  //                  "VRVANESSA KATHERINE RUBIANO"→ prefijo "VR"; "V"=resto[0]="V"
+  //                  "ARANDRES FELIPE RUIZ"      → prefijo "AR"; "A"=resto[0]="A"
+  //                  "ACADRIAN MAURICIO CALDERON"→ prefijo "AC"; "A"=resto[0]="A"
+  //
+  //    Regla clave conservadora: el primer char del prefijo == primer char del resto.
+  //    Esto evita falsos positivos en CARLOS (CA→RLOS: C≠R), JORGE (JO→RGE: J≠R), etc.
+  //    Además el resto debe tener ≥4 chars para descartar fragmentos muy cortos.
+  if (/\s/.test(nombre)) {
+    const tokens = nombre.trim().split(/\s+/);
+    const primerToken = tokens[0];
+    if (primerToken.length >= 5) {
+      for (let prefLen = 2; prefLen <= 3; prefLen++) {
+        const prefijo = primerToken.slice(0, prefLen);
+        const resto   = primerToken.slice(prefLen);
+        if (resto.length < 4) continue;
+        // Condición A: letras repetidas en prefijo de 2 chars (AA, MM, JJ…)
+        if (prefLen === 2 && prefijo[0] === prefijo[1]) return false;
+        // Condición B: el primer char del prefijo coincide con el primer char del resto
+        // (el prefijo "imita" la inicial del nombre real dentro del token)
+        if (prefijo[0] === resto[0]) return false;
+      }
+    }
+  }
+
   return true;
 }
 
