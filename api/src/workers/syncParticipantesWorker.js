@@ -6,7 +6,7 @@ const { connection } = require("../lib/queue");
 const { decrypt } = require("../lib/crypto");
 const prisma = require("../db/client");
 const { login, log } = require("../../../scraper/auth");
-const { sincronizarParticipantes } = require("../../../scraper/mensajes");
+const { sincronizarParticipantes, parseUltimoAcceso } = require("../../../scraper/mensajes");
 
 // ─── Worker ───────────────────────────────────────────────────────────────────
 // Sincroniza emails y último acceso de los aprendices de una ficha desde Moodle.
@@ -38,12 +38,8 @@ const worker = new Worker("syncParticipantes", async (job) => {
     for (const p of participantes) {
       if (!p.email || !p.moodleId) continue;
 
-      // Parseo permisivo de "Último acceso" (Moodle suele devolver formato es-CO o "Nunca")
-      let ultimoAcceso = undefined;
-      if (p.ultimoAcceso && !/nunca/i.test(p.ultimoAcceso)) {
-        const ts = Date.parse(p.ultimoAcceso);
-        if (!Number.isNaN(ts)) ultimoAcceso = new Date(ts);
-      }
+      // Parseo robusto es-CO de "Último acceso" ("hace 2 días", "Nunca", abs, etc.)
+      const ultimoAcceso = parseUltimoAcceso(p.ultimoAcceso);
 
       const updateData = { email: p.email };
       if (ultimoAcceso) updateData.ultimoAcceso = ultimoAcceso;

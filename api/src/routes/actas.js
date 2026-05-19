@@ -1,4 +1,5 @@
 const prisma = require("../db/client");
+const { filtrarAprendicesValidos } = require("../lib/aprendices");
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -291,7 +292,6 @@ async function actasRoutes(fastify) {
       select: { id: true, nombre: true, entregas: { select: { id: true }, take: 1 } },
     });
     const aprendicesValidos = filtrarAprendicesValidos(aprendicesRaw);
-    // Orden: con entregas primero
     const aprendices = [
       ...aprendicesValidos.filter(a => a.entregas.length > 0),
       ...aprendicesValidos.filter(a => a.entregas.length === 0),

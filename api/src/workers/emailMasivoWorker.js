@@ -17,14 +17,33 @@ function escapeHtml(str) {
     .replace(/'/g, "&#39;");
 }
 
+/**
+ * Reemplaza variables {{nombre}}, {{ficha}}, {{instructor}}, {{evidencias}}
+ * en texto plano (sin envolver en HTML). Usar para campos como subject.
+ *
+ * Para {{evidencias}} en texto plano se concatena con saltos de línea (no <li>),
+ * a diferencia de personalizarMensaje() que va en HTML.
+ */
+function aplicarVariables(texto, dest) {
+  const evidenciasTxt = Array.isArray(dest.evidencias)
+    ? dest.evidencias.join(", ")
+    : (dest.evidencias ?? "");
+
+  return String(texto ?? "")
+    .replace(/\{\{nombre\}\}/gi,     dest.nombre ?? "")
+    .replace(/\{\{evidencias\}\}/gi, evidenciasTxt)
+    .replace(/\{\{ficha\}\}/gi,      dest.ficha ?? "")
+    .replace(/\{\{instructor\}\}/gi, dest.instructor ?? "");
+}
+
 function personalizarMensaje(cuerpo, dest) {
-  const evidencias = Array.isArray(dest.evidencias)
+  const evidenciasHtml = Array.isArray(dest.evidencias)
     ? dest.evidencias.map(e => `<li>${escapeHtml(e)}</li>`).join("")
     : escapeHtml(dest.evidencias ?? "");
 
   const texto = String(cuerpo ?? "")
     .replace(/\{\{nombre\}\}/gi,     escapeHtml(dest.nombre ?? ""))
-    .replace(/\{\{evidencias\}\}/gi, evidencias)
+    .replace(/\{\{evidencias\}\}/gi, evidenciasHtml)
     .replace(/\{\{ficha\}\}/gi,      escapeHtml(dest.ficha ?? ""))
     .replace(/\{\{instructor\}\}/gi, escapeHtml(dest.instructor ?? ""));
 
@@ -83,7 +102,7 @@ const worker = new Worker("emailMasivo", async (job) => {
       await transporter.sendMail({
         from:    `"${config.fromNombre || "Instructor SENA"}" <${config.smtpUser}>`,
         to:      dest.email,
-        subject: mf.asunto,
+        subject: aplicarVariables(mf.asunto, dest),
         html:    personalizarMensaje(mf.cuerpo, dest),
       });
       enviados++;
