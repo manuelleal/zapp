@@ -12,7 +12,10 @@ const navItems = [
   { to: "/fichas",           label: "Fichas",          icon: FolderOpen },
   { to: "/evidencias/config",label: "Mis Evidencias",  icon: Settings2 },
   { to: "/raps",             label: "RAPs",            icon: BookOpen },
-  { to: "/matching",         label: "IA Matching",     icon: Sparkles },
+  // IA Matching oculto: los RAPs ya vienen vinculados a guías desde el scraper
+  // de PDFs, así que esta sección no está lista para mostrarse. Ruta /matching
+  // sigue accesible por URL para QA.
+  // { to: "/matching",         label: "IA Matching",     icon: Sparkles },
   { to: "/actas",            label: "Actas",           icon: ClipboardList },
   { to: "/mensajes",         label: "Mensajes",        icon: Mail },
   { to: "/ajustes",          label: "Ajustes",         icon: Settings },
