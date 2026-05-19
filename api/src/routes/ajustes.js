@@ -93,7 +93,16 @@ async function ajustesRoutes(fastify) {
       await transporter.verify();
       return { ok: true };
     } catch (err) {
-      return reply.code(200).send({ ok: false, error: err.message });
+      const msg = err.message || "";
+      // Microsoft deshabilita SMTP Auth básico a nivel de tenant (política corporativa).
+      // Código de error: "SmtpClientAuthentication is disabled" / "535 5.7.139"
+      if (msg.includes("SmtpClientAuthentication") || msg.includes("535 5.7.139")) {
+        return reply.code(200).send({
+          ok: false,
+          error: "Tu cuenta de Outlook/SENA tiene autenticación SMTP deshabilitada por el administrador de Microsoft. Usa Gmail con contraseña de aplicación, o contacta a sistemas del SENA.",
+        });
+      }
+      return reply.code(200).send({ ok: false, error: msg });
     }
   });
 
