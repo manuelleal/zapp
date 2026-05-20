@@ -1,216 +1,113 @@
 # Zajuna App — Arquitectura del Sistema
 
-> Última actualización: 17 mayo 2026.
-> Estado: M1-M6 Config Evidencias completos. Sprint Actas v2 en curso.
+> **Última actualización:** 19 mayo 2026.
 
 ---
 
-## Visión general
+## 1. Visión General
 
-Plataforma web multitenant para instructores SENA que automatiza la gestión de Zajuna/Moodle:
-scraping de evidencias, calificación asistida por IA, actas de seguimiento institucionales y
-mensajería formativa a aprendices.
+Plataforma web multitenant para instructores SENA que automatiza la gestión de Zajuna/Moodle. Integra scraping robusto, API modular, interfaz SPA y automatización mediante IA para matching de resultados de aprendizaje (RAPs) y calificación.
 
 ---
 
-## Stack
+## 2. Stack Tecnológico
 
 | Capa | Tecnología |
 |------|-----------|
 | API | Node.js + Fastify 5 |
-| Cola de tareas | BullMQ + Redis 7 |
+| Colas asíncronas | BullMQ + Redis 7 |
 | Base de datos | PostgreSQL 16 + Prisma 6 |
 | Frontend | React 18 + Vite 5 + Tailwind 3 + shadcn/ui |
-| Auth | JWT (`@fastify/jwt`) + bcrypt |
-| Credenciales Zajuna | AES-256-GCM cifrado en DB (`api/src/lib/crypto.js`) |
-| Scraping | Playwright 1.59 (workers BullMQ, concurrency 3) |
-| IA | Claude API — `claude-haiku-4-5-20251001` (matching), Sonnet para lógica |
-| Deploy objetivo | Railway (Postgres + Redis nativos) |
+| Autenticación | JWT (`@fastify/jwt`) + bcrypt |
+| Criptografía | AES-256-GCM para credenciales Moodle |
+| Scraping | Playwright 1.59 (Estrategia "Index Pages" y Filtro de Matriculados) |
+| Modelos IA | Anthropic Claude |
 
 ---
 
-## Estructura real de carpetas
+## 3. Modelo de Datos (Prisma)
 
-```
-C:\zajuna\
-├── api/src/
-│   ├── server.js                        ← Fastify puerto 3000, sirve web/dist
-│   ├── routes/
-│   │   ├── auth.js                      ← POST /api/auth/register|login
-│   │   ├── fichas.js                    ← GET/POST /api/fichas, PATCH /:id
-│   │   ├── evidencias.js                ← GET /api/fichas/:id/evidencias, PATCH bulk
-│   │   ├── archivar.js                  ← PATCH /api/evidencias/bulk (cerrar)
-│   │   ├── configEvidencias.js          ← GET/POST /api/evidencias/:id/config
-│   │   ├── batchConfig.js               ← POST /api/evidencias/batch/duedate|config
-│   │   ├── foroRating.js                ← PATCH /api/evidencias/:id/foro/calificar
-│   │   ├── scan.js                      ← POST /api/fichas/:id/evidencias/scan
-│   │   ├── jobs.js                      ← GET /api/jobs/:id
-│   │   ├── raps.js                      ← CRUD /api/raps, /api/competencias/:id/raps
-│   │   ├── matchingIa.js                ← POST /api/evidencias/batch/matching-ia
-│   │   ├── actas.js                     ← CRUD /api/actas, auto-poblar, Word download
-│   │   ├── actasImport.js               ← POST /api/actas/import-csv/* (pausado en UI)
-│   │   └── mensajes.js                  ← POST /api/mensajes (MensajeFormativo)
-│   ├── workers/
-│   │   ├── fichasWorker.js              ← BullMQ: descubrirFichas via Playwright
-│   │   ├── evidenciasWorker.js          ← BullMQ: revisarEntregas por ficha
-│   │   ├── configWorker.js              ← BullMQ: leer config Moodle (legacy)
-│   │   ├── leerConfigEvidenciaWorker.js ← BullMQ: leer config con cache EvidenciaConfig
-│   │   ├── cambiarFechaWorker.js        ← BullMQ: cambiar duedate bulk
-│   │   ├── cambiarConfigWorker.js       ← BullMQ: cambiar config múltiple bulk
-│   │   ├── foroRatingWorker.js          ← BullMQ: calificar post de foro
-│   │   ├── autoScanWorker.js            ← BullMQ: scan automático programado
-│   │   ├── matchingIaWorker.js          ← BullMQ: matching evidencias↔RAPs via Claude
-│   │   └── mensajeFormativoWorker.js    ← BullMQ: enviar mensaje interno Zajuna
-│   ├── db/client.js                     ← singleton PrismaClient
-│   └── lib/
-│       ├── crypto.js                    ← AES-256-GCM encrypt/decrypt
-│       └── queue.js                     ← todas las colas BullMQ
-│
-├── scraper/
-│   ├── auth.js                          ← login(), cerrarModal(), BASE_URL
-│   ├── fichas.js                        ← descubrirFichas(page, competencia)
-│   ├── evidencias.js                    ← revisarEntregas*, obtenerEvidencias
-│   ├── configEvidencias.js              ← leerConfigEvidencia, guardarConfigEvidencia
-│   ├── mensajes.js                      ← enviarMensajeInterno Zajuna Playwright
-│   └── csvParser.js                     ← parsearCSVActa (sin HTTP, testeable)
-│
-├── web/src/
-│   ├── pages/
-│   │   ├── Login.tsx
-│   │   ├── Dashboard.tsx                ← fichas + modal evidencias
-│   │   ├── EvidenciasConfig.tsx         ← configurador bulk fechas+config
-│   │   ├── RapsPage.tsx                 ← CRUD RAPs + asociar evidencias
-│   │   ├── MatchingIaPage.tsx           ← revisar propuestas IA
-│   │   ├── ActasPage.tsx                ← actas de seguimiento (sprint v2 en curso)
-│   │   └── (futuro) MensajesPage.tsx
-│   ├── components/
-│   │   ├── Layout.tsx                   ← sidebar + nav
-│   │   ├── EvidenciasModal.tsx          ← modal evidencias por ficha
-│   │   ├── AprendicesPanel.tsx          ← tabla aprendices con filtros
-│   │   ├── ConfigEvidenciaDialog.tsx    ← leer/editar config evidencia
-│   │   └── BatchConfigModal.tsx         ← modal bulk config fechas
-│   ├── api/client.ts                    ← apiFetch + ApiError
-│   ├── store/auth.ts                    ← Zustand: jwt + user
-│   └── App.tsx                          ← React Router rutas
-│
-├── prisma/schema.prisma                 ← 16 modelos (ver abajo)
-├── docker-compose.yml                   ← postgres:16 + redis:7
-└── .env                                 ← DATABASE_URL, REDIS_URL, JWT_SECRET, ENCRYPTION_KEY, ANTHROPIC_API_KEY
-```
+El sistema cuenta con **18 modelos** en total, distribuidos en estos flujos clave:
+
+**Entidades Core:**
+- `User`: Usuario instructor.
+- `Ficha`: Grupo de estudiantes.
+- `Evidencia`: Tarea, foro o actividad Moodle.
+- `Entrega`: Estado individual de la evidencia por estudiante.
+- `Aprendiz`: Estudiante SENA.
+- `EvidenciaConfig` y `ConfigAudit`: Caché y auditoría de configuraciones (fechas, intentos).
+
+**Colas y Trabajos:**
+- `Job`: Trabajos genéricos BullMQ.
+- `ConfigChangeJob`: Trabajos batch (ej. cambios masivos de fechas).
+
+**Evaluación y RAPs:**
+- `Competencia`: Módulo global.
+- `RAP`: Resultado de Aprendizaje.
+- `Criterio`: Criterios asociados al RAP.
+- `RapEvidenciaRel`: Relación N:M entre evidencias y RAPs.
+- `MatchingPropuesta`: Sugerencias generadas por la IA para enlazar Evidencias ↔ RAPs.
+
+**Actas y Seguimiento:**
+- `ActaSeguimiento`: Documento institucional de evaluación de la ficha.
+- `ActaParticipante`: Vínculo entre acta y aprendiz con sus notas/juicios.
+
+**Comunicaciones:**
+- `MensajeFormativo`: Mensajes encolados para envío a estudiantes (Moodle o Correo).
+- `ConfigCorreo`: Configuración SMTP del usuario instructor.
 
 ---
 
-## Modelo de datos (schema.prisma — estado 17 mayo 2026)
+## 4. Directorio de Archivos Core
 
-```
-Competencia   (id, codigo, nombre)
-  └── RAP[]   (id, competenciaId, codigo, descripcion)
-        └── Criterio[]
-        └── RapEvidenciaRel[]   ← vínculo manual RAP↔Evidencia
-        └── MatchingPropuesta[] ← propuesta IA (estado: propuesto|aceptado|rechazado)
+### Backend (API Routes) - `api/src/routes/`
+1. `actas.js`: CRUD y auto-poblar actas de evaluación.
+2. `actasImport.js`: Importación CSV para actas.
+3. `ajustes.js`: Configuración SMTP (email).
+4. `archivar.js`: Archivar/desarchivar fichas.
+5. `auth.js`: Autenticación y registro.
+6. `batchConfig.js`: Modificaciones masivas de evidencias.
+7. `configEvidencias.js`: Lectura y actualización de ajustes puntuales.
+8. `evidencias.js`: Listado de evidencias.
+9. `fichas.js`: Listado de cursos.
+10. `foroRating.js`: Endpoint para calificar foros vía UI.
+11. `jobs.js`: Estado de la cola BullMQ.
+12. `matchingIa.js`: Endpoint para aceptar/rechazar propuestas de la IA.
+13. `mensajes.js`: Envío masivo de mensajes Moodle/Correo.
+14. `raps.js`: Resultados de aprendizaje.
+15. `scan.js`: Lanzar scraping on-demand.
 
-User          (id, nombre, email, passwordHash, zajunaUserEnc, zajunaPassEnc,
-               competenciaCodigo, competenciaNombre, competenciaId)
-  └── Ficha[]  (id, userId, codigo, programa, courseId, nombre, archivedAt)
-       └── Evidencia[]  (id, fichaId, nombre, href, tipo, cerradaAt,
-                         configCache, configCacheAt, activaParaScan)
-            └── Entrega[]      (id, evidenciaId, aprendizId, estado, notaActual, fechaScan)
-            └── EvidenciaConfig[]   (raw Json, scannedAt)
-            └── ConfigAudit[]
-            └── RapEvidenciaRel[]
-            └── MatchingPropuesta[]
-       └── Aprendiz[]   (id, fichaId, nombre, moodleId, documento)
-            └── Entrega[]
-            └── ActaParticipante[]
-       └── ActaSeguimiento[]
-       └── MensajeFormativo[]
-  └── Job[]
-  └── ConfigChangeJob[]
-  └── MatchingPropuesta[]
-  └── ActaSeguimiento[]
-  └── MensajeFormativo[]
+### Backend (Workers BullMQ) - `api/src/workers/`
+| Cola (`Queue`) | Worker (`Archivo`) | Concurrency | Propósito |
+|----------------|--------------------|-------------|-----------|
+| `fichas` | `fichasWorker.js` | 3 | Extraer cursos del dashboard Moodle |
+| `evidencias` | `evidenciasWorker.js` | 3 | Scrapear entregas de estudiantes |
+| `leerConfig` | `leerConfigEvidenciaWorker.js` | 1 | Guardar configuración de evidencia en caché |
+| `config` | `configWorker.js` | 1 | Actualizar 1 evidencia en Moodle |
+| `cambiarFecha` | `cambiarFechaWorker.js` | 1 | Bulk update (duedates) |
+| `cambiarConfig`| `cambiarConfigWorker.js` | 1 | Bulk update general |
+| `foroRating` | `foroRatingWorker.js` | 1 | Calificar posts en foros |
+| `autoScan` | `autoScanWorker.js` | 1 | Re-scraping automático cron (3h) y silencioso (Dashboard >2h) |
+| `matchingIa` | `matchingIaWorker.js` | 2 | Llamar a API Claude para RAPs |
+| `mensajeFormativo`| `mensajeFormativoWorker.js`| 1 | Enviar DM interno en Moodle |
+| `emailMasivo` | `emailMasivoWorker.js` | 2 | Enviar correos por SMTP |
+| `syncParticipantes`| `syncParticipantesWorker.js` | 1 | Extraer correos de estudiantes de Moodle |
 
-ActaSeguimiento  (id, userId, fichaId, numero, fecha, hora, lugar, objetivo,
-                  conclusiones, compromisos Json, rapIds Json, estado,
-                  notas*, archivadaAt*)   ← * pendientes migración sprint v2
-  └── ActaParticipante[]  (id, actaId, aprendizId, juicio,
-                           rapStatus Json*, hasUngraded Boolean*)  ← * pendientes
-  └── MensajeFormativo[]
+> **Nota técnica:** Los workers de configuración/modificación en Moodle tienen `Concurrency: 1` obligatorio porque Zajuna/Moodle invalida las cookies de sesión si detecta logins o envíos de formulario paralelos concurrentes intensivos desde el mismo usuario.
 
-MensajeFormativo  (id, userId, actaId, fichaId, canal, asunto, cuerpo,
-                   destinatarios Json, estado, enviadoAt, templateTipo)
-```
-
----
-
-## Flujos principales
-
-### Scraping de evidencias
-```
-POST /api/fichas/:id/evidencias/scan
-  → Job BullMQ → evidenciasWorker
-    → Playwright login → obtenerEvidencias(page, competencia)
-    → por evidencia: revisarEntregas | revisarEntregasForo | revisarEntregasQuiz
-    → upsert Evidencia + Entrega + Aprendiz en DB
-```
-
-### Configurar evidencia (leer + guardar)
-```
-GET /api/evidencias/:id/config
-  → ¿EvidenciaConfig < 4h? → { config, fromCache:true }
-  → si no: Job → leerConfigEvidenciaWorker → Playwright → EvidenciaConfig.create
-
-POST /api/evidencias/:id/config
-  → Job → configWorker → Playwright → serializarFormulario() → POST Moodle → ConfigAudit
-```
-
-### Matching IA
-```
-POST /api/evidencias/batch/matching-ia { evidenciaIds }
-  → Job → matchingIaWorker
-    → por evidencia: prompt Claude (nombre evidencia + lista RAPs)
-    → MatchingPropuesta.create (confianza, razon, estado)
-PATCH /api/matching-propuestas/:id/aprobar
-  → MatchingPropuesta.update(estado=aceptado) + RapEvidenciaRel.create
-```
-
-### Actas de seguimiento (sprint v2 — en curso)
-```
-POST /api/actas/:id/auto-poblar
-  → por RAP en acta: RapEvidenciaRel + MatchingPropuesta(aceptado) → evidencias de la ficha
-  → por aprendiz: Entrega por esas evidencias → rapStatus + juicio (3 estados) + hasUngraded
-  → upsert ActaParticipante
-
-GET /api/actas/:id/download/gor-f-084
-  → genera Word institucional GOR-F-084 V02 (tabla participantes, resumen, notas)
-```
+### Frontend (Páginas) - `web/src/pages/`
+1. `Login.tsx`: Acceso.
+2. `Dashboard.tsx`: Vista general del instructor.
+3. `Fichas.tsx`: Listado completo de fichas asignadas.
+4. `EvidenciasConfig.tsx`: Operaciones bulk.
+5. `ActasPage.tsx`: Administrador de comités y notas.
+6. `MatchingIaPage.tsx`: Revisión de la IA (tinder de RAPs).
+7. `RapsPage.tsx`: Gestión curricular.
+8. `MensajesPage.tsx`: Panel de comunicación masiva.
+9. `AjustesPage.tsx`: Configuración de credenciales de mensajería externa (SMTP).
 
 ---
 
-## Colas BullMQ activas
+## 5. Diseño y Reglas
 
-| Queue | Worker | Concurrency | Uso |
-|-------|--------|-------------|-----|
-| `fichas` | fichasWorker | 3 | Descubrir fichas de un instructor |
-| `evidencias` | evidenciasWorker | 3 | Scrapear entregas de una ficha |
-| `leerConfig` | leerConfigEvidenciaWorker | 1 | Leer config de una evidencia |
-| `config` | configWorker | 1 | Guardar config (legacy) |
-| `cambiarFecha` | cambiarFechaWorker | 1 | Bulk duedate |
-| `cambiarConfig` | cambiarConfigWorker | 1 | Bulk config múltiple |
-| `foroRating` | foroRatingWorker | 1 | Calificar posts foro |
-| `autoScan` | autoScanWorker | 1 | Scan programado |
-| `matchingIa` | matchingIaWorker | 2 | Claude matching evidencias↔RAPs |
-| `mensajeFormativo` | mensajeFormativoWorker | 1 | Enviar mensaje Zajuna |
-
----
-
-## Decisiones de diseño (no revertir sin discusión)
-
-1. **Cierre de evidencias 100% manual** — el worker NUNCA toca `cerradaAt`
-2. **Soft state con `DateTime?`** — `archivedAt`, `cerradaAt`, `archivadaAt` son nullable
-3. **Multitenant desde el inicio** — todo query filtra por `userId`
-4. **`zajuna-evidencias.js` no se toca** — CLI de referencia y respaldo
-5. **Workers stateless** — reciben job, ejecutan, cierran browser, retornan
-6. **IA no actúa sola** — siempre muestra al instructor antes de aplicar
-7. **Una migración Prisma por feature lógico** — nombres descriptivos snake_case
-8. **CSV import eliminado del UI** — auto-poblar lee DB directamente (ver HANDOFF-ACTAS.md)
+Ver `CLAUDE.md` para las políticas de escritura de código, migraciones y reglas de negocio obligatorias.

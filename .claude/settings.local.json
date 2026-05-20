@@ -69,7 +69,12 @@
       "PowerShell(\\(Get-Item \"C:\\\\zajuna\\\\output\\\\agent1\\\\root.pretty.js\"\\).Length; \\(Get-Content \"C:\\\\zajuna\\\\output\\\\agent1\\\\root.pretty.js\"\\).Count)",
       "Bash(New-Item -ItemType Directory -Force -Path \"C:\\\\zajuna\\\\output\\\\agent3\")",
       "Bash(Out-Null)",
-      "Bash(Write-Output \"Directory ready\")"
+      "Bash(Write-Output \"Directory ready\")",
+      "Bash(Get-Date *)",
+      "Bash(Get-ChildItem -Path \"C:\\\\zajuna\\\\api\\\\src\\\\workers\" -Filter \"*.js\")",
+      "Bash(Select-Object Name)",
+      "PowerShell(docker start zajuna-redis-1 *)",
+      "PowerShell(Start-Process powershell -ArgumentList \"-NoExit\", \"-Command\", \"cd C:\\\\zajuna; node api/src/server.js\" -WindowStyle Normal)"
     ]
   }
 }

@@ -50,20 +50,18 @@ const worker = new Worker("evidencias", async (job) => {
     await page.goto(`${BASE_URL}/course/view.php?id=${courseId}`, { waitUntil: "load", timeout: TIMEOUT });
     await cerrarModal(page);
 
-    const evidencias = await obtenerEvidencias(page, competenciaCodigo);
+    const evidencias = await obtenerEvidencias(page, competenciaCodigo, courseId);
     await prisma.job.update({ where: { id: jobId }, data: { progreso: 50 } });
 
-    // Sprint 2.6 FIX E: si hay >=1 foro, fetchear matriculados UNA sola vez y reusar
-    // en cada llamada a revisarEntregasForo. Ahorra ~5s por cada foro adicional.
-    let matriculadosCache = null;
-    const necesitaMatriculados = evidencias.some((e) => e.tipo === "forum" || e.tipo === "quiz");
-    if (necesitaMatriculados) {
-      try {
-        matriculadosCache = await obtenerMatriculados(page, courseId);
-      } catch (e) {
-        console.error(`[evidenciasWorker] no se pudo precachear matriculados: ${e.message}`);
-      }
+    // Fetchear matriculados SIEMPRE para usarlo como filtro global
+    // y eliminar definitivamente a los suspendidos en todas las evidencias.
+    let matriculadosCache = [];
+    try {
+      matriculadosCache = await obtenerMatriculados(page, courseId);
+    } catch (e) {
+      console.error(`[evidenciasWorker] no se pudo fetchear matriculados: ${e.message}`);
     }
+    const matriculadosIds = new Set(matriculadosCache.map(m => m.moodleUserId));
 
     const resumen = [];
 
@@ -78,6 +76,11 @@ const worker = new Worker("evidencias", async (job) => {
         entregas = await revisarEntregasQuiz(page, ev.actId, courseId, matriculadosCache);
       } else {
         entregas = await revisarEntregas(page, ev.actId);
+      }
+
+      // Aplicar filtro de suspendidos si tenemos matriculados válidos
+      if (matriculadosIds.size > 0) {
+        entregas = entregas.filter(e => matriculadosIds.has(e.aprendizMoodleId));
       }
 
       // Upsert evidencia (preserva cerradaAt actual, actualiza tipo real)

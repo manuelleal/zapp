@@ -1,9 +1,10 @@
+# 🛑 ARCHIVO HISTÓRICO 🛑
+
+> **ATENCIÓN:** Este documento ha sido congelado y es solo de referencia histórica. Para la documentación actual, el estado del proyecto, comandos, y reglas de desarrollo, **DEBES leer `CLAUDE.md`**.
+
 # HANDOFF.md — Guía operativa Zajuna App
 
-> Documento maestro para continuar el desarrollo en chats nuevos.
-> Léelo PRIMERO antes de cualquier prompt. Última actualización: **17 mayo 2026 — M1-M6 completos, sprint Actas v2 en curso.**
->
-> **Sprint activo:** Ver [`HANDOFF-ACTAS.md`](./HANDOFF-ACTAS.md) — Actas v2 con rapStatus por RAP, tabla dinámica, delete participante, archive.
+> Documento maestro histórico. Última actualización: **17 mayo 2026**
 
 ---
 

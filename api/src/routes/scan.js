@@ -8,6 +8,12 @@ async function scanRoutes(fastify) {
     return reply.code(202).send({ ok: true, message: "Escaneo completo iniciado." });
   });
 
+  // POST /api/scan/auto — escanea solo evidencias activas (gatillo silencioso al abrir app)
+  fastify.post("/api/scan/auto", { preHandler: fastify.authenticate }, async (req, reply) => {
+    await autoScanQueue.add("scan-auto", { userId: req.user.id, full: false });
+    return reply.code(202).send({ ok: true, message: "Auto escaneo silencioso iniciado." });
+  });
+
   // GET /api/scan/status — estado del auto-scan del usuario
   fastify.get("/api/scan/status", { preHandler: fastify.authenticate }, async (req) => {
     const user = await prisma.user.findUnique({

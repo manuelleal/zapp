@@ -1,64 +1,52 @@
 const { BASE_URL, TIMEOUT, log, cerrarModal } = require("./auth");
 
-async function obtenerEvidencias(page, competenciaCodigo) {
-  log(`Buscando actividades con código ${competenciaCodigo}...`);
-
-  // Expandir secciones colapsadas que contengan el código
-  const cabeceras = page.locator("a, span").filter({ hasText: "Actividad de aprendizaje" });
-  const nCab = await cabeceras.count();
-  for (let i = 0; i < nCab; i++) {
-    const cab = cabeceras.nth(i);
-    const texto = (await cab.textContent().catch(() => "")).trim();
-    if (!texto.includes(competenciaCodigo)) continue;
-    const expandida = await cab.evaluate(el => {
-      const li = el.closest("li");
-      return li ? !li.classList.contains("collapsed") : true;
-    }).catch(() => true);
-    if (!expandida) {
-      await cab.click().catch(() => {});
-      await page.waitForTimeout(1000);
-    }
+async function obtenerEvidencias(page, competenciaCodigo, courseId) {
+  log(`Buscando actividades con código ${competenciaCodigo} mediante Index Pages...`);
+  
+  if (!courseId) {
+    throw new Error("obtenerEvidencias requiere courseId para el nuevo método de Index Pages.");
   }
 
-  // Sprint 2.6 FIX F: incluir /mod/quiz/ (cuestionarios) que antes se excluian.
-  // El curso de ingles tiene 6 quizzes adicionales => 24 evidencias totales.
-  const links = await page.$$eval(
-    "a",
-    (as, codigo) =>
-      as
-        .filter(a => {
-          const href = a.href || "";
-          const txt  = (a.textContent || "").trim();
-          const esActividad =
-            href.includes("/mod/assign/") ||
-            href.includes("/mod/forum/")  ||
-            href.includes("/mod/quiz/");
-          return esActividad && txt.includes(codigo);
-        })
-        .map(a => {
-          const m  = a.href.match(/[?&]id=(\d+)/);
-          let tipo = "assign";
-          if (a.href.includes("/mod/forum/")) tipo = "forum";
-          else if (a.href.includes("/mod/quiz/")) tipo = "quiz";
-          return {
-            texto: (a.textContent || "").replace(/\s+/g, " ").trim(),
-            href:  a.href,
-            actId: m ? m[1] : null,
-            tipo,
-          };
-        })
-        .filter(l => l.actId !== null),
-    competenciaCodigo
-  );
+  const urls = [
+    { type: 'assign', url: `/mod/assign/index.php?id=${courseId}` },
+    { type: 'forum', url: `/mod/forum/index.php?id=${courseId}` },
+    { type: 'quiz', url: `/mod/quiz/index.php?id=${courseId}` },
+  ];
 
-  // Deduplicar por href
-  const vistos = new Set();
-  const unicos = links.filter(l => {
-    if (vistos.has(l.href)) return false;
-    vistos.add(l.href);
-    return true;
-  });
+  const unicos = [];
+  
+  for (const { type, url } of urls) {
+    const fullUrl = `${BASE_URL}${url}`;
+    log(`Buscando en ${fullUrl}`);
+    await page.goto(fullUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => {});
+    
+    // Si la página no existe o no hay actividades de este tipo, Moodle lanza error o tabla vacía
+    const isError = await page.evaluate(() => document.querySelector(".errormessage") !== null).catch(() => false);
+    if (isError) continue;
 
+    const links = await page.$$eval("table.generaltable tbody tr", (rows, args) => {
+      return rows.map(row => {
+        const a = row.querySelector("a");
+        if (!a) return null;
+        const texto = (a.textContent || "").replace(/\s+/g, " ").trim();
+        if (!texto.includes(args.codigo)) return null;
+        
+        const href = a.href || "";
+        const m = href.match(/[?&]id=(\d+)/);
+        if (!m) return null;
+        
+        return {
+          texto,
+          href,
+          actId: m[1],
+          tipo: args.type
+        };
+      }).filter(Boolean);
+    }, { codigo: competenciaCodigo, type }).catch(() => []);
+    
+    unicos.push(...links);
+  }
+  
   log(`Evidencias encontradas: ${unicos.length}`);
   return unicos;
 }

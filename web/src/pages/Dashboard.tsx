@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useNavigate } from "react-router-dom"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { RefreshCw, ChevronDown, ChevronRight } from "lucide-react"
@@ -100,6 +100,21 @@ export default function Dashboard() {
     enabled:  !!jwt,
     refetchInterval: 60_000,
   })
+
+  // Gatillo silencioso: si pasaron >2 horas o nunca se ha escaneado, y hay activas
+  const hasTriggeredAutoScan = useRef(false)
+  useEffect(() => {
+    if (scanStatus_ && scanStatus_.activeCount > 0 && !hasTriggeredAutoScan.current) {
+      const last = scanStatus_.lastAutoScanAt ? new Date(scanStatus_.lastAutoScanAt).getTime() : 0
+      const hoursSinceLast = (Date.now() - last) / (1000 * 60 * 60)
+      if (hoursSinceLast >= 2) {
+        hasTriggeredAutoScan.current = true
+        apiFetch("/api/scan/auto", { method: "POST" })
+          .then(() => queryClient.invalidateQueries({ queryKey: ["scan-status"] }))
+          .catch(console.error)
+      }
+    }
+  }, [scanStatus_, queryClient])
 
   const calificandoMutation = useMutation({
     mutationFn: ({ id, calificando }: { id: string; calificando: boolean }) =>
