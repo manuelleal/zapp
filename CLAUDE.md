@@ -101,10 +101,30 @@ ZAJUNA_PASS=
 - `api/src/routes/actas.js`: eliminado el bloque "Modo per-RAP fallback" de `auto-poblar` y `preview-native` que asumía erróneamente que GA{N} coincide con el sufijo del RAP (`-0N`). La inferencia fallaba en competencias transversales (ej. GA6 evaluando RAP02).
 - Comportamiento correcto: si una evidencia no tiene relación explícita en `RapEvidenciaRel` o `MatchingPropuesta` (estado `'aceptado'`), el sistema usa **global-fallback** sin adivinar. El campo `modo` en la respuesta solo puede ser `"per-rap"` o `"global-fallback"` (se elimina `"per-rap-inferido"`).
 
-**🟢 RESUELTO — Extractor Genérico de Guías (feat/extractor-guias-raps)**
-- `scripts/extraerTodasLasGuias.js`: script CLI que lee cualquier PDF de guía SENA, extrae las secciones "Competencia(s):" y "Resultados de aprendizaje a alcanzar:" mediante RegEx, y hace `upsert` en `prisma.competencia` y `prisma.rAP`.
-  - Uso: `node scripts/extraerTodasLasGuias.js <ruta.pdf> [--dry-run]`
-  - NO toca `scraper/seedRapsIngles.js` (sigue operativo para el flujo de inglés puro).
+**🟢 RESUELTO — Pipeline completo Guías → Competencias → RAPs → Evidencias (feat/extractor-guias-raps)**
+
+### `scripts/extraerTodasLasGuias.js` — Paso 1: Extraer Competencias y RAPs desde PDF
+Lee cualquier PDF de guía SENA. Acepta variantes de título (`Competencias:`, `Competencia(s):`, `Resultados de aprendizaje:`, `Resultados de aprendizaje a alcanzar:`). Hace `upsert` en `prisma.competencia` y `prisma.rAP`.
+```powershell
+node scripts/extraerTodasLasGuias.js <ruta.pdf>          # persiste en DB
+node scripts/extraerTodasLasGuias.js <ruta.pdf> --dry-run # solo muestra extracción
+```
+
+### `scripts/vincularEvidenciasRAPs.js` — Paso 2: Vincular Evidencias a RAPs en DB
+Busca evidencias con patrón `GA{N}-{competenciaCodigo}` en su nombre y las vincula en `RapEvidenciaRel`.
+- **Competencia `240202501` (inglés):** aplica regla automática `GA{N} → RAP-0{N}` y crea registros en DB.
+- **Demás competencias (transversales):** lista las evidencias sin vincular y redirige al módulo de **Matching IA** desde la UI (`Dashboard → Ficha → Evidencias → "Sugerir RAPs con IA"`).
+```powershell
+node scripts/vincularEvidenciasRAPs.js --dry-run                    # solo muestra
+node scripts/vincularEvidenciasRAPs.js                              # vincula inglés
+node scripts/vincularEvidenciasRAPs.js --competencia=240202501      # solo una competencia
+node scripts/vincularEvidenciasRAPs.js --fichaId=<cuid>             # solo una ficha
+```
+**Flujo completo recomendado:**
+1. `node scripts/extraerTodasLasGuias.js Guia_N.pdf` (por cada guía del programa)
+2. `node scripts/vincularEvidenciasRAPs.js` (vincula inglés automáticamente)
+3. Usar Matching IA en la interfaz para el resto de competencias.
+- NO toca `scraper/seedRapsIngles.js` (sigue operativo para el flujo de inglés puro).
 
 **🟡 MEDIA / BAJA PRIORIDAD**
 - BUG: Las variables tipo `{{nombre}}` en los mensajes no se reemplazan en el envío vía Zajuna (interpolar antes de enviar).
