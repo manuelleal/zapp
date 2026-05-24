@@ -1,6 +1,6 @@
 # CLAUDE.md — Zajuna App
 
-> **Última actualización:** 19 mayo 2026.
+> **Última actualización:** 23 mayo 2026.
 > Este documento es la **fuente única de verdad** para los agentes de IA. Contiene las reglas del proyecto, decisiones de arquitectura y comandos de desarrollo. 
 
 ## 1. Qué es este proyecto
@@ -50,6 +50,9 @@ C:\zajuna\
 ├── api/src/              ← Backend Fastify, rutas y workers BullMQ
 ├── prisma/schema.prisma  ← 17+ Modelos (Fichas, Evidencias, Actas, RAPs...)
 ├── scraper/              ← Lógica de Playwright y web scraping a Moodle
+│   └── seedRapsIngles.js ← Sembrador específico de RAPs de inglés (240202501) desde PDFs
+├── scripts/              ← Utilidades de línea de comandos (no son workers BullMQ)
+│   └── extraerTodasLasGuias.js ← Extractor GENÉRICO de Competencias y RAPs desde cualquier PDF
 ├── web/                  ← Frontend React/Vite
 ├── docs/                 ← Documentación complementaria (Arquitectura, Moodle UI)
 └── HANDOFF.md            ← Archivo histórico (NO modificar, solo lectura)
@@ -93,6 +96,11 @@ ZAJUNA_PASS=
 - ~~**Moodle Web Services (Sprint 2.7) / CSV**~~: Abortado. El usuario no cuenta con Token oficial de Moodle. En su lugar, se pivotó a un **Scraping Robusto Extremo**:
   - Se utilizan las **Index Pages** (`/mod/assign/index.php`, etc.) para recolectar el 100% de evidencias sin perder ninguna por culpa del DOM colapsado.
   - Se gatilla un auto-escaneo silencioso (`POST /api/scan/auto`) al abrir el Dashboard si pasaron > 2 horas.
+
+**🟢 RESUELTO — Extractor Genérico de Guías (feat/extractor-guias-raps)**
+- `scripts/extraerTodasLasGuias.js`: script CLI que lee cualquier PDF de guía SENA, extrae las secciones "Competencia(s):" y "Resultados de aprendizaje a alcanzar:" mediante RegEx, y hace `upsert` en `prisma.competencia` y `prisma.rAP`.
+  - Uso: `node scripts/extraerTodasLasGuias.js <ruta.pdf> [--dry-run]`
+  - NO toca `scraper/seedRapsIngles.js` (sigue operativo para el flujo de inglés puro).
 
 **🟡 MEDIA / BAJA PRIORIDAD**
 - BUG: Las variables tipo `{{nombre}}` en los mensajes no se reemplazan en el envío vía Zajuna (interpolar antes de enviar).
