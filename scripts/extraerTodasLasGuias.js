@@ -115,27 +115,30 @@ async function main() {
 
   const texto = limpiarTexto(data.text);
 
-  // Regex de fin de sección (encabezados comunes en guías SENA)
-  const FIN_SECCION = /\n\s*(?:Actividad(?:es)? de aprendizaje|Introducción|Duración|Ambiente|Materiales|Evidencias de aprendizaje|Fecha|Criterios)/i;
+  // Fin de sección: encabezados comunes en guías SENA.
+  // "Resultados de aprendizaje" está incluido para cortar el bloque de Competencias.
+  const FIN_SECCION = /\n\s*(?:Resultados de aprendizaje|Actividad(?:es)? de aprendizaje|Introducción|Duración|Ambiente|Materiales|Evidencias de aprendizaje|Fecha|Criterios)/i;
 
+  // Acepta: "Competencia(s):", "Competencias:", "Competencia:"
   const bloqueComp = bloqueSeccion(
     texto,
-    /Competencia\(s\)\s*:/i,
+    /Competencia(?:s|\(s\))?\s*:/i,
     FIN_SECCION,
   );
 
+  // Acepta: "Resultados de aprendizaje a alcanzar:", "Resultados de aprendizaje:"
   const bloqueRap = bloqueSeccion(
     texto,
-    /Resultados de aprendizaje a alcanzar\s*:/i,
+    /Resultados de aprendizaje(?: a alcanzar)?\s*:/i,
     FIN_SECCION,
   );
 
   if (!bloqueComp) {
-    console.error('❌ No se encontró "Competencia(s):" en el PDF.');
+    console.error('❌ No se encontró sección de Competencias en el PDF (buscado: "Competencia(s):" / "Competencias:").');
     process.exit(1);
   }
   if (!bloqueRap) {
-    console.error('❌ No se encontró "Resultados de aprendizaje a alcanzar:" en el PDF.');
+    console.error('❌ No se encontró sección de RAPs en el PDF (buscado: "Resultados de aprendizaje a alcanzar:" / "Resultados de aprendizaje:").');
     process.exit(1);
   }
 
