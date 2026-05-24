@@ -1,60 +1,50 @@
 const { BASE_URL, TIMEOUT, log, cerrarModal } = require("./auth");
 
-async function obtenerEvidencias(page, competenciaCodigo, courseId) {
-  log(`Buscando actividades con código ${competenciaCodigo} mediante Index Pages...`);
-  
+async function obtenerEvidencias(page, courseId) {
   if (!courseId) {
-    throw new Error("obtenerEvidencias requiere courseId para el nuevo método de Index Pages.");
+    throw new Error("obtenerEvidencias requiere courseId.");
   }
 
-  const urls = [
-    { type: 'assign', url: `/mod/assign/index.php?id=${courseId}` },
-    { type: 'forum', url: `/mod/forum/index.php?id=${courseId}` },
-    { type: 'quiz', url: `/mod/quiz/index.php?id=${courseId}` },
-  ];
+  const url = `${BASE_URL}/grade/edit/tree/index.php?id=${courseId}`;
+  log(`[gradebook-tree] Navegando a ${url}`);
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+  await cerrarModal(page);
 
-  const unicos = [];
-  
-  for (const { type, url } of urls) {
-    const fullUrl = `${BASE_URL}${url}`;
-    log(`Buscando en ${fullUrl}`);
-    await page.goto(fullUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => {});
-    
-    // Si la página no existe o no hay actividades de este tipo, Moodle lanza error o tabla vacía
-    const isError = await page.evaluate(() => document.querySelector(".errormessage") !== null).catch(() => false);
-    if (isError) continue;
-
-    const links = await page.$$eval("table.generaltable tbody tr", (rows, args) => {
-      return rows.map(row => {
-        const a = row.querySelector("a");
-        if (!a) return null;
-        const texto = (a.textContent || "").replace(/\s+/g, " ").trim();
-        if (!texto.includes(args.codigo)) return null;
-        
-        const href = a.href || "";
-        const m = href.match(/[?&]id=(\d+)/);
-        if (!m) return null;
-        
-        return {
-          texto,
-          href,
-          actId: m[1],
-          tipo: args.type
-        };
-      }).filter(Boolean);
-    }, { codigo: competenciaCodigo, type }).catch(() => []);
-    
-    unicos.push(...links);
+  // Guardia de redirección (sesión expirada → vuelve al login)
+  if (!page.url().includes("/grade/edit/tree/")) {
+    log(`⚠️ Redirigido a ${page.url()} — sesión expirada o sin permiso de instructor.`);
+    return [];
   }
-  
-  log(`Evidencias encontradas: ${unicos.length}`);
-  return unicos;
+
+  // tr[data-grademax].item contiene TODOS los ítems calificables del curso,
+  // incluidas las actividades ocultas a los aprendices. El link a.gradeitemheader
+  // apunta directamente al mod (assign/forum/quiz).
+  const items = await page.$$eval("tr[data-grademax].item", (rows) => {
+    return rows.map(row => {
+      const a = row.querySelector("a.gradeitemheader");
+      if (!a) return null;
+      const texto = (a.textContent || "").replace(/\s+/g, " ").trim();
+      const href  = a.href || "";
+      const m     = href.match(/[?&]id=(\d+)/);
+      if (!m || !texto) return null;
+
+      let tipo = "assign"; // default
+      if (href.includes("/mod/forum/"))  tipo = "forum";
+      else if (href.includes("/mod/quiz/")) tipo = "quiz";
+      else if (!href.includes("/mod/assign/")) return null; // categorías u otros ítems
+
+      return { texto, href, actId: m[1], tipo };
+    }).filter(Boolean);
+  }).catch(() => []);
+
+  log(`[gradebook-tree] Evidencias encontradas: ${items.length}`);
+  return items;
 }
 
 async function revisarEntregas(page, actId) {
   const url = `${BASE_URL}/mod/assign/view.php?id=${actId}&action=grading`;
   log(`Revisando entregas: ${url}`);
-  await page.goto(url, { waitUntil: "load", timeout: TIMEOUT });
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
   await cerrarModal(page);
 
   // Mostrar todos si hay paginación
@@ -166,6 +156,9 @@ async function extraerPostsForo(page) {
         if (a) nombre = (a.textContent || "").replace(/\s+/g, " ").trim();
       }
 
+      // Si el autor del comentario (rateduserid) es igual al instructor, ignorar.
+      // Pero no tenemos el id del instructor aqui. 
+      // Por suerte, el instructor generalment no está en el reporte de notas (matriculados).
       out.push({ moodleUserId: rateduserid, nombre, ratingVal, ratingText, postId: itemid });
     }
 
@@ -206,7 +199,7 @@ async function obtenerMatriculados(page, courseId) {
   // tarda >30s. 5000 cubre cualquier ficha del SENA con margen.
   const url = `${BASE_URL}/grade/report/grader/index.php?id=${courseId}&perpage=5000`;
   log(`[matriculados] GET ${url}`);
-  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 90_000 });
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
   await cerrarModal(page);
   return await page.evaluate(() => {
     const txt = (el) => (el?.textContent ?? "").replace(/\s+/g, " ").trim();
@@ -254,7 +247,7 @@ async function obtenerMatriculados(page, courseId) {
 async function revisarEntregasForo(page, actId, courseId, matriculadosCache) {
   const viewUrl = `${BASE_URL}/mod/forum/view.php?id=${actId}`;
   log(`[foro] View: ${viewUrl}`);
-  await page.goto(viewUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
+  await page.goto(viewUrl, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
   await cerrarModal(page);
 
   // Recolectar posts de la vista (foros tipo blog/single los muestran aquí)
@@ -275,7 +268,7 @@ async function revisarEntregasForo(page, actId, courseId, matriculadosCache) {
 
     const vistos = new Set();
     for (const d of discussIds) {
-      await page.goto(`${BASE_URL}/mod/forum/discuss.php?d=${d}`, { waitUntil: "load", timeout: TIMEOUT });
+      await page.goto(`${BASE_URL}/mod/forum/discuss.php?d=${d}`, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
       await cerrarModal(page);
       const local = await extraerPostsForo(page);
       for (const p of local) {
@@ -311,6 +304,14 @@ async function revisarEntregasForo(page, actId, courseId, matriculadosCache) {
     const v = p.ratingVal;
     const calificado = v != null && v !== "" && v !== "-999" && v !== "-1";
     const notaActual = calificado ? parseFloat(v) : null;
+    
+    // Solo agregar si el moodleUserId está en la lista de matriculados
+    // Esto evita que las respuestas del propio instructor se cuenten como entregas pendientes!
+    if (Array.isArray(matriculadosCache) && matriculadosCache.length > 0) {
+       const esMatriculado = matriculadosCache.some(m => m.moodleUserId === p.moodleUserId);
+       if (!esMatriculado) continue;
+    }
+
     result.push({
       nombre:          p.nombre || `Aprendiz ${p.moodleUserId}`,
       aprendizMoodleId: p.moodleUserId,
@@ -351,7 +352,7 @@ async function revisarEntregasForo(page, actId, courseId, matriculadosCache) {
 async function revisarEntregasQuiz(page, actId, courseId, matriculadosCache) {
   const reportUrl = `${BASE_URL}/mod/quiz/report.php?id=${actId}&mode=overview`;
   log(`[quiz] Report: ${reportUrl}`);
-  await page.goto(reportUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
+  await page.goto(reportUrl, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
   await cerrarModal(page);
 
   const filas = await page.evaluate(() => {
@@ -421,4 +422,42 @@ async function revisarEntregasQuiz(page, actId, courseId, matriculadosCache) {
   return result;
 }
 
-module.exports = { obtenerEvidencias, revisarEntregas, revisarEntregasForo, revisarEntregasQuiz, extraerPostsForo, obtenerMatriculados };
+/**
+ * Navega a la vista de exportación del libro de calificaciones y descarga el CSV en texto plano.
+ * Retorna el contenido del archivo como string.
+ */
+async function descargarGradebookCSV(page, courseId) {
+  const url = `${BASE_URL}/grade/export/txt/index.php?id=${courseId}`;
+  log(`[gradebook] Navegando a exportación CSV: ${url}`);
+  
+  try {
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+    
+    // Moodle requiere hacer click en el botón de submit para generar la descarga
+    const btnLocator = page.locator('button[type="submit"], input[type="submit"]');
+    
+    if (!(await btnLocator.count())) {
+      log("[gradebook] No se encontró el botón de descarga en el exportador.");
+      return null;
+    }
+
+    const [download] = await Promise.all([
+      page.waitForEvent('download', { timeout: 20000 }),
+      btnLocator.first().click()
+    ]);
+
+    const stream = await download.createReadStream();
+    let csvText = "";
+    for await (const chunk of stream) {
+      csvText += chunk.toString("utf8");
+    }
+    
+    log(`[gradebook] CSV descargado correctamente (${csvText.length} bytes).`);
+    return csvText;
+  } catch (err) {
+    log(`[gradebook] Error descargando CSV: ${err.message}`);
+    return null;
+  }
+}
+
+module.exports = { obtenerEvidencias, revisarEntregas, revisarEntregasForo, revisarEntregasQuiz, extraerPostsForo, obtenerMatriculados, descargarGradebookCSV };

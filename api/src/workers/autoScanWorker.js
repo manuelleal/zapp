@@ -11,12 +11,15 @@ async function processUser(userId, full) {
   });
   if (!user) return;
 
-  const whereEvidencia = full
-    ? { cerradaAt: null }
-    : { activaParaScan: true, cerradaAt: null };
+  // full=true → procesa TODAS las fichas activas aunque tengan 0 evidencias en DB
+  // (primer scan de fichas nuevas). full=false → solo fichas con al menos una
+  // evidencia activa (scan incremental normal).
+  const fichaWhere = full
+    ? { userId, archivedAt: null }
+    : { userId, archivedAt: null, evidencias: { some: { activaParaScan: true, cerradaAt: null } } };
 
   const fichas = await prisma.ficha.findMany({
-    where: { userId, archivedAt: null, evidencias: { some: whereEvidencia } },
+    where:  fichaWhere,
     select: { id: true, courseId: true },
   });
 
