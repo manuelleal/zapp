@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Settings, Loader2, Mail, CheckCircle2, Trash2 } from "lucide-react"
+import { Settings, Loader2, Mail, CheckCircle2, Trash2, FlaskConical } from "lucide-react"
 import Layout from "@/components/Layout"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -9,6 +9,22 @@ import { apiFetch, ApiError } from "@/api/client"
 import { toast } from "sonner"
 import { useAuthStore } from "@/store/auth"
 import { useNavigate } from "react-router-dom"
+
+const SUPERADMIN = "ddiddimmo@gmail.com"
+
+interface Competencia {
+  id:     string
+  codigo: string
+  nombre: string
+}
+
+interface JobStatus {
+  id:        string
+  status:    string
+  progreso:  number
+  errorMsg:  string | null
+  resultado: { found: number; nuevas: number; codigos: string[]; msg?: string } | null
+}
 
 interface ConfigCorreo {
   id:            string
@@ -37,6 +53,69 @@ export default function AjustesPage() {
   const queryClient = useQueryClient()
   const navigate    = useNavigate()
   const { jwt, user, clearAuth, setAuth } = useAuthStore()
+
+  const esSuperAdmin = user?.email === SUPERADMIN
+
+  // ── Modo Dios state ────────────────────────────────────────────────────────
+  const [scanJobId,       setScanJobId]       = useState<string | null>(null)
+  const [scanProgreso,    setScanProgreso]     = useState(0)
+  const [scanDone,        setScanDone]         = useState(false)
+  const [compSeleccionada, setCompSeleccionada] = useState("")
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const { data: competencias, refetch: refetchComps } = useQuery<Competencia[]>({
+    queryKey: ["competencias-admin"],
+    queryFn:  () => apiFetch<Competencia[]>("/api/competencias"),
+    enabled:  !!jwt && esSuperAdmin,
+  })
+
+  // Polling del job de descubrimiento
+  useEffect(() => {
+    if (!scanJobId || scanDone) return
+    pollRef.current = setInterval(async () => {
+      try {
+        const status = await apiFetch<JobStatus>(`/api/jobs/${scanJobId}`)
+        setScanProgreso(status.progreso)
+        if (status.status === "done" || status.status === "failed") {
+          clearInterval(pollRef.current!)
+          setScanDone(true)
+          if (status.status === "done") {
+            const r = status.resultado
+            toast.success(`Descubrimiento completo: ${r?.found ?? 0} competencia(s) encontrada(s)${r?.nuevas ? `, ${r.nuevas} nueva(s)` : ""}.`)
+            refetchComps()
+          } else {
+            toast.error(status.errorMsg ?? "Error en el descubrimiento.")
+          }
+        }
+      } catch { /* ignorar errores transitorios de red */ }
+    }, 1500)
+    return () => clearInterval(pollRef.current!)
+  }, [scanJobId, scanDone])
+
+  const descubrirMutation = useMutation({
+    mutationFn: () => apiFetch<{ jobId: string }>("/api/ajustes/descubrir-competencias", { method: "POST" }),
+    onSuccess: (r) => { setScanJobId(r.jobId); setScanProgreso(0); setScanDone(false) },
+    onError:   (e) => toast.error(e instanceof ApiError ? e.message : "Error al iniciar descubrimiento."),
+  })
+
+  const simularMutation = useMutation({
+    mutationFn: () => apiFetch<{ token: string; competenciaCodigo: string; competenciaNombre: string }>(
+      "/api/ajustes/simular-competencia",
+      { method: "POST", body: JSON.stringify({ competenciaCodigo: compSeleccionada }) }
+    ),
+    onSuccess: (r) => {
+      setAuth(r.token, {
+        id:                user!.id,
+        nombre:            user!.nombre,
+        email:             user!.email,
+        competenciaCodigo: r.competenciaCodigo,
+        competenciaNombre: r.competenciaNombre,
+      })
+      toast.success(`Simulando competencia ${r.competenciaCodigo}. Redirigiendo...`)
+      setTimeout(() => navigate("/"), 800)
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Error al simular."),
+  })
 
   const [proveedorIdx, setProveedorIdx] = useState(0)
   const [smtpHost,     setSmtpHost]     = useState("smtp.office365.com")
@@ -253,6 +332,87 @@ export default function AjustesPage() {
             </div>
           )}
         </div>
+
+        {/* ── Modo Dios: solo para superadmin ─────────────────────────────── */}
+        {esSuperAdmin && (
+          <div className="bg-white rounded-lg border border-amber-300 p-5 space-y-5">
+            <div className="flex items-center gap-2 border-b border-amber-100 pb-3">
+              <FlaskConical className="w-4 h-4 text-amber-600" />
+              <h2 className="text-sm font-semibold text-gray-900">Simulador de Competencias</h2>
+              <span className="ml-auto text-xs text-amber-700 bg-amber-50 border border-amber-300 px-2 py-0.5 rounded">SuperAdmin</span>
+            </div>
+
+            {/* Paso 1: Descubrir */}
+            <div className="space-y-2">
+              <p className="text-xs text-gray-600">
+                Extrae automáticamente todos los códigos de competencia presentes en tus fichas sincronizadas y los registra en la base de datos.
+              </p>
+              <Button
+                size="sm"
+                className="bg-amber-600 hover:bg-amber-700 text-white text-xs"
+                onClick={() => descubrirMutation.mutate()}
+                disabled={descubrirMutation.isPending || (!!scanJobId && !scanDone)}
+              >
+                {(descubrirMutation.isPending || (!!scanJobId && !scanDone))
+                  ? <><Loader2 className="w-3 h-3 mr-1.5 animate-spin" /> Escaneando...</>
+                  : "Escanear Zajuna para descubrir competencias"}
+              </Button>
+
+              {/* Barra de progreso */}
+              {scanJobId && (
+                <div className="space-y-1">
+                  <div className="w-full bg-gray-100 rounded-full h-1.5">
+                    <div
+                      className="bg-amber-500 h-1.5 rounded-full transition-all duration-500"
+                      style={{ width: `${scanProgreso}%` }}
+                    />
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    {scanDone ? "Completado" : `${scanProgreso}%...`}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Paso 2: Simular */}
+            <div className="space-y-2 pt-2 border-t border-amber-100">
+              <Label className="text-xs">Competencia a simular</Label>
+              {!competencias || competencias.length === 0 ? (
+                <p className="text-xs text-gray-400 italic">Sin competencias en DB. Ejecuta el escaneo primero.</p>
+              ) : (
+                <select
+                  className="w-full text-xs border border-gray-200 rounded-md px-3 py-2 bg-white focus:outline-none focus:ring-1 focus:ring-amber-400"
+                  value={compSeleccionada}
+                  onChange={e => setCompSeleccionada(e.target.value)}
+                >
+                  <option value="">— Selecciona una competencia —</option>
+                  {competencias.map(c => (
+                    <option key={c.id} value={c.codigo}>
+                      [{c.codigo}] {c.nombre}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-xs border-amber-400 text-amber-700 hover:bg-amber-50"
+                onClick={() => simularMutation.mutate()}
+                disabled={!compSeleccionada || simularMutation.isPending}
+              >
+                {simularMutation.isPending
+                  ? <><Loader2 className="w-3 h-3 mr-1.5 animate-spin" /> Aplicando...</>
+                  : "Simular esta competencia"}
+              </Button>
+              {user?.competenciaCodigo && (
+                <p className="text-xs text-gray-400">
+                  Activa ahora: <span className="font-mono text-gray-700">{user.competenciaCodigo}</span> — {user.competenciaNombre}
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+
       </div>
     </Layout>
   )

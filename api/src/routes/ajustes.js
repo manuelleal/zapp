@@ -1,6 +1,9 @@
 const nodemailer = require("nodemailer");
 const prisma = require("../db/client");
 const { encrypt, decrypt } = require("../lib/crypto");
+const { descubrirCompetenciasQueue } = require("../lib/queue");
+
+const SUPERADMIN = "ddiddimmo@gmail.com";
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
@@ -110,6 +113,61 @@ async function ajustesRoutes(fastify) {
   fastify.delete("/api/ajustes/correo", { preHandler: fastify.authenticate }, async (req, reply) => {
     await prisma.configCorreo.deleteMany({ where: { userId: req.user.id } });
     return reply.code(200).send({ ok: true });
+  });
+
+  // ═══ SUPERADMIN: Simulador de Competencias ════════════════════════════════
+  // Todos los endpoints siguientes están estrictamente restringidos a SUPERADMIN.
+
+  // ── GET /api/competencias ────────────────────────────────────────────────────
+  fastify.get("/api/competencias", { preHandler: fastify.authenticate }, async (req, reply) => {
+    if (req.user.email !== SUPERADMIN) return reply.code(403).send({ error: "Acceso restringido." });
+    const competencias = await prisma.competencia.findMany({ orderBy: { codigo: "asc" } });
+    return competencias;
+  });
+
+  // ── POST /api/ajustes/descubrir-competencias ─────────────────────────────────
+  // Encola un job que escanea las evidencias en DB y extrae códigos de competencia.
+  fastify.post("/api/ajustes/descubrir-competencias", { preHandler: fastify.authenticate }, async (req, reply) => {
+    if (req.user.email !== SUPERADMIN) return reply.code(403).send({ error: "Acceso restringido." });
+
+    const job = await prisma.job.create({
+      data: { userId: req.user.id, tipo: "descubrirCompetencias", status: "queued", progreso: 0 },
+    });
+
+    await descubrirCompetenciasQueue.add("descubrir", { jobId: job.id, userId: req.user.id });
+
+    return reply.code(202).send({ jobId: job.id });
+  });
+
+  // ── POST /api/ajustes/simular-competencia ────────────────────────────────────
+  // Cambia la competencia activa del superadmin y retorna un nuevo JWT firmado.
+  fastify.post("/api/ajustes/simular-competencia", {
+    preHandler: fastify.authenticate,
+    schema: {
+      body: {
+        type: "object",
+        required: ["competenciaCodigo"],
+        properties: { competenciaCodigo: { type: "string", minLength: 1 } },
+      },
+    },
+  }, async (req, reply) => {
+    if (req.user.email !== SUPERADMIN) return reply.code(403).send({ error: "Acceso restringido." });
+
+    const { competenciaCodigo } = req.body;
+    const competencia = await prisma.competencia.findUnique({ where: { codigo: competenciaCodigo } });
+    if (!competencia) return reply.code(404).send({ error: "Competencia no encontrada en DB." });
+
+    await prisma.user.update({
+      where: { id: req.user.id },
+      data:  { competenciaCodigo, competenciaNombre: competencia.nombre, competenciaId: competencia.id },
+    });
+
+    const token = fastify.jwt.sign(
+      { id: req.user.id, email: req.user.email, nombre: req.user.nombre, competenciaCodigo, competenciaNombre: competencia.nombre },
+      { expiresIn: "7d" },
+    );
+
+    return { token, competenciaCodigo, competenciaNombre: competencia.nombre };
   });
 }
 

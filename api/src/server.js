@@ -86,6 +86,7 @@ require("./workers/matchingIaWorker");
 require("./workers/mensajeFormativoWorker");
 require("./workers/syncParticipantesWorker");
 require("./workers/emailMasivoWorker");
+require("./workers/descubrirCompetenciasWorker");
 
 // ─── START ───────────────────────────────────────────────────────────────────
 
