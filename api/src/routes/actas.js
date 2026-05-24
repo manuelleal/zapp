@@ -340,50 +340,9 @@ async function actasRoutes(fastify) {
     const nFiltrados = aprendicesRaw.length - aprendices.length;
     const aprendizIds = aprendices.map(a => a.id);
 
-    // ── Decidir modo: per-RAP (si hay vinculaciones explícitas) ─────────────────
-    // RapEvidenciaRel + MatchingPropuesta pueden estar vacíos si el linking no
-    // se ha hecho aún. Intentamos un tercer modo: inferir la vinculación RAP↔
-    // Evidencia por nombre de la evidencia. Evidencias inglés tienen el patrón
-    // "GA{N}-240202501-..." y los RAPs tienen código "240202501-0{N}", de modo
-    // que GA1→RAP01, GA2→RAP02, etc.
-    let modoPerRap = todasEvidenciaIds.length > 0;
-    let modoInferido = false;
-
-    if (!modoPerRap) {
-      // Intentar inferir vinculación por nombre de evidencia ↔ código de RAP
-      const evidenciasDelaFicha = await prisma.evidencia.findMany({
-        where:  { fichaId: acta.fichaId },
-        select: { id: true, nombre: true },
-      });
-
-      // Mapa: sufijo numérico del RAP (ej "04") → rapId
-      const rapPorSufijo = new Map();
-      for (const rap of rapsInfo) {
-        const m = rap.codigo.match(/-0*(\d+)$/);
-        if (m) rapPorSufijo.set(m[1], rap.id);
-      }
-
-      // Asignar cada evidencia al RAP cuyo sufijo coincide con el GA-número
-      for (const ev of evidenciasDelaFicha) {
-        const m = ev.nombre.match(/\bGA(\d+)-\d{9}/);
-        if (!m) continue;
-        const gaNum = String(parseInt(m[1], 10));  // "04" → "4"
-        const rapId = rapPorSufijo.get(gaNum);
-        if (!rapId) continue;
-        if (!mapaRapEvidencias.has(rapId)) mapaRapEvidencias.set(rapId, new Set());
-        mapaRapEvidencias.get(rapId).add(ev.id);
-        todasEvidenciaIds.push(ev.id);
-      }
-
-      if (todasEvidenciaIds.length > 0) {
-        // Deduplicar (múltiples evidencias del mismo RAP pueden repetirse)
-        const uniq = [...new Set(todasEvidenciaIds)];
-        todasEvidenciaIds.length = 0;
-        todasEvidenciaIds.push(...uniq);
-        modoPerRap   = true;
-        modoInferido = true;
-      }
-    }
+    // per-RAP solo cuando hay vinculaciones explícitas en DB (RapEvidenciaRel o
+    // MatchingPropuesta aceptado). Sin vinculación, se usa global-fallback sin adivinar.
+    const modoPerRap = todasEvidenciaIds.length > 0;
 
     // ── Cargar entregas relevantes ──────────────────────────────────────────────
     // En modo per-RAP: solo entregas de evidencias vinculadas a los RAPs.
@@ -445,7 +404,7 @@ async function actasRoutes(fastify) {
       if (!entregas || entregas.length === 0) return { estado: "NO PARTICIPÓ", hasUngraded: false };
       const tieneAprobada = entregas.some(esAprobada);
       const tienePendiente = entregas.some(esPendiente);
-      if (tieneAprobada)  return { estado: "APROBÓ",       hasUngraded: false };
+      if (tieneAprobada)  return { estado: "APROBÓ",       hasUngraded: tienePendiente };
       if (tienePendiente) return { estado: "PENDIENTE",     hasUngraded: true  };
       return                     { estado: "NO PARTICIPÓ",  hasUngraded: false };
     }
@@ -507,7 +466,7 @@ async function actasRoutes(fastify) {
       warnings:             nWarnings,
       filtrados:            nFiltrados,
       evidenciasVinculadas: todasEvidenciaIds.length,
-      modo:                 modoPerRap ? (modoInferido ? "per-rap-inferido" : "per-rap") : "global-fallback",
+      modo:                 modoPerRap ? "per-rap" : "global-fallback",
     };
   });
 
@@ -1161,6 +1120,209 @@ async function actasRoutes(fastify) {
       .header("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
       .header("Content-Disposition", `attachment; filename="${filename}"`)
       .send(buffer);
+  });
+  // ── POST /api/actas/preview-native ──────────────────────────────────────────
+  fastify.post("/api/actas/preview-native", { preHandler: fastify.authenticate }, async (req, reply) => {
+    const { fichaId, rapIds } = req.body || {};
+    if (!fichaId || !Array.isArray(rapIds) || rapIds.length === 0) {
+      return reply.code(400).send({ error: "fichaId y rapIds son requeridos." });
+    }
+
+    const ficha = await verificarFichaDelUsuario(fichaId, req.user.id, reply);
+    if (!ficha) return;
+
+    // 1. Obtener RAPs
+    const rapsInfo = await prisma.rAP.findMany({
+      where:  { id: { in: rapIds } },
+      select: { id: true, codigo: true },
+    });
+    const rapCodigoPorId = new Map(rapsInfo.map(r => [r.id, r.codigo]));
+
+    // 2. Evidencias por RAP (confirmadas + IA aceptadas)
+    const [relsConfirmadas, relsIA] = await Promise.all([
+      prisma.rapEvidenciaRel.findMany({
+        where:  { rapId: { in: rapIds }, evidencia: { fichaId } },
+        select: { rapId: true, evidenciaId: true },
+      }),
+      prisma.matchingPropuesta.findMany({
+        where:  { rapId: { in: rapIds }, estado: "aceptado", evidencia: { fichaId } },
+        select: { rapId: true, evidenciaId: true },
+      }),
+    ]);
+
+    const mapaRapEvidencias = new Map();
+    for (const rel of [...relsConfirmadas, ...relsIA]) {
+      if (!mapaRapEvidencias.has(rel.rapId)) mapaRapEvidencias.set(rel.rapId, new Set());
+      mapaRapEvidencias.get(rel.rapId).add(rel.evidenciaId);
+    }
+    const todasEvidenciaIds = [...new Set([...relsConfirmadas, ...relsIA].map(r => r.evidenciaId))];
+
+    // 3. Aprendices
+    const aprendicesRaw = await prisma.aprendiz.findMany({
+      where:  { fichaId },
+      select: { id: true, nombre: true, moodleId: true, _count: { select: { entregas: true } } },
+    });
+    const aprendicesValidos = filtrarAprendicesValidos(aprendicesRaw);
+
+    function nucleoPrimerToken(nombre) {
+      const tok = nombre.split(/\s+/)[0];
+      const m = tok.match(/^[A-Z]{2,3}([A-Z].*)$/);
+      return m ? m[1] : tok;
+    }
+    function claveNombre(nombre) {
+      const tokens = nombre.trim().split(/\s+/);
+      const nucleo = nucleoPrimerToken(nombre);
+      const resto  = tokens.slice(1).join(" ").toLowerCase();
+      return `${nucleo.toLowerCase()}|${resto}`;
+    }
+
+    const grupoDuplicados = new Map();
+    for (const a of aprendicesValidos) {
+      const k = claveNombre(a.nombre);
+      if (!grupoDuplicados.has(k)) grupoDuplicados.set(k, []);
+      grupoDuplicados.get(k).push(a);
+    }
+
+    const aprendicesFinal = [];
+    for (const grupo of grupoDuplicados.values()) {
+      if (grupo.length === 1) {
+        aprendicesFinal.push(grupo[0]);
+      } else {
+        grupo.sort((a, b) => {
+          const diffEntregas = (b._count.entregas) - (a._count.entregas);
+          if (diffEntregas !== 0) return diffEntregas;
+          return a.nombre.length - b.nombre.length;
+        });
+        aprendicesFinal.push(grupo[0]);
+      }
+    }
+    const aprendices = aprendicesFinal.map(a => ({ id: a.id, nombre: a.nombre, moodleId: a.moodleId }));
+    const aprendizIds = aprendices.map(a => a.id);
+
+    // 4. per-RAP solo con vinculaciones explícitas en DB; si no, global-fallback.
+    const modoPerRap = todasEvidenciaIds.length > 0;
+
+    // 5. Entregas
+    let todasEntregas;
+    if (modoPerRap) {
+      todasEntregas = await prisma.entrega.findMany({
+        where: { aprendizId: { in: aprendizIds }, evidenciaId: { in: todasEvidenciaIds } },
+        select: { aprendizId: true, evidenciaId: true, estado: true, notaActual: true },
+      });
+    } else {
+      todasEntregas = await prisma.entrega.findMany({
+        where: { aprendizId: { in: aprendizIds }, evidencia: { fichaId } },
+        select: { aprendizId: true, evidenciaId: true, estado: true, notaActual: true },
+      });
+    }
+    const entregasPorAprendiz = new Map();
+    for (const e of todasEntregas) {
+      if (!entregasPorAprendiz.has(e.aprendizId)) entregasPorAprendiz.set(e.aprendizId, []);
+      entregasPorAprendiz.get(e.aprendizId).push(e);
+    }
+
+    // Helpers
+    function esAprobada(e) {
+      if (e.notaActual !== null && e.notaActual > 0) return true;
+      const est = (e.estado ?? "").toLowerCase();
+      if (est === "calificado" || /aprobad/.test(est) || est === "a") return true;
+      return false;
+    }
+    function esPendiente(e) { return (e.estado ?? "").toLowerCase() === "pendiente"; }
+
+    function calcularEstado(entregas) {
+      if (!entregas || entregas.length === 0) return { estado: "NO PARTICIPÓ", hasUngraded: false };
+      const tieneAprobada = entregas.some(esAprobada);
+      const tienePendiente = entregas.some(esPendiente);
+      if (tieneAprobada)  return { estado: "APROBÓ",       hasUngraded: tienePendiente };
+      if (tienePendiente) return { estado: "PENDIENTE",     hasUngraded: true  };
+      return                                 { estado: "NO PARTICIPÓ",  hasUngraded: false };
+    }
+
+    // 6. Preview Result
+    const participantes = aprendices.map(aprendiz => {
+      const entregasAprendiz = entregasPorAprendiz.get(aprendiz.id) ?? [];
+      const rapStatus = {};
+      let hasUngraded = false;
+
+      if (modoPerRap) {
+        const entregasMap = new Map(entregasAprendiz.map(e => [e.evidenciaId, e]));
+        for (const rapId of rapIds) {
+          const codigo = rapCodigoPorId.get(rapId) ?? rapId;
+          const evidIds = mapaRapEvidencias.get(rapId) ?? new Set();
+          const entregasDelRap = [...evidIds].map(eid => entregasMap.get(eid)).filter(Boolean);
+          const r = calcularEstado(entregasDelRap);
+          rapStatus[codigo] = r.estado;
+          if (r.hasUngraded) hasUngraded = true;
+        }
+      } else {
+        const r = calcularEstado(entregasAprendiz);
+        for (const rapId of rapIds) {
+          const codigo = rapCodigoPorId.get(rapId) ?? rapId;
+          rapStatus[codigo] = r.estado;
+        }
+        if (r.hasUngraded) hasUngraded = true;
+      }
+
+      const valores = Object.values(rapStatus);
+      let juicio;
+      if (valores.includes("PENDIENTE"))           juicio = "PENDIENTE";
+      else if (valores.every(v => v === "APROBÓ")) juicio = "APROBÓ";
+      else                                         juicio = "NO PARTICIPÓ";
+
+      return {
+        aprendizId: aprendiz.id,
+        nombre: aprendiz.nombre,
+        moodleId: aprendiz.moodleId,
+        juicio,
+        rapStatus,
+        hasUngraded
+      };
+    });
+
+    const warningsCount = participantes.filter(p => p.hasUngraded).length;
+
+    return { participantes, warningsCount, modoPerRap };
+  });
+
+  // ── POST /api/actas/confirm-native ─────────────────────────────────────────
+  fastify.post("/api/actas/confirm-native", { preHandler: fastify.authenticate }, async (req, reply) => {
+    const { fichaId, numero, fecha, hora, lugar, objetivo, rapIds, participantes } = req.body || {};
+
+    if (!fichaId || !numero || !fecha || !hora || !objetivo || !Array.isArray(rapIds) || !Array.isArray(participantes)) {
+      return reply.code(400).send({ error: "Faltan datos requeridos para crear el acta." });
+    }
+
+    const ficha = await verificarFichaDelUsuario(fichaId, req.user.id, reply);
+    if (!ficha) return;
+
+    // Crear el Acta
+    const acta = await prisma.actaSeguimiento.create({
+      data: {
+        userId:    req.user.id,
+        fichaId,
+        numero:    String(numero),
+        fecha:     new Date(fecha),
+        hora,
+        lugar:     lugar || "Videoconferencia / Plataforma Zajuna",
+        objetivo,
+        rapIds,
+        estado:    "borrador",
+      },
+    });
+
+    // Guardar los participantes
+    await prisma.actaParticipante.createMany({
+      data: participantes.map(p => ({
+        actaId: acta.id,
+        aprendizId: p.aprendizId,
+        juicio: p.juicio ?? "NO PARTICIPÓ",
+        rapStatus: p.rapStatus ?? {},
+        hasUngraded: Boolean(p.hasUngraded)
+      }))
+    });
+
+    return reply.code(201).send({ actaId: acta.id });
   });
 }
 

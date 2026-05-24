@@ -97,6 +97,10 @@ ZAJUNA_PASS=
   - Se utilizan las **Index Pages** (`/mod/assign/index.php`, etc.) para recolectar el 100% de evidencias sin perder ninguna por culpa del DOM colapsado.
   - Se gatilla un auto-escaneo silencioso (`POST /api/scan/auto`) al abrir el Dashboard si pasaron > 2 horas.
 
+**🟢 RESUELTO — Bug modo per-RAP inferido en Actas (feat/extractor-guias-raps)**
+- `api/src/routes/actas.js`: eliminado el bloque "Modo per-RAP fallback" de `auto-poblar` y `preview-native` que asumía erróneamente que GA{N} coincide con el sufijo del RAP (`-0N`). La inferencia fallaba en competencias transversales (ej. GA6 evaluando RAP02).
+- Comportamiento correcto: si una evidencia no tiene relación explícita en `RapEvidenciaRel` o `MatchingPropuesta` (estado `'aceptado'`), el sistema usa **global-fallback** sin adivinar. El campo `modo` en la respuesta solo puede ser `"per-rap"` o `"global-fallback"` (se elimina `"per-rap-inferido"`).
+
 **🟢 RESUELTO — Extractor Genérico de Guías (feat/extractor-guias-raps)**
 - `scripts/extraerTodasLasGuias.js`: script CLI que lee cualquier PDF de guía SENA, extrae las secciones "Competencia(s):" y "Resultados de aprendizaje a alcanzar:" mediante RegEx, y hace `upsert` en `prisma.competencia` y `prisma.rAP`.
   - Uso: `node scripts/extraerTodasLasGuias.js <ruta.pdf> [--dry-run]`
