@@ -1,6 +1,6 @@
 # CLAUDE.md — Zajuna App
 
-> **Última actualización:** 23 mayo 2026.
+> **Última actualización:** 24 mayo 2026.
 > Este documento es la **fuente única de verdad** para los agentes de IA. Contiene las reglas del proyecto, decisiones de arquitectura y comandos de desarrollo. 
 
 ## 1. Qué es este proyecto
@@ -52,7 +52,9 @@ C:\zajuna\
 ├── scraper/              ← Lógica de Playwright y web scraping a Moodle
 │   └── seedRapsIngles.js ← Sembrador específico de RAPs de inglés (240202501) desde PDFs
 ├── scripts/              ← Utilidades de línea de comandos (no son workers BullMQ)
-│   └── extraerTodasLasGuias.js ← Extractor GENÉRICO de Competencias y RAPs desde cualquier PDF
+│   ├── extraerTodasLasGuias.js    ← Extractor GENÉRICO de Competencias y RAPs desde PDF local
+│   ├── extraerGuiasDesdeZajuna.js ← Crawler Playwright: descarga guías del curso y extrae RAPs
+│   └── vincularEvidenciasRAPs.js  ← Crea RapEvidenciaRel en DB (auto inglés, IA para el resto)
 ├── web/                  ← Frontend React/Vite
 ├── docs/                 ← Documentación complementaria (Arquitectura, Moodle UI)
 └── HANDOFF.md            ← Archivo histórico (NO modificar, solo lectura)
@@ -89,47 +91,114 @@ ZAJUNA_PASS=
 
 ---
 
-## 7. Pendientes y Bugs Actuales (Prioridad)
+## 7. Estado Actual y Pendientes (actualizado 24 mayo 2026)
 
-**🟢 RESUELTOS RECIENTEMENTE (Scraping Robusto)**
-- ~~**Skip Usuarios Suspendidos**~~: Resuelto mediante un filtro universal usando `obtenerMatriculados` como fuente de verdad.
-- ~~**Moodle Web Services (Sprint 2.7) / CSV**~~: Abortado. El usuario no cuenta con Token oficial de Moodle. En su lugar, se pivotó a un **Scraping Robusto Extremo**:
-  - Se utilizan las **Index Pages** (`/mod/assign/index.php`, etc.) para recolectar el 100% de evidencias sin perder ninguna por culpa del DOM colapsado.
-  - Se gatilla un auto-escaneo silencioso (`POST /api/scan/auto`) al abrir el Dashboard si pasaron > 2 horas.
+---
 
-**🟢 RESUELTO — Bug modo per-RAP inferido en Actas (feat/extractor-guias-raps)**
-- `api/src/routes/actas.js`: eliminado el bloque "Modo per-RAP fallback" de `auto-poblar` y `preview-native` que asumía erróneamente que GA{N} coincide con el sufijo del RAP (`-0N`). La inferencia fallaba en competencias transversales (ej. GA6 evaluando RAP02).
-- Comportamiento correcto: si una evidencia no tiene relación explícita en `RapEvidenciaRel` o `MatchingPropuesta` (estado `'aceptado'`), el sistema usa **global-fallback** sin adivinar. El campo `modo` en la respuesta solo puede ser `"per-rap"` o `"global-fallback"` (se elimina `"per-rap-inferido"`).
+### 🌿 Ramas activas
 
-**🟢 RESUELTO — Pipeline completo Guías → Competencias → RAPs → Evidencias (feat/extractor-guias-raps)**
+| Rama | Estado | Qué tiene |
+|---|---|---|
+| `feature/strict-rap-mapping` | ✅ Lista, sin mergear | Fix actas.js (eliminado rapPorSufijo), scripts vincular/extraer |
+| `feature/gradebook-scan-v2` | ✅ Lista, sin mergear | Nuevo obtenerEvidencias() + autoScanWorker fix |
 
-### `scripts/extraerTodasLasGuias.js` — Paso 1: Extraer Competencias y RAPs desde PDF
-Lee cualquier PDF de guía SENA. Acepta variantes de título (`Competencias:`, `Competencia(s):`, `Resultados de aprendizaje:`, `Resultados de aprendizaje a alcanzar:`). Hace `upsert` en `prisma.competencia` y `prisma.rAP`.
+**Las dos ramas deben mergearse a `main` antes de continuar.**
+
+---
+
+### 🗄️ Estado de DB al 24 mayo 2026
+
+| Tabla | Cantidad | Notas |
+|---|---|---|
+| `Competencia` | 19 | Todas las del programa extraídas hoy |
+| `RAP` | 75 | GA01–GA11 completos + transversales |
+| `Evidencia` (ficha 3186683) | 48 | Scan viejo — faltan 151 del nuevo worker |
+| `RapEvidenciaRel` | 0 | ⚠️ Pendiente vincular |
+
+---
+
+### 🔴 PRÓXIMOS 3 PASOS (en orden exacto)
+
+**Paso 1 — Mergear ramas y reiniciar servidor**
 ```powershell
-node scripts/extraerTodasLasGuias.js <ruta.pdf>          # persiste en DB
-node scripts/extraerTodasLasGuias.js <ruta.pdf> --dry-run # solo muestra extracción
+git checkout main
+git merge feature/strict-rap-mapping
+git merge feature/gradebook-scan-v2
+Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force
+node api/src/server.js
 ```
 
-### `scripts/vincularEvidenciasRAPs.js` — Paso 2: Vincular Evidencias a RAPs en DB
-Busca evidencias con patrón `GA{N}-{competenciaCodigo}` en su nombre y las vincula en `RapEvidenciaRel`.
-- **Competencia `240202501` (inglés):** aplica regla automática `GA{N} → RAP-0{N}` y crea registros en DB.
-- **Demás competencias (transversales):** lista las evidencias sin vincular y redirige al módulo de **Matching IA** desde la UI (`Dashboard → Ficha → Evidencias → "Sugerir RAPs con IA"`).
-```powershell
-node scripts/vincularEvidenciasRAPs.js --dry-run                    # solo muestra
-node scripts/vincularEvidenciasRAPs.js                              # vincula inglés
-node scripts/vincularEvidenciasRAPs.js --competencia=240202501      # solo una competencia
-node scripts/vincularEvidenciasRAPs.js --fichaId=<cuid>             # solo una ficha
-```
-**Flujo completo recomendado:**
-1. `node scripts/extraerTodasLasGuias.js Guia_N.pdf` (por cada guía del programa)
-2. `node scripts/vincularEvidenciasRAPs.js` (vincula inglés automáticamente)
-3. Usar Matching IA en la interfaz para el resto de competencias.
-- NO toca `scraper/seedRapsIngles.js` (sigue operativo para el flujo de inglés puro).
+**Paso 2 — Escanear ficha 3186683 con el nuevo worker**
+Desde la UI: Dashboard → Ficha 3186683 → "Escanear" (o lanzar desde API).
+Resultado esperado: 48 → **199 evidencias** en DB gracias al Gradebook Tree.
+También correr el "Modo Dios → Descubrir Competencias" para actualizar el registro de las 19 en DB.
 
-**🟡 MEDIA / BAJA PRIORIDAD**
-- BUG: Las variables tipo `{{nombre}}` en los mensajes no se reemplazan en el envío vía Zajuna (interpolar antes de enviar).
-- Bandeja de mensajes entrantes del instructor (leer conversaciones).
-- Reportes Excel usando `exceljs` desde el backend.
+**Paso 3 — Vincular evidencias a RAPs**
+```powershell
+node scripts/vincularEvidenciasRAPs.js --dry-run   # verificar primero
+node scripts/vincularEvidenciasRAPs.js              # ejecutar
+```
+Resultado esperado: `RapEvidenciaRel` pasa de 0 a ~190 registros.
+Las actas pasan de `global-fallback` a modo **`per-rap`** real.
+
+---
+
+### ✅ Resuelto hoy (24 mayo 2026)
+
+**1. Gradebook Tree — captura 100% de evidencias** (`feature/gradebook-scan-v2`)
+- `scraper/evidencias.js`: `obtenerEvidencias()` reemplaza las 3 Index Pages por una sola URL: `/grade/edit/tree/index.php?id={courseId}`. Selector: `tr[data-grademax].item a.gradeitemheader`.
+- Motivo: las actividades GA4–GA11 estaban ocultas a los aprendices y no aparecían en `/mod/assign/index.php`.
+- Resultado test: ficha 3186683 pasó de **48 → 199 evidencias**, **5 → 18 competencias** detectadas.
+- `autoScanWorker.js`: `full=true` ahora procesa todas las fichas activas aunque tengan 0 evidencias en DB.
+
+**2. Extracción de Guías desde Zajuna** (`scripts/extraerGuiasDesdeZajuna.js`)
+- Las guías SENA son `mod/page` (NO `mod/resource`). Cada una tiene un botón `onclick="window.open(urlPDF)"`.
+- El script descubre dinámicamente todos los `mod/page` del curso, extrae el PDF via `window.open`, lo parsea con `pdf-parse` y hace upsert de Competencias y RAPs.
+- Resultado: `node scripts/extraerGuiasDesdeZajuna.js 50283` → **15/15 guías OK, 19 competencias, 75 RAPs** en DB.
+- Mismo mecanismo de descarga que `scraper/probes/probeGuiaRecurso.js` (ya existía para inglés GA01–GA07).
+```powershell
+node scripts/extraerGuiasDesdeZajuna.js 50283 --dry-run   # sin escribir en DB
+node scripts/extraerGuiasDesdeZajuna.js 50283              # persiste
+```
+
+**3. Bug actas.js — eliminado rapPorSufijo** (`feature/strict-rap-mapping`)
+- Eliminado el bloque que infería `GA{N} → RAP-0{N}` matemáticamente. Fallaba en competencias transversales.
+- Ahora: solo `RapEvidenciaRel` + `MatchingPropuesta(aceptado)`. Sin vínculos → `global-fallback`.
+
+**4. Modo Dios / Simulador de Competencias** (AjustesPage)
+- `POST /api/ajustes/descubrir-competencias` → encola worker que lee nombres de evidencias en DB y hace upsert de Competencias.
+- `POST /api/ajustes/simular-competencia` → emite nuevo JWT con `competenciaCodigo` embebido.
+- `GET /api/competencias` → lista todas las competencias (solo superadmin `ddiddimmo@gmail.com`).
+- UI: card "Modo Dios" en AjustesPage, visible solo para superadmin.
+
+---
+
+### 📝 Notas técnicas importantes
+
+- **Competencias con nombre `[Sin nombre — Guía N]`**: son competencias transversales que aparecen solo en códigos de RAP del PDF, no en la sección "Competencias". Funcionales para actas pero con nombre placeholder. Corregir manualmente si se necesita presentar al usuario.
+- **`240201530` (inducción)**: extrajo mal el nombre del PDF. Irrelevante para actas de formación técnica.
+- **`RapEvidenciaRel = 0`**: hasta que no se corra `vincularEvidenciasRAPs.js`, las actas usan `global-fallback` (todos los RAPs de la competencia). Funciona pero sin granularidad por guía.
+
+---
+
+### 🟡 Backlog (media/baja prioridad)
+
+- BUG: Variables `{{nombre}}`, `{{ficha}}`, `{{instructor}}` no se interpolan al enviar mensajes por Zajuna.
+- Bandeja de mensajes entrantes del instructor.
+- Reportes Excel con `exceljs` desde el backend.
+
+---
+
+### 📜 Scripts de utilidad creados (todos en `scripts/`)
+
+| Script | Qué hace |
+|---|---|
+| `extraerTodasLasGuias.js <pdf>` | Extrae Competencias+RAPs de un PDF local → DB |
+| `extraerGuiasDesdeZajuna.js <courseId>` | Descarga todas las guías del curso en Zajuna → DB |
+| `vincularEvidenciasRAPs.js` | Crea `RapEvidenciaRel`: inglés auto, resto lista para IA |
+| `diag-ficha.js <codigo>` | Diagnóstico de evidencias de una ficha en DB |
+| `diag-competencias.js` | Resumen global de competencias y cobertura en DB |
+| `smoke-test-simulador.js` | Test HTTP completo del flujo Modo Dios (11/11 ✅) |
 
 ---
 
