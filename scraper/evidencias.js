@@ -18,8 +18,10 @@ async function obtenerEvidencias(page, courseId) {
 
   // tr[data-grademax].item contiene TODOS los ítems calificables del curso,
   // incluidas las actividades ocultas a los aprendices. El link a.gradeitemheader
-  // apunta directamente al mod (assign/forum/quiz).
-  const items = await page.$$eval("tr[data-grademax].item", (rows) => {
+  // apunta directamente al mod (assign/forum/quiz), pero en el Gradebook Tree
+  // puede venir como grade.php?id=X o report.php?id=X en vez de view.php?id=X.
+  // Normalizamos a view.php afuera del $$eval para que el upsert sea estable.
+  const itemsRaw = await page.$$eval("tr[data-grademax].item", (rows) => {
     return rows.map(row => {
       const a = row.querySelector("a.gradeitemheader");
       if (!a) return null;
@@ -33,9 +35,18 @@ async function obtenerEvidencias(page, courseId) {
       else if (href.includes("/mod/quiz/")) tipo = "quiz";
       else if (!href.includes("/mod/assign/")) return null; // categorías u otros ítems
 
-      return { texto, href, actId: m[1], tipo };
+      return { texto, hrefOriginal: href, actId: m[1], tipo };
     }).filter(Boolean);
   }).catch(() => []);
+
+  // Reescribir cada href a la forma canónica view.php para evitar duplicados
+  // (grade.php vs view.php apuntan al mismo cmid pero rompen @@unique([fichaId, href])).
+  const items = itemsRaw.map(it => ({
+    texto: it.texto,
+    href:  `${BASE_URL}/mod/${it.tipo}/view.php?id=${it.actId}`,
+    actId: it.actId,
+    tipo:  it.tipo,
+  }));
 
   log(`[gradebook-tree] Evidencias encontradas: ${items.length}`);
   return items;

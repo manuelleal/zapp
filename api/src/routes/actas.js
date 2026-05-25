@@ -373,40 +373,41 @@ async function actasRoutes(fastify) {
       entregasPorAprendiz.get(e.aprendizId).push(e);
     }
 
-    // ── Helpers ────────────────────────────────────────────────────────────────
-    // Estado canónico de una entrega Moodle:
-    //   - "calificado" o notaActual > 0 o estado "aprobad"/estado "A" → APROBÓ
-    //   - "pendiente" → el aprendiz entregó pero el instructor no ha calificado → PENDIENTE
-    //   - "sin_entregar" / cualquier otro → aprendiz no entregó → NO PARTICIPÓ
+    // ── Helpers de clasificación ─────────────────────────────────────────────
+    // Umbral SENA: 70 sobre 100. Notas por debajo (incluido 0) = PERDIDA.
+    // Sin nota numérica: solo "A" o estado que contenga "aprobad" cuenta como aprobada.
     function esAprobada(e) {
-      if (e.notaActual !== null && e.notaActual > 0) return true;
+      if (e.notaActual !== null && e.notaActual !== undefined) {
+        return e.notaActual >= 70;
+      }
       const est = (e.estado ?? "").toLowerCase();
-      if (est === "calificado") return true;
-      if (/aprobad/.test(est)) return true;
-      if (est === "a") return true;
-      return false;
+      return /aprobad/.test(est) || est === "a";
     }
     function esPendiente(e) {
-      const est = (e.estado ?? "").toLowerCase();
-      return est === "pendiente";
+      return (e.estado ?? "").toLowerCase() === "pendiente";
     }
-    function esDesaprobada(e) {
-      if (e.notaActual === 0) return true;
+    // Intento de participación: cualquier estado que no sea sin_entregar/vacío.
+    function tieneParticipacion(e) {
       const est = (e.estado ?? "").toLowerCase();
-      return est === "d" || /desaprobad/.test(est);
+      if (!est || est === "sin_entregar" || est === "no_entregado") return false;
+      return true;
     }
 
-    // Para un RAP dado un aprendiz:
-    //   - Si tiene al menos una entrega calificada/aprobada → APROBÓ
-    //   - Si tiene alguna pendiente (entregó, sin calificar) → PENDIENTE
-    //   - Todo lo demás (sin_entregar, desaprobado, sin entregas) → NO PARTICIPÓ
+    // REGLAS ESTRICTAS por RAP:
+    //   APROBÓ       : TODAS las entregas asociadas evaluadas y aprobadas.
+    //   NO PARTICIPÓ : NINGUNA entrega tiene intento de participación.
+    //   PENDIENTE    : Cualquier caso intermedio (parcial, sin calificar, reprobado).
     function calcularEstado(entregas) {
-      if (!entregas || entregas.length === 0) return { estado: "NO PARTICIPÓ", hasUngraded: false };
-      const tieneAprobada = entregas.some(esAprobada);
-      const tienePendiente = entregas.some(esPendiente);
-      if (tieneAprobada)  return { estado: "APROBÓ",       hasUngraded: tienePendiente };
-      if (tienePendiente) return { estado: "PENDIENTE",     hasUngraded: true  };
-      return                     { estado: "NO PARTICIPÓ",  hasUngraded: false };
+      if (!entregas || entregas.length === 0) {
+        return { estado: "NO PARTICIPÓ", hasUngraded: false };
+      }
+      const todasAprobadas     = entregas.every(esAprobada);
+      const ningunaParticipa   = entregas.every(e => !tieneParticipacion(e));
+      const algunaSinCalificar = entregas.some(esPendiente);
+
+      if (todasAprobadas)   return { estado: "APROBÓ",       hasUngraded: false };
+      if (ningunaParticipa) return { estado: "NO PARTICIPÓ", hasUngraded: false };
+      return                       { estado: "PENDIENTE",    hasUngraded: algunaSinCalificar };
     }
 
     // ── Calcular rapStatus + juicio + hasUngraded por aprendiz ─────────────────
@@ -419,11 +420,16 @@ async function actasRoutes(fastify) {
 
       if (modoPerRap) {
         // Modo preciso: una columna por RAP basada en sus evidencias vinculadas.
+        // Para cada evidencia vinculada al RAP, si el aprendiz NO tiene entrega
+        // se inyecta una virtual "sin_entregar" — así entregas.every() refleja
+        // correctamente "TODAS las evidencias del RAP" (no solo las que existen).
         const entregasMap = new Map(entregasAprendiz.map(e => [e.evidenciaId, e]));
         for (const rapId of rapIds) {
           const codigo = rapCodigoPorId.get(rapId) ?? rapId;
           const evidIds = mapaRapEvidencias.get(rapId) ?? new Set();
-          const entregasDelRap = [...evidIds].map(eid => entregasMap.get(eid)).filter(Boolean);
+          const entregasDelRap = [...evidIds].map(eid =>
+            entregasMap.get(eid) ?? { evidenciaId: eid, estado: "sin_entregar", notaActual: null }
+          );
           const r = calcularEstado(entregasDelRap);
           rapStatus[codigo] = r.estado;
           if (r.hasUngraded) hasUngraded = true;
@@ -440,12 +446,19 @@ async function actasRoutes(fastify) {
         if (r.hasUngraded) hasUngraded = true;
       }
 
-      // Juicio global = peor estado entre RAPs (PENDIENTE > NO PARTICIPÓ > APROBÓ)
+      // JUICIO GENERAL — REGLAS ESTRICTAS:
+      //   APROBÓ       : TODOS los RAPs en "APROBÓ".
+      //   NO PARTICIPÓ : TODOS los RAPs en "NO PARTICIPÓ".
+      //   PENDIENTE    : Cualquier otra mezcla.
       const valores = Object.values(rapStatus);
       let juicio;
-      if (valores.includes("PENDIENTE"))           { juicio = "PENDIENTE";    nPendientes++; }
-      else if (valores.every(v => v === "APROBÓ")) { juicio = "APROBÓ";       nAprobaron++; }
-      else                                          { juicio = "NO PARTICIPÓ"; nNoParticiparon++; }
+      if (valores.length > 0 && valores.every(v => v === "APROBÓ")) {
+        juicio = "APROBÓ";       nAprobaron++;
+      } else if (valores.length > 0 && valores.every(v => v === "NO PARTICIPÓ")) {
+        juicio = "NO PARTICIPÓ"; nNoParticiparon++;
+      } else {
+        juicio = "PENDIENTE";    nPendientes++;
+      }
 
       if (hasUngraded) nWarnings++;
 
@@ -1221,22 +1234,32 @@ async function actasRoutes(fastify) {
       entregasPorAprendiz.get(e.aprendizId).push(e);
     }
 
-    // Helpers
+    // Helpers — umbral SENA: 70 (ver auto-poblar para detalles).
     function esAprobada(e) {
-      if (e.notaActual !== null && e.notaActual > 0) return true;
+      if (e.notaActual !== null && e.notaActual !== undefined) {
+        return e.notaActual >= 70;
+      }
       const est = (e.estado ?? "").toLowerCase();
-      if (est === "calificado" || /aprobad/.test(est) || est === "a") return true;
-      return false;
+      return /aprobad/.test(est) || est === "a";
     }
     function esPendiente(e) { return (e.estado ?? "").toLowerCase() === "pendiente"; }
+    function tieneParticipacion(e) {
+      const est = (e.estado ?? "").toLowerCase();
+      if (!est || est === "sin_entregar" || est === "no_entregado") return false;
+      return true;
+    }
 
+    // REGLAS ESTRICTAS por RAP: ver auto-poblar.
     function calcularEstado(entregas) {
-      if (!entregas || entregas.length === 0) return { estado: "NO PARTICIPÓ", hasUngraded: false };
-      const tieneAprobada = entregas.some(esAprobada);
-      const tienePendiente = entregas.some(esPendiente);
-      if (tieneAprobada)  return { estado: "APROBÓ",       hasUngraded: tienePendiente };
-      if (tienePendiente) return { estado: "PENDIENTE",     hasUngraded: true  };
-      return                                 { estado: "NO PARTICIPÓ",  hasUngraded: false };
+      if (!entregas || entregas.length === 0) {
+        return { estado: "NO PARTICIPÓ", hasUngraded: false };
+      }
+      const todasAprobadas     = entregas.every(esAprobada);
+      const ningunaParticipa   = entregas.every(e => !tieneParticipacion(e));
+      const algunaSinCalificar = entregas.some(esPendiente);
+      if (todasAprobadas)   return { estado: "APROBÓ",       hasUngraded: false };
+      if (ningunaParticipa) return { estado: "NO PARTICIPÓ", hasUngraded: false };
+      return                       { estado: "PENDIENTE",    hasUngraded: algunaSinCalificar };
     }
 
     // 6. Preview Result
@@ -1250,7 +1273,10 @@ async function actasRoutes(fastify) {
         for (const rapId of rapIds) {
           const codigo = rapCodigoPorId.get(rapId) ?? rapId;
           const evidIds = mapaRapEvidencias.get(rapId) ?? new Set();
-          const entregasDelRap = [...evidIds].map(eid => entregasMap.get(eid)).filter(Boolean);
+          // Evidencias sin entrega del aprendiz → virtual sin_entregar.
+          const entregasDelRap = [...evidIds].map(eid =>
+            entregasMap.get(eid) ?? { evidenciaId: eid, estado: "sin_entregar", notaActual: null }
+          );
           const r = calcularEstado(entregasDelRap);
           rapStatus[codigo] = r.estado;
           if (r.hasUngraded) hasUngraded = true;
@@ -1264,11 +1290,16 @@ async function actasRoutes(fastify) {
         if (r.hasUngraded) hasUngraded = true;
       }
 
+      // JUICIO GENERAL — REGLAS ESTRICTAS (ver auto-poblar).
       const valores = Object.values(rapStatus);
       let juicio;
-      if (valores.includes("PENDIENTE"))           juicio = "PENDIENTE";
-      else if (valores.every(v => v === "APROBÓ")) juicio = "APROBÓ";
-      else                                         juicio = "NO PARTICIPÓ";
+      if (valores.length > 0 && valores.every(v => v === "APROBÓ")) {
+        juicio = "APROBÓ";
+      } else if (valores.length > 0 && valores.every(v => v === "NO PARTICIPÓ")) {
+        juicio = "NO PARTICIPÓ";
+      } else {
+        juicio = "PENDIENTE";
+      }
 
       return {
         aprendizId: aprendiz.id,

@@ -62,8 +62,14 @@ function extraerCompetencias(bloque) {
   let m;
   while ((m = RE.exec(bloque)) !== null) {
     const codigo = m[1].trim();
-    const nombre = m[2].replace(/\s+/g, " ").trim();
-    if (nombre.length > 5) {
+    let nombre = m[2].replace(/\s+/g, " ").trim();
+    
+    // Truncar basura: viñetas gruesas o el inicio de "Duración" o "2. PRESENTACIÓN"
+    const cutIdx = nombre.search(/(\s•\s|\. |\s-\sDuración|\sDuración|\s2\.\sPRESENTACIÓN)/i);
+    if (cutIdx > 0) nombre = nombre.substring(0, cutIdx).trim();
+    if (nombre.endsWith(".")) nombre = nombre.substring(0, nombre.length - 1);
+    
+    if (nombre.length > 5 && nombre.length < 300) {
       resultados.push({ codigo, nombre });
     }
   }
@@ -72,18 +78,39 @@ function extraerCompetencias(bloque) {
 
 // ─── Parser de RAPs ─────────────────────────────────────────────────────────
 // Busca códigos con sufijo: XXXXXXXXX-NN (9 dígitos + guion + 2 dígitos).
-// La descripción va hasta el siguiente código RAP o fin de bloque.
+// Para cada RAP captura solo su descripción (una oración), deteniéndose en:
+//   • el siguiente código RAP
+//   • una línea en blanco (separa párrafos en el PDF)
+//   • fin del bloque
+// El .substring(0,400) es red de seguridad si el PDF no tiene línea en blanco.
 function extraerRAPs(bloque) {
-  const RE = /\b(\d{9}-\d{2})\b\s*[-–]?\s*([\s\S]+?)(?=\b\d{9}-\d{2}\b|$)/g;
+  const RE = /\b(\d{9}-\d{2})\b\s*[-–:]?\s*([\s\S]+?)(?=\b\d{9}-\d{2}\b|\n[ \t]*\n|$)/g;
   const resultados = [];
   let m;
   while ((m = RE.exec(bloque)) !== null) {
     const codigo = m[1].trim();
-    const descripcion = m[2]
+    let descripcion = m[2]
       .replace(/--\s*\d+\s+of\s+\d+\s*--/gi, "")
       .replace(/GFPI-F-\d+\s+V\.?\s*\d+/gi, "")
       .replace(/\s+/g, " ")
       .trim();
+      
+    // Truncar para no arrastrar toda la guía
+    const cutIdx = descripcion.search(/(\s•\s|\s-\sDuración|\sDuración|\s2\.\sPRESENTACIÓN|\so\sL|3\.\sFORMULACIÓN)/i);
+    if (cutIdx > 0) descripcion = descripcion.substring(0, cutIdx).trim();
+    // Eliminar ' o' final solitario si quedó
+    if (descripcion.endsWith(" o")) descripcion = descripcion.substring(0, descripcion.length - 2).trim();
+
+    // Red de seguridad estricta
+    if (descripcion.length > 400) {
+      const dotIdx = descripcion.indexOf('. ', 50);
+      if (dotIdx > 0 && dotIdx < 400) {
+        descripcion = descripcion.substring(0, dotIdx + 1);
+      } else {
+        descripcion = descripcion.substring(0, 400);
+      }
+    }
+    
     if (descripcion.length > 5) {
       resultados.push({
         codigo,
@@ -117,7 +144,7 @@ async function main() {
 
   // Fin de sección: encabezados comunes en guías SENA.
   // "Resultados de aprendizaje" está incluido para cortar el bloque de Competencias.
-  const FIN_SECCION = /\n\s*(?:Resultados de aprendizaje|Actividad(?:es)? de aprendizaje|Introducción|Duración|Ambiente|Materiales|Evidencias de aprendizaje|Fecha|Criterios)/i;
+  const FIN_SECCION = /\n\s*(?:Resultados de aprendizaje|Actividad(?:es)? de aprendizaje|Presentaci[oó]n|Formulaci[oó]n\s+de|Introducción|Duración|Ambiente|Materiales|Evidencias de aprendizaje|Fecha|Criterios)/i;
 
   // Acepta: "Competencia(s):", "Competencias:", "Competencia:"
   const bloqueComp = bloqueSeccion(

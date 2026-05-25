@@ -54,14 +54,15 @@ function extraerCompetencias(bloque) {
 }
 
 function extraerRAPs(bloque) {
-  const RE = /\b(\d{9}-\d{2})\b\s*[-–]?\s*([\s\S]+?)(?=\b\d{9}-\d{2}\b|$)/g;
+  const RE = /\b(\d{9}-\d{2})\b\s*[-–:]?\s*([\s\S]+?)(?=\b\d{9}-\d{2}\b|\n[ \t]*\n|$)/g;
   const out = [];
   let m;
   while ((m = RE.exec(bloque)) !== null) {
     const descripcion = m[2]
       .replace(/--\s*\d+\s+of\s+\d+\s*--/gi, "")
       .replace(/GFPI-F-\d+\s+V\.?\s*\d+/gi, "")
-      .replace(/\s+/g, " ").trim();
+      .replace(/\s+/g, " ").trim()
+      .substring(0, 400);
     if (descripcion.length > 5) out.push({ codigo: m[1].trim(), competenciaCodigo: m[1].split("-")[0], descripcion });
   }
   return out;
@@ -77,7 +78,7 @@ async function parsearPDF(buffer, nombreArchivo) {
   if (!data) return null;
 
   const texto = limpiarTexto(data.text);
-  const FIN   = /\n\s*(?:Resultados de aprendizaje|Actividad(?:es)? de aprendizaje|Introducción|Duración|Ambiente|Materiales|Evidencias de aprendizaje|Fecha|Criterios)/i;
+  const FIN   = /\n\s*(?:Resultados de aprendizaje|Actividad(?:es)? de aprendizaje|Presentaci[oó]n|Formulaci[oó]n\s+de|Introducción|Duración|Ambiente|Materiales|Evidencias de aprendizaje|Fecha|Criterios)/i;
 
   const bloqueComp = bloqueSeccion(texto, /Competencia(?:s|\(s\))?\s*:/i, FIN);
   const bloqueRap  = bloqueSeccion(texto, /Resultados de aprendizaje(?: a alcanzar)?\s*:/i, FIN);
@@ -195,6 +196,89 @@ async function descargarRecurso(context, pageUrl) {
   }
 }
 
+// ─── Descubrimiento jerárquico de guías ──────────────────────────────────────
+// Navega: Curso → FASE N → Actividad de proyecto → Guía de aprendizaje
+// Estrategias en cascada: fases → guías directas → fallback mod/page estricto
+
+async function descubrirGuias(page, courseId) {
+  await page.goto(`${BASE_URL}/course/view.php?id=${courseId}`, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+  await cerrarModal(page);
+
+  // Estrategia 1: FASE → Actividad de proyecto → Guía de aprendizaje
+  const fasesLinks = await page.evaluate(() =>
+    Array.from(document.querySelectorAll("a[href]"))
+      .map(a => ({ nombre: (a.textContent || "").replace(/\s+/g, " ").trim(), href: a.href }))
+      .filter(l => /FASE\s*\d+|FASE\s+[IVX]+/i.test(l.nombre) && l.href.startsWith("http"))
+  );
+
+  const guiasEncontradas = [];
+  const vistas = new Set();
+
+  if (fasesLinks.length > 0) {
+    console.log(`    Fases detectadas: ${fasesLinks.length}`);
+    for (const fase of fasesLinks) {
+      console.log(`    → Fase: "${fase.nombre}"`);
+      await page.goto(fase.href, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+      await cerrarModal(page);
+
+      const actLinks = await page.evaluate(() =>
+        Array.from(document.querySelectorAll("a[href]"))
+          .map(a => ({ nombre: (a.textContent || "").replace(/\s+/g, " ").trim(), href: a.href }))
+          .filter(l => /actividad\s+de\s+proyecto/i.test(l.nombre) && l.href.startsWith("http"))
+      );
+
+      for (const act of actLinks) {
+        if (vistas.has(act.href)) continue;
+        vistas.add(act.href);
+        console.log(`      → Act. proyecto: "${act.nombre}"`);
+        await page.goto(act.href, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+        await cerrarModal(page);
+
+        const guiaLinks = await page.evaluate(() =>
+          Array.from(document.querySelectorAll("a[href]"))
+            .map(a => ({ nombre: (a.textContent || "").replace(/\s+/g, " ").trim(), href: a.href }))
+            .filter(l => /gu[íi]a\s+de\s+aprendizaje/i.test(l.nombre) && l.href.startsWith("http"))
+        );
+
+        for (const g of guiaLinks) {
+          if (!vistas.has(g.href)) {
+            vistas.add(g.href);
+            guiasEncontradas.push(g);
+            console.log(`        ✓ Guía: "${g.nombre}"`);
+          }
+        }
+      }
+    }
+  }
+
+  // Estrategia 2: Guías directas en la página del curso (sin fases)
+  if (guiasEncontradas.length === 0) {
+    console.log("    (Sin fases — buscando Guías directamente en la página del curso)");
+    await page.goto(`${BASE_URL}/course/view.php?id=${courseId}`, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+    await cerrarModal(page);
+    const directas = await page.evaluate(() =>
+      Array.from(document.querySelectorAll("a[href]"))
+        .map(a => ({ nombre: (a.textContent || "").replace(/\s+/g, " ").trim(), href: a.href }))
+        .filter(l => /gu[íi]a\s+de\s+aprendizaje/i.test(l.nombre) && l.href.startsWith("http"))
+    );
+    guiasEncontradas.push(...directas);
+  }
+
+  // Estrategia 3: Fallback mod/page con filtro estricto de nombre
+  if (guiasEncontradas.length === 0) {
+    console.log("    (Fallback: mod/page con filtro estricto de nombre)");
+    await page.goto(`${BASE_URL}/course/view.php?id=${courseId}`, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+    const modPages = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('a[href*="/mod/page/view.php"]'))
+        .map(a => ({ nombre: (a.textContent || "").replace(/\s+/g, " ").trim(), href: a.href }))
+        .filter(r => /gu[ií]a\s+de\s+aprendizaje|^GA\s*\d{1,2}\b/i.test(r.nombre) && r.nombre.length > 0)
+    );
+    guiasEncontradas.push(...modPages);
+  }
+
+  return guiasEncontradas;
+}
+
 // ─── Main ────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -215,40 +299,17 @@ async function main() {
   await login(page, USER, PASS);
   console.log("    OK\n");
 
-  // ── Buscar recursos del curso ──────────────────────────────────────────────
-  console.log(`[2] Buscando recursos en course/view.php?id=${COURSE_ID}...`);
-  await page.goto(`${BASE_URL}/course/view.php?id=${COURSE_ID}`, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
-  await cerrarModal(page);
+  // ── Descubrir guías navegando jerárquicamente ─────────────────────────────
+  console.log(`[2] Descubriendo guías en courseId=${COURSE_ID} (FASE → Act. proyecto → Guía)...`);
+  const guias = await descubrirGuias(page, COURSE_ID);
 
-  // Las guías SENA en Zajuna son páginas Moodle (mod/page), NO archivos adjuntos
-  // (mod/resource). Cada página tiene un botón "Clic aquí" con window.open() al PDF.
-  const recursos = await page.evaluate(() => {
-    const links = Array.from(document.querySelectorAll('a[href*="/mod/page/view.php"]'));
-    return links.map(a => ({
-      nombre: (a.textContent || "").replace(/\s+/g, " ").trim(),
-      href:   a.href,
-    })).filter(r => r.nombre.length > 0);
-  });
-
-  console.log(`    Páginas (mod/page) encontradas: ${recursos.length}`);
-
-  // Filtrar por nombre de guía: "Guía", "Guia", "GA01", "Aprendizaje"
-  let guias = recursos.filter(r =>
-    /gu[ií]a|aprendizaje|^GA\s*\d{1,2}/i.test(r.nombre)
-  );
-
-  // Si el filtro no atrapó nada, usar todos los mod/page (puede que los nombres varíen)
-  if (guias.length === 0 && recursos.length > 0) {
-    console.log("    (Ninguna coincidió por nombre — procesando TODAS las páginas)");
-    guias = recursos;
-  }
-
-  console.log(`    Que parecen guías   : ${guias.length}`);
-  for (const r of guias) console.log(`      • "${r.nombre}"`);
+  console.log(`\n    Guías encontradas: ${guias.length}`);
+  for (const g of guias) console.log(`      • "${g.nombre}"`);
   console.log();
 
   if (guias.length === 0) {
-    console.log("❌ No se encontraron recursos de tipo guía en el curso.");
+    console.log("❌ No se encontraron guías de aprendizaje en el curso.");
+    console.log("   Revisa que el courseId sea correcto y que el curso tenga la estructura SENA estándar.");
     await browser.close();
     await prisma.$disconnect();
     return;

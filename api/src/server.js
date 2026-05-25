@@ -81,6 +81,7 @@ require("./workers/leerConfigEvidenciaWorker");
 require("./workers/cambiarFechaWorker");
 require("./workers/cambiarConfigWorker");
 require("./workers/foroRatingWorker");
+require("./workers/foroDescubrirWorker");
 require("./workers/autoScanWorker");
 require("./workers/matchingIaWorker");
 require("./workers/mensajeFormativoWorker");

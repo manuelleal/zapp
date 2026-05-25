@@ -17,8 +17,13 @@ const worker = new Worker("cambiarFecha", async (job) => {
     jobId,
     userId,
     evidenciaIds,
-    nuevaFecha,     // "YYYY-MM-DD"
-    nuevaHora,      // "HH:MM"
+    // Fecha de cierre/entrega (assign.duedate, forum.cutoffdate, quiz.timeclose)
+    nuevaFecha,         // "YYYY-MM-DD"
+    nuevaHora,          // "HH:MM"
+    // Fecha de apertura — OPCIONAL (assign.allowsubmissionsfromdate,
+    // forum.duedate, quiz.timeopen). Si ausente, no se modifica.
+    aperturaFecha,      // "YYYY-MM-DD" | undefined
+    aperturaHora,       // "HH:MM"      | undefined
     zajunaUserEnc,
     zajunaPassEnc,
   } = job.data;
@@ -108,36 +113,59 @@ const worker = new Worker("cambiarFecha", async (job) => {
           await enableEditMode(page, courseId);
         }
 
-        // Leer config actual (valorAntes)
-        let valorAntes = null;
+        // Leer config actual (para auditar el "antes" tanto de entrega como de apertura)
+        let antesEntrega  = null;
+        let antesApertura = null;
         try {
           const configActual = await leerConfigEvidencia(page, actId);
-          valorAntes = configActual.entregaFecha
+          antesEntrega = configActual.entregaFecha
             ? `${configActual.entregaFecha}T${configActual.entregaHora || "23:55"}`
+            : null;
+          antesApertura = configActual.abrirFecha
+            ? `${configActual.abrirFecha}T${configActual.abrirHora || "00:00"}`
             : null;
         } catch (e) {
           log(`[cambiarFechaWorker] No se pudo leer config antes para ${evidenciaId}: ${e.message}`);
         }
 
-        // Aplicar nueva fecha de entrega
-        await guardarConfigEvidencia(page, actId, {
-          entregaFecha: nuevaFecha,
-          entregaHora:  nuevaHora,
-        });
+        // Construir payload: solo enviar las fechas que el cliente pidió cambiar.
+        // guardarConfigEvidencia hace un merge parcial sobre el formulario completo
+        // y respeta los FIELD_MAPS por tipo (assign / forum / quiz).
+        const configUpdate = {};
+        if (nuevaFecha !== undefined) {
+          configUpdate.entregaFecha = nuevaFecha;
+          configUpdate.entregaHora  = nuevaHora;
+        }
+        if (aperturaFecha !== undefined) {
+          configUpdate.abrirFecha = aperturaFecha;
+          configUpdate.abrirHora  = aperturaHora;
+        }
+        await guardarConfigEvidencia(page, actId, configUpdate);
 
-        // Registrar en ConfigAudit
+        const despuesEntrega  = nuevaFecha    !== undefined ? `${nuevaFecha}T${nuevaHora}`         : null;
+        const despuesApertura = aperturaFecha !== undefined ? `${aperturaFecha}T${aperturaHora}`   : null;
+
+        // Registrar en ConfigAudit (incluye antes/después de ambas fechas si aplican)
         await prisma.configAudit.create({
           data: {
             userId,
             evidenciaId,
             actId,
-            antes:   { entregaFecha: valorAntes },
-            despues: { entregaFecha: `${nuevaFecha}T${nuevaHora}` },
+            antes:   { entregaFecha: antesEntrega,  abrirFecha: antesApertura  },
+            despues: { entregaFecha: despuesEntrega, abrirFecha: despuesApertura },
           },
         }).catch((e) => log(`[cambiarFechaWorker] no se pudo crear audit: ${e.message}`));
 
-        resultadoEv = { evidenciaId, ok: true, nombre: ev.nombre, valorAntes, valorDespues: `${nuevaFecha}T${nuevaHora}` };
-        log(`[cambiarFechaWorker] ✓ ${ev.nombre} → ${nuevaFecha}T${nuevaHora}`);
+        resultadoEv = {
+          evidenciaId, ok: true, nombre: ev.nombre,
+          valorAntes:   antesEntrega,   valorDespues:   despuesEntrega,
+          aperturaAntes: antesApertura, aperturaDespues: despuesApertura,
+        };
+        const resumen = [
+          despuesApertura && `apertura→${despuesApertura}`,
+          despuesEntrega  && `entrega→${despuesEntrega}`,
+        ].filter(Boolean).join(" / ");
+        log(`[cambiarFechaWorker] ✓ ${ev.nombre} ${resumen}`);
 
       } catch (errEv) {
         // Fallo en una evidencia: loguear y continuar con la siguiente
