@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Loader2, Save } from "lucide-react"
+import { Loader2, Save, RefreshCw } from "lucide-react"
 import { apiFetch, authFetch, ApiError } from "@/api/client"
 
 type EstadoFiltro = "" | "pendiente" | "calificado" | "sin_entregar"
@@ -56,6 +56,17 @@ export default function AprendicesPanel({ evidenciaId }: { evidenciaId: string }
   // marcamos aqui el moodleId para mostrar spinner solo en esa fila.
   const [savingSingle, setSavingSingle] = useState<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Verificación en vivo contra Moodle: lista de moodleUserIds que en Moodle
+  // tienen posts publicados pero sin rating del instructor.
+  const [pendientesMoodle, setPendientesMoodle] = useState<Set<string> | null>(null)
+  const [discoverPhase, setDiscoverPhase] = useState<"idle" | "running" | "error" | "success">("idle")
+  const [discoverMsg, setDiscoverMsg]     = useState("")
+  const discoverPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  function stopDiscoverPoll() {
+    if (discoverPollRef.current) { clearInterval(discoverPollRef.current); discoverPollRef.current = null }
+  }
+  useEffect(() => () => stopDiscoverPoll(), [])
 
   function stopPoll() {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
@@ -117,6 +128,56 @@ export default function AprendicesPanel({ evidenciaId }: { evidenciaId: string }
     } catch (e) {
       setSavingSingle(null); setSavePhase("error")
       setSaveMsg(e instanceof ApiError ? e.message : "Error al iniciar el guardado.")
+    }
+  }
+
+  async function verificarPendientesEnMoodle() {
+    setDiscoverPhase("running")
+    setDiscoverMsg("Conectando con Moodle...")
+    setPendientesMoodle(null)
+    stopDiscoverPoll()
+    try {
+      const { jobId } = await apiFetch<{ jobId: string }>(
+        `/api/evidencias/${encodeURIComponent(evidenciaId)}/foro/descubrir-pendientes`,
+        { method: "POST" }
+      )
+      discoverPollRef.current = setInterval(async () => {
+        try {
+          const res = await authFetch(`/api/jobs/${encodeURIComponent(jobId)}`)
+          const d = await res.json()
+          if (!res.ok) {
+            stopDiscoverPoll()
+            setDiscoverPhase("error")
+            setDiscoverMsg(d?.errorMsg || `Error ${res.status}`)
+            return
+          }
+          if (d.status === "done") {
+            stopDiscoverPoll()
+            const r = d.resultado as {
+              pendientes: Array<{ moodleUserId: string }>
+              calificados: Array<{ moodleUserId: string }>
+              totalPosts: number
+            }
+            const ids = new Set(r.pendientes.map(p => String(p.moodleUserId)))
+            setPendientesMoodle(ids)
+            setDiscoverPhase("success")
+            setDiscoverMsg(`${ids.size} sin calificar / ${r.calificados.length} calificados en Moodle (${r.totalPosts} posts)`)
+          } else if (d.status === "error") {
+            stopDiscoverPoll()
+            setDiscoverPhase("error")
+            setDiscoverMsg(d.errorMsg || "El job fallo.")
+          } else {
+            setDiscoverMsg(`Verificando... ${d.progreso || 0}%`)
+          }
+        } catch (err) {
+          stopDiscoverPoll()
+          setDiscoverPhase("error")
+          setDiscoverMsg(err instanceof Error ? err.message : "Error de red.")
+        }
+      }, 2500)
+    } catch (e) {
+      setDiscoverPhase("error")
+      setDiscoverMsg(e instanceof ApiError ? e.message : "Error al iniciar verificación.")
     }
   }
 
@@ -240,12 +301,20 @@ export default function AprendicesPanel({ evidenciaId }: { evidenciaId: string }
 
       {/* Sprint 2.5 FIX 4: barra de calificacion bulk para foros */}
       {esForo && (
-        <div className="px-6 pb-2 flex items-center gap-2">
+        <div className="px-6 pb-2 flex items-center gap-2 flex-wrap">
           <span className="text-xs text-gray-500 mr-auto">
             {Object.values(ratings).filter((v) => v !== "" && v != null).length > 0
               ? `${Object.values(ratings).filter((v) => v !== "" && v != null).length} calificacion(es) pendientes de enviar`
               : "Asigna notas en los inputs de la derecha"}
           </span>
+          {discoverPhase !== "idle" && (
+            <span className={`text-xs ${
+              discoverPhase === "error" ? "text-red-600" :
+              discoverPhase === "success" ? "text-green-700" : "text-blue-600"
+            }`}>
+              {discoverMsg}
+            </span>
+          )}
           {savePhase !== "idle" && (
             <span className={`text-xs ${
               savePhase === "error" ? "text-red-600" :
@@ -254,6 +323,21 @@ export default function AprendicesPanel({ evidenciaId }: { evidenciaId: string }
               {saveMsg}
             </span>
           )}
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs gap-1"
+            onClick={verificarPendientesEnMoodle}
+            disabled={discoverPhase === "running" || savePhase === "saving"}
+            title="Verificar contra Moodle qué aprendices publicaron sin recibir nota"
+          >
+            {discoverPhase === "running" ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="w-3.5 h-3.5" />
+            )}
+            Verificar en Moodle
+          </Button>
           <Button
             size="sm"
             className="h-7 text-xs bg-sena-green hover:bg-sena-green/90 gap-1"
@@ -304,6 +388,11 @@ export default function AprendicesPanel({ evidenciaId }: { evidenciaId: string }
                 {estadoLabel(e.estado)}
                 {e.notaActual != null && ` · ${e.notaActual}`}
               </Badge>
+              {esForo && pendientesMoodle && e.aprendiz.moodleId && pendientesMoodle.has(e.aprendiz.moodleId) && (
+                <Badge variant="yellow" className="text-[10px] shrink-0" title="Moodle no tiene rating para este aprendiz">
+                  Sin nota en Moodle
+                </Badge>
+              )}
               {/* Sprint 2.5 FIX 4: input de calificacion para foros (solo si el alumno publico) */}
               {esForo && e.aprendiz.moodleId && e.estado !== "sin_entregar" && (
                 <>

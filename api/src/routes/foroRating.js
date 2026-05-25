@@ -5,7 +5,7 @@
  */
 
 const prisma = require("../db/client");
-const { foroRatingQueue } = require("../lib/queue");
+const { foroRatingQueue, foroDescubrirQueue } = require("../lib/queue");
 
 function actIdFromHref(href) {
   if (!href) return null;
@@ -53,6 +53,40 @@ async function foroRatingRoutes(fastify) {
       evidenciaId:   ev.id,
       actId,
       ratings:       ratings.map((r) => ({ moodleUserId: String(r.moodleUserId), nota: r.nota })),
+      zajunaUserEnc: user.zajunaUserEnc,
+      zajunaPassEnc: user.zajunaPassEnc,
+    });
+
+    return reply.code(202).send({ jobId: job.id });
+  });
+
+  // POST /api/evidencias/:id/foro/descubrir-pendientes
+  // Scrapeo en vivo del foro Moodle para identificar aprendices que publicaron
+  // pero aún no tienen rating asignado.
+  fastify.post("/api/evidencias/:id/foro/descubrir-pendientes", { preHandler: fastify.authenticate }, async (req, reply) => {
+    const ev = await prisma.evidencia.findUnique({
+      where:   { id: req.params.id },
+      include: { ficha: { select: { userId: true } } },
+    });
+    if (!ev) return reply.code(404).send({ error: "Evidencia no encontrada." });
+    if (ev.ficha.userId !== req.user.id) return reply.code(403).send({ error: "Sin acceso." });
+    if (ev.tipo !== "forum") {
+      return reply.code(422).send({ error: "Esta evidencia no es un foro (tipo=" + ev.tipo + ")." });
+    }
+    const actId = actIdFromHref(ev.href);
+    if (!actId) return reply.code(422).send({ error: "Evidencia sin actId válido." });
+
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+
+    const job = await prisma.job.create({
+      data: { userId: req.user.id, tipo: "foro-descubrir", status: "queued" },
+    });
+
+    await foroDescubrirQueue.add("foroDescubrir", {
+      jobId:         job.id,
+      userId:        req.user.id,
+      evidenciaId:   ev.id,
+      actId,
       zajunaUserEnc: user.zajunaUserEnc,
       zajunaPassEnc: user.zajunaPassEnc,
     });
