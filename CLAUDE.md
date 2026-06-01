@@ -1,6 +1,6 @@
 # CLAUDE.md — Zajuna App
 
-> **Última actualización:** 31 mayo 2026 (Fase 2 + optimización de velocidad de scan «Capa 1», sin commitear).
+> **Última actualización:** 31 mayo 2026 (scan Capa 1+2 commiteado en `58d1e2a`; diagnosticado el bloqueador de actas `RapEvidenciaRel=0`; Fase 2 UI aún sin commitear).
 > Este documento es la **fuente única de verdad** para los agentes de IA. Contiene las reglas del proyecto, decisiones de arquitectura y comandos de desarrollo. 
 
 ## 1. Qué es este proyecto
@@ -94,7 +94,7 @@ ZAJUNA_PASS=
 
 ---
 
-## 7. Estado Actual y Pendientes (actualizado 28 mayo 2026)
+## 7. Estado Actual y Pendientes (actualizado 31 mayo 2026)
 
 ---
 
@@ -102,7 +102,7 @@ ZAJUNA_PASS=
 
 | Rama | Estado | Qué tiene |
 |---|---|---|
-| `feature/gradebook-scan-v2` | 🔄 **Rama actual** — cambios sin commitear | Gradebook Tree + canonicalización hrefs + calcularEstado estricto + foroDescubrir + Fase 2 UI en progreso |
+| `feature/gradebook-scan-v2` | 🔄 **Rama actual** — scan Capa 1+2 commiteado (`58d1e2a`); Fase 2 UI aún sin commitear | Gradebook Tree + hrefs canónicos + calcularEstado estricto + foroDescubrir + **scan perf Capa 1 (DB en lote) + Capa 2 (AJAX list_participants)** + Fase 2 UI en progreso |
 | `feature/strict-rap-mapping` | ✅ Lista, sin mergear | Fix actas.js (eliminado rapPorSufijo), scripts vincular/extraer |
 | `fix/mensaje-template-vars` | 🔄 En progreso | Fix interpolación `{{nombre}}`/`{{ficha}}`/`{{instructor}}` en mensajes |
 | `fix/actas-autopoblar-v2` | ❓ Sin revisar | Fix autopoblar actas v2 |
@@ -118,14 +118,18 @@ ZAJUNA_PASS=
 
 ---
 
-### 🗄️ Estado de DB al 25 mayo 2026
+### 🗄️ Estado de DB al 31 mayo 2026
 
-| Tabla | Cantidad | Notas |
+| Tabla | Cantidad (31 may) | Notas |
 |---|---|---|
 | `Competencia` | 19 | Sin cambio |
 | `RAP` | 75 | Sin cambio |
-| `Evidencia` (global) | **920** | ✅ Sin duplicados, **100% hrefs canónicos `view.php`** (de 998 con 81 duplicados → 920 limpios) |
-| `RapEvidenciaRel` | 0 | ⚠️ Sigue pendiente correr `vincularEvidenciasRAPs.js` |
+| `Evidencia` (global) | **2164** | Subió de 920 (25 may) — más scans/fichas. Hrefs canónicos `view.php`. |
+| `Entrega` | 1383 | — |
+| `Aprendiz` | 535 | ⚠️ Incluye duplicados sucios (`ACADRIAN…` vs `ADRIAN…`); el dedup heurístico de `actas.js` los limpia en memoria. |
+| `RapEvidenciaRel` | **0** | 🔴 **BLOQUEANTE de actas** (ver Paso 0). Sin esto, `auto-poblar`/`preview-native` devuelven 422 a todo. |
+| `MatchingPropuesta(aceptado)` | **0** | 🔴 La otra fuente del mapeo RAP→evidencia, también vacía. |
+| `ActaSeguimiento` | 0 | No hay actas creadas. |
 
 ---
 
@@ -157,6 +161,8 @@ ZAJUNA_PASS=
 
 **Estado:** Trabajo real avanzado. Falta revisar si está completo antes de commitear.
 
+> **Nota (31 may):** las filas de **scan** (`evidenciasWorker.js`, `scraper/evidencias.js`, `prisma/schema.prisma` + migración, probes) **ya están commiteadas** en `58d1e2a` (rama `feature/gradebook-scan-v2`). El resto de la tabla (Fase 2 UI, `auth.js`, `csvParser.js`) sigue **pendiente de commit**.
+
 ---
 
 ### ⚡ ANÁLISIS DE VELOCIDAD DEL SCAN (31 mayo 2026)
@@ -173,12 +179,12 @@ ZAJUNA_PASS=
 
 **Plan en dos capas:**
 
-- **🟢 CAPA 1 — APLICADA (31 may, sin commitear) en `evidenciasWorker.js`:**
+- **🟢 CAPA 1 — APLICADA y COMMITEADA (`58d1e2a`, 31 may) en `evidenciasWorker.js`:**
   1. Eliminada la navegación muerta a `/course/view.php` (~2 s, su resultado no se usaba).
   2. Escrituras a DB **en lote**: se pre-cargan todos los aprendices de la ficha en 1 query (Map en memoria); los faltantes se crean con `createMany`; las entregas previas de cada evidencia se traen con 1 `findMany` (no N `findUnique`); y los create/update/historial se ejecutan con `createMany` + `$transaction`. Pasa de ~4500 queries seriales a unas decenas de round-trips. **Mismas reglas de negocio** (override CSV, umbral, `fechaScan`, `calificandoAt`, cierre manual) — sólo cambia el patrón de acceso a DB.
   - ⚠️ NO se derivaron los matriculados del CSV (idea inicial descartada): el CSV no trae `moodleUserId`, que es imprescindible para mensajes/calificación y para el filtro de suspendidos. Esa fuente la da el grade report o, mejor, el AJAX de la Capa 2.
 
-- **🟢 CAPA 2 — APLICADA y VALIDADA EN VIVO (31 may, sin commitear):** el estado de los `assign` se lee por `mod_assign_list_participants` (AJAX JSON) en vez de raspar el DOM de `view.php?action=grading`.
+- **🟢 CAPA 2 — APLICADA, VALIDADA EN VIVO y COMMITEADA (`58d1e2a`, 31 may):** el estado de los `assign` se lee por `mod_assign_list_participants` (AJAX JSON) en vez de raspar el DOM de `view.php?action=grading`.
   - **Toolbox confirmado contra SENA** (probe en vivo `scripts/probe-ajax-participants.js`): `mod_assign_list_participants` ✅ y `core_grades_get_enrolled_users_for_selector` ✅ están habilitadas sobre la sesión (sesskey). `mod_assign_get_assignments`, `mod_assign_get_submissions`, `mod_assign_get_grades`, `core_course_get_contents`, `gradereport_user_get_grade_items` → ❌ `servicenotavailable` (capadas). El token WS (`/login/token.php`) → ❌ `invalidlogin` (login SSO de SENA, no nativo Moodle).
   - **Resolver `cmid→assignid`:** como las WS de mapeo están capadas, se resuelve igual que la Extensión Z — leyendo `data-assignmentid`/`data-contextid` del grader HTML (`/mod/assign/view.php?id={cmid}&action=grader`) **una sola vez** y cacheando en `Evidencia.assignId`/`contextId` (migración `add_evidencia_assign_instance_id`).
   - **Flujo:** worker saca el sesskey → resuelve assignIds faltantes (concurrencia 5) → **1 POST batch** `mod_assign_list_participants` para todos los assigns activos → mapea `submitted`/`requiregrading`/`submissionstatus` a `calificado`/`pendiente`/`sin_entregar` (la nota la sigue poniendo el CSV). **Fallback a DOM** (`revisarEntregas`) intacto si falta sesskey, no se resolvió assignId, o el batch falla.
@@ -202,18 +208,24 @@ ZAJUNA_PASS=
 
 ### 🔴 PRÓXIMOS PASOS (en orden)
 
+**🔴 Paso 0 — BLOQUEADOR CRÍTICO: actas no se pueden poblar (diagnosticado 31 may)**
+- Confirmado contra DB: `RapEvidenciaRel = 0` **y** `MatchingPropuesta(aceptado) = 0`.
+- En `api/src/routes/actas.js`, `auto-poblar` y `preview-native` arman el mapa RAP→evidencias **solo** desde esas dos tablas. Al estar vacías, `rapsSinEvidencias` junta TODOS los rapIds → **422 `RAP_SIN_EVIDENCIAS` siempre**. Y `const modoPerRap = true` está hardcodeado → las ramas `global-fallback` son **código muerto**.
+- **Efecto:** es imposible generar/previsualizar cualquier acta. `web/src/components/MapeoAlVueloModal.tsx` (nuevo, sin trackear) es el parche a medio hacer para mapear al vuelo.
+- **Fix (decidir camino):** (1) correr `vincularEvidenciasRAPs.js` para poblar `RapEvidenciaRel`; (2) terminar `MapeoAlVueloModal`; (3) reactivar un `global-fallback` razonable.
+- Ver memoria `project_actas_blocker.md`. **Prioridad #1 antes de tocar nada más de actas.**
+
 **Paso 1 — Revisar y commitear trabajo Fase 2 pendiente**
-- Revisar que los cambios en `ActasPage.tsx`, `Dashboard.tsx`, `EvidenciasConfig.tsx` estén completos.
+- El **scan (Capa 1+2) ya está commiteado** en `58d1e2a`. Falta el resto: `ActasPage.tsx`, `Dashboard.tsx`, `EvidenciasConfig.tsx`, `auth.js`, `csvParser.js`.
 - Probar flujo en browser antes de commitear.
 - `git add` selectivo (no incluir scripts debug de root).
 
-**Paso 2 — Vincular evidencias a RAPs**
+**Paso 2 — Vincular evidencias a RAPs (resuelve el Paso 0)**
 ```powershell
 node scripts/vincularEvidenciasRAPs.js --dry-run   # verificar primero
 node scripts/vincularEvidenciasRAPs.js              # ejecutar
 ```
-Resultado esperado: `RapEvidenciaRel` pasa de 0 a ~190 registros.
-Las actas pasan de `global-fallback` a modo **`per-rap`** real.
+Resultado esperado: `RapEvidenciaRel` pasa de 0 a ~190 registros → los endpoints dejan de cortar con 422 y el modo per-RAP empieza a funcionar de verdad.
 
 **Paso 3 — Revisar ramas pendientes**
 Hay 8 ramas sin revisar (ver tabla de ramas). Antes de mergear, auditar cuáles están completas y cuáles están a medias.
@@ -270,7 +282,7 @@ Ver sección "PENDIENTE: Extracción de Guías" arriba.
 
 - **Competencias con nombre `[Sin nombre — Guía N]`**: son competencias transversales que aparecen solo en códigos de RAP del PDF, no en la sección "Competencias". Funcionales para actas pero con nombre placeholder. Corregir manualmente si se necesita presentar al usuario.
 - **`240201530` (inducción)**: extrajo mal el nombre del PDF. Irrelevante para actas de formación técnica.
-- **`RapEvidenciaRel = 0`**: hasta que no se corra `vincularEvidenciasRAPs.js`, las actas usan `global-fallback` (todos los RAPs de la competencia). Funciona pero sin granularidad por guía.
+- **`RapEvidenciaRel = 0` (BLOQUEANTE, corregido el diagnóstico 31 may)**: el `global-fallback` que se mencionaba aquí **ya no existe** — `actas.js` tiene `modoPerRap = true` hardcodeado, así que con la tabla vacía los endpoints de actas devuelven **422 `RAP_SIN_EVIDENCIAS` a todo**. No es "funciona sin granularidad": es "no funciona". Correr `vincularEvidenciasRAPs.js` o terminar `MapeoAlVueloModal`. Ver Paso 0 de Próximos Pasos.
 
 ---
 
