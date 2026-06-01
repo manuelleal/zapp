@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { ChevronDown, ChevronRight, RefreshCw, Zap, Settings, CheckSquare, Square, Calendar, X, CheckCircle, AlertCircle, Loader2, SlidersHorizontal } from "lucide-react"
+import { ChevronDown, ChevronRight, RefreshCw, Zap, Settings, CheckSquare, Square, Calendar, X, CheckCircle, AlertCircle, Loader2, SlidersHorizontal, Search, Filter, Archive, ArchiveRestore } from "lucide-react"
 import Layout from "@/components/Layout"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -125,6 +125,44 @@ export default function EvidenciasConfig() {
   const [collapsed, setCollapsed]           = useState<Record<string, boolean>>({})
   const [fullScanStatus, setFullScanStatus] = useState("")
   const [configDialog, setConfigDialog]     = useState<{ id: string; nombre: string; tipo: string } | null>(null)
+  
+  // ── State UI / Filtros (Fase 2) ──────────────────────────────────────────
+  const [searchQuery, setSearchQuery]       = useState("")
+  const [filterMode, setFilterMode]         = useState<"all" | "active" | "inactive">("all")
+  const [collapsedGuias, setCollapsedGuias] = useState<Record<string, boolean>>({})
+  // Chip de ficha activa: "all" = todas, o el id de una ficha (estilo Dashboard).
+  const [selectedFichaId, setSelectedFichaId] = useState<string>("all")
+
+  // Guías archivadas (preferencia de vista, persistida en localStorage). Cada
+  // entrada es la clave `${fichaId}-${gaKey}`. Archivar oculta la guía del
+  // listado principal; se puede restaurar desde la sección "Guías archivadas".
+  const ARCHIVED_GUIAS_KEY = "zajuna_archived_guias"
+  const [archivedGuias, setArchivedGuias] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem(ARCHIVED_GUIAS_KEY)
+      return new Set(raw ? (JSON.parse(raw) as string[]) : [])
+    } catch { return new Set() }
+  })
+  // Mostrar/ocultar la sección de archivadas por ficha.
+  const [showArchivadas, setShowArchivadas] = useState<Record<string, boolean>>({})
+
+  function persistArchived(next: Set<string>) {
+    setArchivedGuias(next)
+    try { localStorage.setItem(ARCHIVED_GUIAS_KEY, JSON.stringify([...next])) } catch { /* ignore */ }
+  }
+  function archivarGuia(fichaId: string, gaKey: number) {
+    const next = new Set(archivedGuias); next.add(`${fichaId}-${gaKey}`); persistArchived(next)
+  }
+  function restaurarGuia(fichaId: string, gaKey: number) {
+    const next = new Set(archivedGuias); next.delete(`${fichaId}-${gaKey}`); persistArchived(next)
+  }
+
+  function toggleGuiaCollapse(fichaId: string, gaKey: number) {
+    const key = `${fichaId}-${gaKey}`
+    // Las guías arrancan PLEGADAS por defecto (undefined ⇒ colapsada). Por eso
+    // el primer clic sobre una guía sin estado debe EXPANDIRLA (poner false).
+    setCollapsedGuias(c => ({ ...c, [key]: c[key] === undefined ? false : !c[key] }))
+  }
 
   // ── State bulk duedate (M2) ───────────────────────────────────────────────
   const [selectedIds, setSelectedIds]   = useState<Set<string>>(new Set())
@@ -334,6 +372,113 @@ export default function EvidenciasConfig() {
           </div>
         </div>
 
+        {/* Barra de Filtro y Búsqueda */}
+        <div className="bg-white rounded-lg border border-gray-200 p-4 flex flex-col md:flex-row md:items-center gap-4">
+          <div className="relative flex-1">
+            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              type="text"
+              placeholder="Buscar por código de competencia (ej. 240202501) o nombre..."
+              className="w-full pl-9 pr-4 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-sena-green/50 focus:border-sena-green transition-shadow"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+            {searchQuery && (
+              <button onClick={() => setSearchQuery("")} className="absolute right-3 top-1/2 -translate-y-1/2">
+                <X className="w-4 h-4 text-gray-400 hover:text-gray-600" />
+              </button>
+            )}
+          </div>
+          
+          <div className="flex items-center gap-2 bg-gray-100/50 p-1 rounded-md border border-gray-200">
+            <button
+              onClick={() => setFilterMode("all")}
+              className={`px-3 py-1.5 text-sm font-medium rounded-sm transition-colors ${filterMode === "all" ? "bg-white text-gray-900 shadow-sm" : "text-gray-600 hover:text-gray-900"}`}
+            >
+              Todas
+            </button>
+            <button
+              onClick={() => setFilterMode("active")}
+              className={`px-3 py-1.5 text-sm font-medium rounded-sm transition-colors ${filterMode === "active" ? "bg-white text-gray-900 shadow-sm" : "text-gray-600 hover:text-gray-900"}`}
+            >
+              Mis Activas
+            </button>
+            <button
+              onClick={() => setFilterMode("inactive")}
+              className={`px-3 py-1.5 text-sm font-medium rounded-sm transition-colors ${filterMode === "inactive" ? "bg-white text-gray-900 shadow-sm" : "text-gray-600 hover:text-gray-900"}`}
+            >
+              Inactivas
+            </button>
+          </div>
+        </div>
+
+        {/* Chips de ficha — navegación rápida (estilo Dashboard) */}
+        {fichas.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => setSelectedFichaId("all")}
+              className={`px-3 py-1.5 text-sm font-medium rounded-md border transition-colors ${
+                selectedFichaId === "all"
+                  ? "bg-sena-green text-white border-sena-green"
+                  : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
+              }`}
+            >
+              Todas las fichas
+            </button>
+            {fichas.map(f => (
+              <button
+                key={f.id}
+                onClick={() => setSelectedFichaId(f.id)}
+                className={`px-3 py-1.5 text-sm font-medium rounded-md border transition-colors ${
+                  selectedFichaId === f.id
+                    ? "bg-sena-green text-white border-sena-green"
+                    : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
+                }`}
+              >
+                Ficha {f.codigo}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Barra de Acciones Masivas (M2) */}
+        {selectedCount > 0 && (
+          <div className="bg-sena-green/10 border border-sena-green/30 rounded-lg p-3 flex items-center justify-between sticky top-4 z-10 shadow-sm backdrop-blur-sm">
+            <div className="flex items-center gap-2">
+              <CheckSquare className="w-4 h-4 text-sena-green" />
+              <span className="text-sm font-medium text-sena-green-dark">
+                {selectedCount} evidencia{selectedCount !== 1 ? "s" : ""} seleccionada{selectedCount !== 1 ? "s" : ""}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs bg-white text-gray-700 hover:bg-gray-50 border-gray-300"
+                onClick={cancelarSeleccion}
+              >
+                Cancelar
+              </Button>
+              <Button
+                size="sm"
+                className="h-8 text-xs bg-red-600 hover:bg-red-700 text-white"
+                onClick={() => bulkMutation.mutate({ ids: Array.from(selectedIds), activa: false })}
+                disabled={bulkMutation.isPending}
+              >
+                Desactivar seleccionadas
+              </Button>
+              <Button
+                size="sm"
+                className="h-8 text-xs bg-sena-green hover:bg-sena-green/90 text-white"
+                onClick={() => bulkMutation.mutate({ ids: Array.from(selectedIds), activa: true })}
+                disabled={bulkMutation.isPending}
+              >
+                Activar seleccionadas
+              </Button>
+            </div>
+          </div>
+        )}
+
         {/* Fichas + evidencias */}
         {isLoading ? (
           <div className="bg-white rounded-lg border p-8 text-center text-gray-500 text-sm">Cargando evidencias...</div>
@@ -343,12 +488,24 @@ export default function EvidenciasConfig() {
           </div>
         ) : (
           <div className="space-y-2">
-            {fichas.map(f => {
-              const isCollapsed    = collapsed[f.id] ?? true
-              const evOrdenadas    = [...f.evidencias].sort((a, b) => gaNum(a.nombre) - gaNum(b.nombre) || a.nombre.localeCompare(b.nombre))
-              const evActivas      = evOrdenadas.filter(ev => ev.activaParaScan).length
+            {fichas
+              .filter(f => selectedFichaId === "all" || f.id === selectedFichaId)
+              .map(f => {
+              const isCollapsed    = collapsed[f.id] ?? false
+              
+              // Filtrar evidencias según query y modo
+              const query = searchQuery.toLowerCase().trim()
+              let evOrdenadas = [...f.evidencias].sort((a, b) => gaNum(a.nombre) - gaNum(b.nombre) || a.nombre.localeCompare(b.nombre))
+              
+              if (filterMode === "active")   evOrdenadas = evOrdenadas.filter(e => e.activaParaScan)
+              if (filterMode === "inactive") evOrdenadas = evOrdenadas.filter(e => !e.activaParaScan)
+              if (query) {
+                evOrdenadas = evOrdenadas.filter(e => e.nombre.toLowerCase().includes(query) || e.tipo.toLowerCase().includes(query))
+              }
+              
+              const evActivas      = f.evidencias.filter(ev => ev.activaParaScan).length
               const todosIds       = evOrdenadas.map(ev => ev.id)
-              const todasActivas   = evActivas === evOrdenadas.length && evOrdenadas.length > 0
+              const todasActivas   = evOrdenadas.every(ev => ev.activaParaScan) && evOrdenadas.length > 0
               const fichaSelIds    = getEvidenciaIdsDeficha(f)
               const fichaSelCount  = fichaSelIds.filter(id => selectedIds.has(id)).length
               const fichaAllSel    = fichaSelCount === fichaSelIds.length && fichaSelIds.length > 0
@@ -382,16 +539,17 @@ export default function EvidenciasConfig() {
                           <span className="text-xs text-sena-green font-medium">{fichaSelCount}</span>
                         )}
                       </div>
-                      <span className="text-xs text-gray-400">{evActivas}/{evOrdenadas.length} activas</span>
+                      <span className="text-xs text-gray-400">{evActivas}/{f.evidencias.length} activas en ficha</span>
                       {evOrdenadas.length > 0 && (
                         <Button
                           variant="outline"
                           size="sm"
-                          className="h-6 text-xs px-2"
-                          onClick={() => bulkMutation.mutate({ ids: todosIds, activa: !todasActivas })}
+                          className={`h-6 text-xs px-2 ${todasActivas ? "text-gray-500 hover:text-red-600" : "text-sena-green border-sena-green/30 bg-sena-green/5 hover:bg-sena-green/10 hover:border-sena-green/50"}`}
+                          onClick={(e) => { e.stopPropagation(); bulkMutation.mutate({ ids: todosIds, activa: !todasActivas }) }}
                           disabled={bulkMutation.isPending}
                         >
-                          {todasActivas ? "Desactivar todas" : "Activar todas"}
+                          <Zap className="w-3 h-3 mr-1" />
+                          {todasActivas ? "Desactivar filtradas" : "Activar filtradas"}
                         </Button>
                       )}
                     </div>
@@ -401,16 +559,32 @@ export default function EvidenciasConfig() {
                   {!isCollapsed && (
                     <div className="border-t border-gray-100">
                       {evOrdenadas.length === 0 ? (
-                        <p className="px-5 py-4 text-sm text-gray-400">Sin evidencias escaneadas aún. Haz un escaneo completo.</p>
+                        <p className="px-5 py-4 text-sm text-gray-400">
+                          {searchQuery ? "No se encontraron evidencias con ese código/nombre." : "No hay evidencias en esta vista."}
+                        </p>
                       ) : (
-                        agruparPorGA(evOrdenadas).map(grupo => {
+                        agruparPorGA(evOrdenadas)
+                          .filter(grupo => !archivedGuias.has(`${f.id}-${grupo.gaKey}`))
+                          .map(grupo => {
                           const grupoIds     = grupo.items.map(e => e.id)
                           const grupoAllSel  = grupoIds.every(id => selectedIds.has(id))
+                          const guiaKey      = `${f.id}-${grupo.gaKey}`
+                          // Default PLEGADA: evita el "mamotreto" de todo abierto.
+                          const isGuiaColapsada = collapsedGuias[guiaKey] ?? true
+
                           return (
                             <div key={grupo.gaKey}>
                               {/* Sub-encabezado por guía */}
-                              <div className="px-5 py-1.5 bg-gray-50 border-b border-gray-100 flex items-center justify-between">
-                                <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">{grupo.label}</span>
+                              <div 
+                                className="px-5 py-2 bg-gray-50 border-b border-gray-100 flex items-center justify-between cursor-pointer hover:bg-gray-100/70 select-none"
+                                onClick={() => toggleGuiaCollapse(f.id, grupo.gaKey)}
+                              >
+                                <div className="flex items-center gap-2">
+                                  {isGuiaColapsada
+                                    ? <ChevronRight className="w-3.5 h-3.5 text-gray-400" />
+                                    : <ChevronDown className="w-3.5 h-3.5 text-gray-400" />}
+                                  <span className="text-xs font-semibold text-gray-600 uppercase tracking-wide">{grupo.label}</span>
+                                </div>
                                 <div className="flex items-center gap-3" onClick={e => e.stopPropagation()}>
                                   <span className="text-xs text-gray-400">
                                     {grupo.items.filter(e => e.activaParaScan).length}/{grupo.items.length} activas
@@ -433,10 +607,18 @@ export default function EvidenciasConfig() {
                                   >
                                     {grupo.items.every(e => e.activaParaScan) ? "Desactivar" : "Activar"}
                                   </button>
+                                  {/* Archivar guía (ocultarla del listado) */}
+                                  <button
+                                    className="text-gray-400 hover:text-amber-600"
+                                    title="Archivar esta guía (ocultarla del listado)"
+                                    onClick={() => archivarGuia(f.id, grupo.gaKey)}
+                                  >
+                                    <Archive className="w-3.5 h-3.5" />
+                                  </button>
                                 </div>
                               </div>
                               {/* Evidencias de este grupo */}
-                              {grupo.items.map(ev => (
+                              {!isGuiaColapsada && grupo.items.map(ev => (
                                 <div key={ev.id} className={`px-5 py-2.5 flex items-center gap-3 border-b border-gray-50 last:border-0 hover:bg-gray-50 ${selectedIds.has(ev.id) ? "bg-blue-50/40" : ""}`}>
                                   {/* Checkbox de selección (M2) */}
                                   <Checkbox
@@ -478,6 +660,37 @@ export default function EvidenciasConfig() {
                           )
                         })
                       )}
+
+                      {/* Sección de guías archivadas (restaurables) */}
+                      {(() => {
+                        const archivados = agruparPorGA(evOrdenadas).filter(g => archivedGuias.has(`${f.id}-${g.gaKey}`))
+                        if (archivados.length === 0) return null
+                        const abierto = showArchivadas[f.id] ?? false
+                        return (
+                          <div className="bg-gray-50/60 border-t border-gray-100">
+                            <button
+                              className="w-full px-5 py-2 flex items-center gap-2 text-xs text-gray-500 hover:text-gray-700 select-none"
+                              onClick={() => setShowArchivadas(s => ({ ...s, [f.id]: !abierto }))}
+                            >
+                              <Archive className="w-3.5 h-3.5" />
+                              {archivados.length} guía{archivados.length !== 1 ? "s" : ""} archivada{archivados.length !== 1 ? "s" : ""}
+                              {abierto ? <ChevronDown className="w-3.5 h-3.5 ml-auto" /> : <ChevronRight className="w-3.5 h-3.5 ml-auto" />}
+                            </button>
+                            {abierto && archivados.map(grupo => (
+                              <div key={grupo.gaKey} className="px-5 py-2 flex items-center justify-between border-t border-gray-100">
+                                <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">{grupo.label}</span>
+                                <button
+                                  className="text-xs text-sena-green hover:underline flex items-center gap-1"
+                                  onClick={() => restaurarGuia(f.id, grupo.gaKey)}
+                                >
+                                  <ArchiveRestore className="w-3.5 h-3.5" />
+                                  Restaurar
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )
+                      })()}
                     </div>
                   )}
                 </div>
@@ -525,7 +738,7 @@ export default function EvidenciasConfig() {
                   onClick={() => { setBatchConfigError(""); setBatchConfigOpen(true) }}
                 >
                   <SlidersHorizontal className="w-3.5 h-3.5" />
-                  Config avanzada
+                  Configurar seleccionadas ({selectedCount})
                 </Button>
               </>
             )}
