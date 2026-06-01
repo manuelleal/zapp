@@ -11,6 +11,7 @@ import { useAuthStore } from "@/store/auth"
 import { useNavigate } from "react-router-dom"
 import ConfigEvidenciaDialog from "@/components/ConfigEvidenciaDialog"
 import BatchConfigModal, { BatchCambios } from "@/components/BatchConfigModal"
+import ConfigTabla from "@/components/ConfigTabla"
 
 interface Evidencia {
   id: string
@@ -132,6 +133,8 @@ export default function EvidenciasConfig() {
   const [collapsedGuias, setCollapsedGuias] = useState<Record<string, boolean>>({})
   // Chip de ficha activa: "all" = todas, o el id de una ficha (estilo Dashboard).
   const [selectedFichaId, setSelectedFichaId] = useState<string>("all")
+  // Vista: "lista" (activar/archivar) o "tabla" (editar fechas/intentos inline).
+  const [viewMode, setViewMode] = useState<"lista" | "tabla">("lista")
 
   // Guías archivadas (preferencia de vista, persistida en localStorage). Cada
   // entrada es la clave `${fichaId}-${gaKey}`. Archivar oculta la guía del
@@ -438,6 +441,22 @@ export default function EvidenciasConfig() {
                 Ficha {f.codigo}
               </button>
             ))}
+
+            {/* Toggle de vista Lista / Tabla */}
+            <div className="ml-auto flex items-center gap-1 bg-gray-100/60 p-1 rounded-md border border-gray-200">
+              <button
+                onClick={() => setViewMode("lista")}
+                className={`px-3 py-1 text-sm font-medium rounded-sm transition-colors ${viewMode === "lista" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-800"}`}
+              >
+                Lista
+              </button>
+              <button
+                onClick={() => setViewMode("tabla")}
+                className={`px-3 py-1 text-sm font-medium rounded-sm transition-colors ${viewMode === "tabla" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-800"}`}
+              >
+                Tabla de fechas
+              </button>
+            </div>
           </div>
         )}
 
@@ -479,8 +498,15 @@ export default function EvidenciasConfig() {
           </div>
         )}
 
-        {/* Fichas + evidencias */}
-        {isLoading ? (
+        {/* Vista TABLA: editor de fechas/intentos inline por ficha (B2) */}
+        {viewMode === "tabla" && (
+          selectedFichaId === "all"
+            ? <div className="bg-white rounded-lg border border-gray-200 p-8 text-center text-sm text-gray-500">Selecciona una ficha arriba para editar sus fechas en tabla.</div>
+            : <ConfigTabla fichaId={selectedFichaId} />
+        )}
+
+        {/* Fichas + evidencias (vista LISTA) */}
+        {viewMode === "lista" && (isLoading ? (
           <div className="bg-white rounded-lg border p-8 text-center text-gray-500 text-sm">Cargando evidencias...</div>
         ) : fichas.length === 0 ? (
           <div className="bg-white rounded-lg border p-12 text-center">
@@ -697,7 +723,7 @@ export default function EvidenciasConfig() {
               )
             })}
           </div>
-        )}
+        ))}
       </div>
 
       {/* ── Barra flotante de batch duedate (M2) ─────────────────────────────── */}
