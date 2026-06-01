@@ -1,5 +1,6 @@
 const prisma = require("../db/client");
 const { filtrarAprendicesValidos } = require("../lib/aprendices");
+const { calcularEstado, calcularJuicio } = require("../lib/calificacion");
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -340,9 +341,31 @@ async function actasRoutes(fastify) {
     const nFiltrados = aprendicesRaw.length - aprendices.length;
     const aprendizIds = aprendices.map(a => a.id);
 
-    // per-RAP solo cuando hay vinculaciones explícitas en DB (RapEvidenciaRel o
-    // MatchingPropuesta aceptado). Sin vinculación, se usa global-fallback sin adivinar.
-    const modoPerRap = todasEvidenciaIds.length > 0;
+    // ── Validación Mapeo al Vuelo ───────────────────────────────────────────────
+    // Detectar RAPs que no tienen evidencias vinculadas para notificar a la UI
+    // y evitar el fallback silencioso que dejaba a todos en PENDIENTE.
+    const rapsSinEvidencias = [];
+    for (const rapId of rapIds) {
+      const evidenciasDelRap = mapaRapEvidencias.get(rapId);
+      if (!evidenciasDelRap || evidenciasDelRap.size === 0) {
+        rapsSinEvidencias.push({
+          id: rapId,
+          codigo: rapCodigoPorId.get(rapId) || rapId
+        });
+      }
+    }
+
+    if (rapsSinEvidencias.length > 0) {
+      return reply.code(422).send({
+        error: "RAP_SIN_EVIDENCIAS",
+        message: "Hay RAPs seleccionados que no tienen evidencias vinculadas.",
+        rapsSinEvidencias
+      });
+    }
+
+    // Al pasar la validación, garantizamos que todas las evidencias están mapeadas,
+    // por ende, el modo siempre será per-RAP.
+    const modoPerRap = true;
 
     // ── Cargar entregas relevantes ──────────────────────────────────────────────
     // En modo per-RAP: solo entregas de evidencias vinculadas a los RAPs.
@@ -373,42 +396,8 @@ async function actasRoutes(fastify) {
       entregasPorAprendiz.get(e.aprendizId).push(e);
     }
 
-    // ── Helpers de clasificación ─────────────────────────────────────────────
-    // Umbral SENA: 70 sobre 100. Notas por debajo (incluido 0) = PERDIDA.
-    // Sin nota numérica: solo "A" o estado que contenga "aprobad" cuenta como aprobada.
-    function esAprobada(e) {
-      if (e.notaActual !== null && e.notaActual !== undefined) {
-        return e.notaActual >= 70;
-      }
-      const est = (e.estado ?? "").toLowerCase();
-      return /aprobad/.test(est) || est === "a";
-    }
-    function esPendiente(e) {
-      return (e.estado ?? "").toLowerCase() === "pendiente";
-    }
-    // Intento de participación: cualquier estado que no sea sin_entregar/vacío.
-    function tieneParticipacion(e) {
-      const est = (e.estado ?? "").toLowerCase();
-      if (!est || est === "sin_entregar" || est === "no_entregado") return false;
-      return true;
-    }
-
-    // REGLAS ESTRICTAS por RAP:
-    //   APROBÓ       : TODAS las entregas asociadas evaluadas y aprobadas.
-    //   NO PARTICIPÓ : NINGUNA entrega tiene intento de participación.
-    //   PENDIENTE    : Cualquier caso intermedio (parcial, sin calificar, reprobado).
-    function calcularEstado(entregas) {
-      if (!entregas || entregas.length === 0) {
-        return { estado: "NO PARTICIPÓ", hasUngraded: false };
-      }
-      const todasAprobadas     = entregas.every(esAprobada);
-      const ningunaParticipa   = entregas.every(e => !tieneParticipacion(e));
-      const algunaSinCalificar = entregas.some(esPendiente);
-
-      if (todasAprobadas)   return { estado: "APROBÓ",       hasUngraded: false };
-      if (ningunaParticipa) return { estado: "NO PARTICIPÓ", hasUngraded: false };
-      return                       { estado: "PENDIENTE",    hasUngraded: algunaSinCalificar };
-    }
+    // Helpers de clasificación (esAprobada/calcularEstado/calcularJuicio) viven
+    // en ../lib/calificacion para deduplicar y poder testearlos en aislamiento.
 
     // ── Calcular rapStatus + juicio + hasUngraded por aprendiz ─────────────────
     let nAprobaron = 0, nPendientes = 0, nNoParticiparon = 0, nWarnings = 0;
@@ -446,19 +435,11 @@ async function actasRoutes(fastify) {
         if (r.hasUngraded) hasUngraded = true;
       }
 
-      // JUICIO GENERAL — REGLAS ESTRICTAS:
-      //   APROBÓ       : TODOS los RAPs en "APROBÓ".
-      //   NO PARTICIPÓ : TODOS los RAPs en "NO PARTICIPÓ".
-      //   PENDIENTE    : Cualquier otra mezcla.
-      const valores = Object.values(rapStatus);
-      let juicio;
-      if (valores.length > 0 && valores.every(v => v === "APROBÓ")) {
-        juicio = "APROBÓ";       nAprobaron++;
-      } else if (valores.length > 0 && valores.every(v => v === "NO PARTICIPÓ")) {
-        juicio = "NO PARTICIPÓ"; nNoParticiparon++;
-      } else {
-        juicio = "PENDIENTE";    nPendientes++;
-      }
+      // JUICIO GENERAL — REGLAS ESTRICTAS (ver lib/calificacion).
+      const juicio = calcularJuicio(Object.values(rapStatus));
+      if      (juicio === "APROBÓ")       nAprobaron++;
+      else if (juicio === "NO PARTICIPÓ") nNoParticiparon++;
+      else                                nPendientes++;
 
       if (hasUngraded) nWarnings++;
 
@@ -1212,8 +1193,31 @@ async function actasRoutes(fastify) {
     const aprendices = aprendicesFinal.map(a => ({ id: a.id, nombre: a.nombre, moodleId: a.moodleId }));
     const aprendizIds = aprendices.map(a => a.id);
 
-    // 4. per-RAP solo con vinculaciones explícitas en DB; si no, global-fallback.
-    const modoPerRap = todasEvidenciaIds.length > 0;
+    // ── Validación Mapeo al Vuelo ───────────────────────────────────────────────
+    // Detectar RAPs que no tienen evidencias vinculadas para notificar a la UI
+    // y evitar el fallback silencioso que dejaba a todos en PENDIENTE.
+    const rapsSinEvidencias = [];
+    for (const rapId of rapIds) {
+      const evidenciasDelRap = mapaRapEvidencias.get(rapId);
+      if (!evidenciasDelRap || evidenciasDelRap.size === 0) {
+        rapsSinEvidencias.push({
+          id: rapId,
+          codigo: rapCodigoPorId.get(rapId) || rapId
+        });
+      }
+    }
+
+    if (rapsSinEvidencias.length > 0) {
+      return reply.code(422).send({
+        error: "RAP_SIN_EVIDENCIAS",
+        message: "Hay RAPs seleccionados que no tienen evidencias vinculadas.",
+        rapsSinEvidencias
+      });
+    }
+
+    // Al pasar la validación, garantizamos que todas las evidencias están mapeadas,
+    // por ende, el modo siempre será per-RAP.
+    const modoPerRap = true;
 
     // 5. Entregas
     let todasEntregas;
@@ -1234,33 +1238,7 @@ async function actasRoutes(fastify) {
       entregasPorAprendiz.get(e.aprendizId).push(e);
     }
 
-    // Helpers — umbral SENA: 70 (ver auto-poblar para detalles).
-    function esAprobada(e) {
-      if (e.notaActual !== null && e.notaActual !== undefined) {
-        return e.notaActual >= 70;
-      }
-      const est = (e.estado ?? "").toLowerCase();
-      return /aprobad/.test(est) || est === "a";
-    }
-    function esPendiente(e) { return (e.estado ?? "").toLowerCase() === "pendiente"; }
-    function tieneParticipacion(e) {
-      const est = (e.estado ?? "").toLowerCase();
-      if (!est || est === "sin_entregar" || est === "no_entregado") return false;
-      return true;
-    }
-
-    // REGLAS ESTRICTAS por RAP: ver auto-poblar.
-    function calcularEstado(entregas) {
-      if (!entregas || entregas.length === 0) {
-        return { estado: "NO PARTICIPÓ", hasUngraded: false };
-      }
-      const todasAprobadas     = entregas.every(esAprobada);
-      const ningunaParticipa   = entregas.every(e => !tieneParticipacion(e));
-      const algunaSinCalificar = entregas.some(esPendiente);
-      if (todasAprobadas)   return { estado: "APROBÓ",       hasUngraded: false };
-      if (ningunaParticipa) return { estado: "NO PARTICIPÓ", hasUngraded: false };
-      return                       { estado: "PENDIENTE",    hasUngraded: algunaSinCalificar };
-    }
+    // Helpers de clasificación viven en ../lib/calificacion (ver auto-poblar).
 
     // 6. Preview Result
     const participantes = aprendices.map(aprendiz => {
@@ -1290,16 +1268,8 @@ async function actasRoutes(fastify) {
         if (r.hasUngraded) hasUngraded = true;
       }
 
-      // JUICIO GENERAL — REGLAS ESTRICTAS (ver auto-poblar).
-      const valores = Object.values(rapStatus);
-      let juicio;
-      if (valores.length > 0 && valores.every(v => v === "APROBÓ")) {
-        juicio = "APROBÓ";
-      } else if (valores.length > 0 && valores.every(v => v === "NO PARTICIPÓ")) {
-        juicio = "NO PARTICIPÓ";
-      } else {
-        juicio = "PENDIENTE";
-      }
+      // JUICIO GENERAL — REGLAS ESTRICTAS (ver lib/calificacion).
+      const juicio = calcularJuicio(Object.values(rapStatus));
 
       return {
         aprendizId: aprendiz.id,

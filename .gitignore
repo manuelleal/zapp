@@ -12,3 +12,32 @@ acta_*.pdf
 output/
 outputagent*.js
 web/dist/
+web/test-results/
+web/playwright-report/
+
+# ─── Scripts de debug/diagnóstico en la raíz ────────────────────────────────
+# Anclados con "/" para NO afectar a api/src (rutas como scan.js o *.test.js).
+/test-*.js
+/debug-*.js
+/debug-*.html
+/check-*.js
+/dump-*.js
+/diag-*.js
+/scan.js
+/scan-*.js
+/rescan-*.js
+/list-*.js
+/get-*.js
+/smoke-test*.js
+/inject.js
+/enqueue.js
+/find.js
+/walkthrough.md
+/PROJECT_STATUS.md
+
+# Artefactos sueltos / datos locales
+*.xlsx
+/Guia_*.pdf
+# Chunks de build de Vite volcados por error en la raíz (pertenecen a web/dist/assets/)
+/vendor.*.js
+/root.*.js
