@@ -38,7 +38,9 @@ const FIELD_MAPS = {
     abrir:    "timeopen",
     entrega:  "timeclose",
     limite:   null,
-    intentos: null,
+    // Quiz usa el campo `attempts` (la Extensión Z lee "attempts" para
+    // "Prueba de Conocimiento"). En quiz, 0 = intentos ilimitados.
+    intentos: { name: "attempts", unlimitedValue: "0" },
   },
 };
 
@@ -155,10 +157,19 @@ async function navegarFormulario(page, actId) {
 
 /**
  * Serializa TODOS los campos del formulario modedit en un objeto plano { name: value }.
- * Replica el comportamiento de un submit nativo del navegador:
- *  - Checkboxes no marcados → valor del hidden hermano (patrón Moodle) o ausencia
- *  - Selects múltiples → última opción seleccionada (simplificado; Moodle no los usa aquí)
- *  - Botones submit → excluidos (se añaden luego al POST)
+ *
+ * Usa `new FormData(form)` — la MISMA técnica que la Extensión Z (`ec()` en su
+ * bundle). FormData replica EXACTAMENTE lo que enviaría un submit nativo del
+ * navegador, lo que importa por dos razones que la iteración manual de
+ * `form.elements` hacía mal:
+ *   1. EXCLUYE campos `disabled` — en modedit, cuando una fecha está apagada
+ *      sus selects year/month/day quedan disabled. Incluirlos (con valores
+ *      vacíos/stale) hace que Moodle rechace el guardado en silencio (200 OK,
+ *      re-muestra el form, NO guarda).
+ *   2. EXCLUYE botones automáticamente (no hay submitter) — el submit lo
+ *      añadimos nosotros en el POST.
+ * Checkboxes Moodle: el hidden hermano (value="0") siempre va; el checkbox
+ * marcado sobreescribe con "1". FormData.forEach respeta ese orden.
  */
 async function serializarFormulario(page) {
   return await page.evaluate(() => {
@@ -171,19 +182,9 @@ async function serializarFormulario(page) {
     if (!form) return null;
 
     const data = {};
-    for (const el of form.elements) {
-      if (!el.name) continue;
-      // Excluir botones — se añaden manualmente en el POST
-      if (el.type === "submit" || el.type === "button" || el.type === "image") continue;
-      if (el.type === "checkbox") {
-        // Solo añadir si está marcado; el hidden hermano (value="0") ya habrá
-        // seteado la clave con "0" al pasar por el bloque else de abajo
-        if (el.checked) data[el.name] = el.value || "1";
-      } else if (el.type === "radio") {
-        if (el.checked) data[el.name] = el.value;
-      } else {
-        data[el.name] = el.value;
-      }
+    for (const [name, value] of new FormData(form).entries()) {
+      // Ignorar campos de archivo (File) — solo nos interesan strings.
+      if (typeof value === "string") data[name] = value;
     }
 
     return { data, action: form.action };
@@ -353,8 +354,9 @@ async function guardarConfigEvidencia(page, actId, config) {
   const postResult = await page.evaluate(
     async ({ action, fields }) => {
       const body = new URLSearchParams(fields);
-      // Indicar a Moodle qué botón se "presionó"
-      body.set("submitbutton2", "Guardar cambios y mostrar");
+      // Indicar a Moodle qué botón se "presionó". La Extensión Z usa el campo
+      // `submitbutton` (Moodle solo verifica la PRESENCIA de la clave, no su texto).
+      body.set("submitbutton", "Guardar cambios y mostrar");
 
       const res = await fetch(action, {
         method:      "POST",
