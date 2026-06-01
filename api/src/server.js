@@ -54,6 +54,25 @@ fastify.decorate("authenticate", async (req, reply) => {
   }
 });
 
+// ─── HEALTH ──────────────────────────────────────────────────────────────────
+// Ping rápido a Postgres y Redis. 200 si ambos responden, 503 si alguno falla.
+// Útil para Docker healthcheck / k8s readiness / monitoreo externo.
+const prisma = require("./db/client");
+const { connection: redis } = require("./lib/queue");
+
+fastify.get("/api/health", async (req, reply) => {
+  const checks = { db: false, redis: false };
+  try { await prisma.$queryRaw`SELECT 1`; checks.db = true; } catch { /* db down */ }
+  try { checks.redis = (await redis.ping()) === "PONG"; } catch { /* redis down */ }
+
+  const ok = checks.db && checks.redis;
+  return reply.code(ok ? 200 : 503).send({
+    status: ok ? "ok" : "degraded",
+    ...checks,
+    uptime: Math.round(process.uptime()),
+  });
+});
+
 // ─── RUTAS ───────────────────────────────────────────────────────────────────
 
 fastify.register(require("./routes/auth"));
@@ -78,6 +97,7 @@ require("./workers/fichasWorker");
 require("./workers/evidenciasWorker");
 require("./workers/configWorker");
 require("./workers/leerConfigEvidenciaWorker");
+require("./workers/leerConfigLoteWorker");
 require("./workers/cambiarFechaWorker");
 require("./workers/cambiarConfigWorker");
 require("./workers/foroRatingWorker");

@@ -15,6 +15,9 @@ const fichasQueueEvents = new QueueEvents("fichas", { connection });
 const evidenciasQueue   = new Queue("evidencias", { connection, defaultJobOptions: retryOpts });
 const configQueue       = new Queue("config",     { connection, defaultJobOptions: { ...retryOpts, attempts: 2 } });
 const leerConfigQueue   = new Queue("leerConfig",   { connection, defaultJobOptions: { ...retryOpts, attempts: 2 } });
+// Lote: lee la config de TODAS las evidencias de una ficha en UNA sesión.
+// attempts:1 — es idempotente por evidencia pero relanzar todo el lote es caro.
+const leerConfigLoteQueue = new Queue("leerConfigLote", { connection, defaultJobOptions: { attempts: 1, removeOnComplete: 20, removeOnFail: 10 } });
 const cambiarFechaQueue  = new Queue("cambiarFecha",  { connection, defaultJobOptions: { removeOnComplete: 50, removeOnFail: 20, attempts: 1 } });
 const cambiarConfigQueue = new Queue("cambiarConfig", { connection, defaultJobOptions: { removeOnComplete: 50, removeOnFail: 20, attempts: 1 } });
 const foroRatingQueue    = new Queue("foroRating",    { connection, defaultJobOptions: retryOpts });
@@ -32,4 +35,4 @@ autoScanQueue.add("auto-scan-all", {}, {
 }).then(() => console.log("[autoScan] repeatable job registered (cada 3h)"))
   .catch(e => console.error("[autoScan] no se pudo registrar repeatable job:", e.message));
 
-module.exports = { fichasQueue, fichasQueueEvents, evidenciasQueue, configQueue, leerConfigQueue, cambiarFechaQueue, cambiarConfigQueue, foroRatingQueue, foroDescubrirQueue, autoScanQueue, matchingIaQueue, mensajesQueue, syncParticipantesQueue, emailMasivoQueue, descubrirCompetenciasQueue, connection };
+module.exports = { fichasQueue, fichasQueueEvents, evidenciasQueue, configQueue, leerConfigQueue, leerConfigLoteQueue, cambiarFechaQueue, cambiarConfigQueue, foroRatingQueue, foroDescubrirQueue, autoScanQueue, matchingIaQueue, mensajesQueue, syncParticipantesQueue, emailMasivoQueue, descubrirCompetenciasQueue, connection };

@@ -1,5 +1,5 @@
 const prisma = require("../db/client");
-const { configQueue, leerConfigQueue } = require("../lib/queue");
+const { configQueue, leerConfigQueue, leerConfigLoteQueue } = require("../lib/queue");
 const { encrypt } = require("../lib/crypto");
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
@@ -104,6 +104,78 @@ async function configEvidenciasRoutes(fastify) {
     }
 
     return reply.code(202).send({ jobIds });
+  });
+
+  // POST /api/fichas/:fichaId/config/leer-todo  (B1 — lector en lote)
+  //   Encola UN job que lee la config de TODAS las evidencias de la ficha en una
+  //   sola sesión Playwright. Devuelve 202 { jobId, total } para poder pollear.
+  fastify.post("/api/fichas/:fichaId/config/leer-todo", { preHandler: fastify.authenticate }, async (req, reply) => {
+    const { fichaId } = req.params;
+
+    const ficha = await prisma.ficha.findUnique({
+      where:   { id: fichaId },
+      select:  { id: true, userId: true, courseId: true },
+    });
+    if (!ficha)                   return reply.code(404).send({ error: "Ficha no encontrada." });
+    if (ficha.userId !== req.user.id) return reply.code(403).send({ error: "Sin acceso a esta ficha." });
+
+    const evs = await prisma.evidencia.findMany({
+      where:  { fichaId },
+      select: { id: true, href: true },
+    });
+
+    // Solo las que tienen actId válido (cmid en el href).
+    const evidencias = evs
+      .map((ev) => ({ evidenciaId: ev.id, actId: actIdFromHref(ev.href) }))
+      .filter((e) => e.actId);
+
+    if (evidencias.length === 0) {
+      return reply.code(422).send({ error: "La ficha no tiene evidencias con actId válido para leer." });
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    const job  = await prisma.job.create({
+      data: { userId: req.user.id, tipo: "config-leer-lote", status: "queued" },
+    });
+
+    await leerConfigLoteQueue.add("leerConfigLote", {
+      jobId:         job.id,
+      userId:        req.user.id,
+      fichaId,
+      courseId:      ficha.courseId,
+      evidencias,
+      zajunaUserEnc: user.zajunaUserEnc,
+      zajunaPassEnc: user.zajunaPassEnc,
+    });
+
+    return reply.code(202).send({ jobId: job.id, total: evidencias.length });
+  });
+
+  // GET /api/fichas/:fichaId/config  (B2 — datos para la tabla editable)
+  //   Devuelve TODAS las evidencias de la ficha con su configCache (lo que dejó
+  //   el lector en lote). config = null si esa evidencia aún no se ha leído.
+  fastify.get("/api/fichas/:fichaId/config", { preHandler: fastify.authenticate }, async (req, reply) => {
+    const { fichaId } = req.params;
+    const ficha = await prisma.ficha.findUnique({
+      where: { id: fichaId }, select: { id: true, userId: true },
+    });
+    if (!ficha)                       return reply.code(404).send({ error: "Ficha no encontrada." });
+    if (ficha.userId !== req.user.id) return reply.code(403).send({ error: "Sin acceso a esta ficha." });
+
+    const evs = await prisma.evidencia.findMany({
+      where:  { fichaId },
+      select: { id: true, nombre: true, tipo: true, href: true, configCache: true, configCacheAt: true },
+      orderBy: { nombre: "asc" },
+    });
+
+    return evs.map((ev) => ({
+      evidenciaId:   ev.id,
+      nombre:        ev.nombre,
+      tipo:          ev.tipo,
+      actId:         actIdFromHref(ev.href),
+      config:        ev.configCache,        // { tipo, abrirFecha, ... intentos } o null
+      configCacheAt: ev.configCacheAt,
+    }));
   });
 
   // GET /api/evidencias/:id/config
