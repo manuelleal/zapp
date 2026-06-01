@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   ClipboardList, Plus, Loader2, AlertCircle, Users,
   MessageSquare, ChevronDown, ChevronRight, ChevronUp, Lock, Download, FileText,
-  Trash2, Archive, ArchiveRestore, AlertTriangle, Send,
+  Trash2, Archive, ArchiveRestore, AlertTriangle, Send, Settings,
 } from "lucide-react"
 import Layout from "@/components/Layout"
 import { Button } from "@/components/ui/button"
@@ -17,6 +17,7 @@ import { apiFetch, ApiError } from "@/api/client"
 import { toast } from "sonner"
 import { useAuthStore } from "@/store/auth"
 import { useNavigate } from "react-router-dom"
+import { MapeoAlVueloModal } from "@/components/MapeoAlVueloModal"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -104,7 +105,24 @@ function calcularJuicioGlobal(rapStatus: Record<string, Juicio>): Juicio {
   return "PENDIENTE"
 }
 
-// ─── Modal Nueva Acta ─────────────────────────────────────────────────────────
+// ─── Types para flujo nativo ──────────────────────────────────────────────────
+
+interface ParticipantePreview {
+  aprendizId: string
+  nombre:     string
+  moodleId:   string | null
+  juicio:     Juicio
+  rapStatus:  Record<string, Juicio>
+  hasUngraded: boolean
+}
+
+interface PreviewNativeResult {
+  participantes: ParticipantePreview[]
+  warningsCount: number
+  modoPerRap:    boolean
+}
+
+// ─── Modal Nueva Acta (flujo nativo) ──────────────────────────────────────────
 
 interface NuevaActaModalProps {
   open:    boolean
@@ -115,174 +133,355 @@ interface NuevaActaModalProps {
 
 function NuevaActaModal({ open, onClose, fichas, raps }: NuevaActaModalProps) {
   const queryClient = useQueryClient()
-  const [fichaId,    setFichaId]    = useState("")
-  const [numero,     setNumero]     = useState("")
-  const [fecha,      setFecha]      = useState("")
-  const [hora,       setHora]       = useState("")
-  const [lugar,      setLugar]      = useState("Videoconferencia / Plataforma Zajuna")
-  const [objetivo,   setObjetivo]   = useState("")
-  const [rapIds,     setRapIds]     = useState<string[]>([])
-  const [errorMsg,   setErrorMsg]   = useState("")
+
+  // ── Paso 1: Metadatos ──
+  const [fichaId,  setFichaId]  = useState("")
+  const [numero,   setNumero]   = useState("")
+  const [fecha,    setFecha]    = useState("")
+  const [hora,     setHora]     = useState("")
+  const [lugar,    setLugar]    = useState("Videoconferencia / Plataforma Zajuna")
+  const [objetivo, setObjetivo] = useState("")
+  const [rapIds,   setRapIds]   = useState<string[]>([])
+  const [errorMsg, setErrorMsg] = useState("")
+
+  // ── Paso 2: Preview ──
+  const [preview,          setPreview]          = useState<PreviewNativeResult | null>(null)
+  const [previewLoading,   setPreviewLoading]   = useState(false)
+  const [showWarningModal, setShowWarningModal] = useState(false)
+  const [showMapeoModal,   setShowMapeoModal]   = useState(false)
+  const [rapsSinMapeo,     setRapsSinMapeo]     = useState<any[]>([])
+  const [confirmLoading,   setConfirmLoading]   = useState(false)
+
+  const navigate = useNavigate()
 
   useEffect(() => {
     if (!open) {
       setFichaId(""); setNumero(""); setFecha(""); setHora("")
       setLugar("Videoconferencia / Plataforma Zajuna"); setObjetivo("")
-      setRapIds([]); setErrorMsg("")
+      setRapIds([]); setErrorMsg(""); setPreview(null)
+      setPreviewLoading(false); setShowWarningModal(false); setShowMapeoModal(false); setConfirmLoading(false)
     }
   }, [open])
 
-  const mutation = useMutation({
-    mutationFn: (body: object) => apiFetch<ActaSummary>("/api/actas", { method: "POST", body: JSON.stringify(body) }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["actas"] })
-      onClose()
-    },
-    onError: (e) => setErrorMsg(e instanceof ApiError ? e.message : "Error al crear el acta."),
-  })
-
   function toggleRap(id: string) {
     setRapIds(prev => prev.includes(id) ? prev.filter(r => r !== id) : [...prev, id])
+    setPreview(null)
   }
 
-  function handleSubmit() {
+  async function handleVistaPrevia() {
     setErrorMsg("")
     if (!fichaId || !numero.trim() || !fecha || !hora || !lugar.trim() || !objetivo.trim()) {
-      setErrorMsg("Completa todos los campos obligatorios.")
+      setErrorMsg("Completa todos los campos obligatorios antes de previsualizar.")
       return
     }
-    mutation.mutate({ fichaId, numero: numero.trim(), fecha, hora, lugar: lugar.trim(), objetivo: objetivo.trim(), rapIds })
+    if (rapIds.length === 0) {
+      setErrorMsg("Selecciona al menos un RAP para generar la vista previa.")
+      return
+    }
+    setPreviewLoading(true)
+    setPreview(null)
+    try {
+      const result = await apiFetch<PreviewNativeResult>("/api/actas/preview-native", {
+        method: "POST",
+        body: JSON.stringify({ fichaId, rapIds }),
+      })
+      setPreview(result)
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 422 && (e.data as any)?.error === "RAP_SIN_EVIDENCIAS") {
+        setRapsSinMapeo((e.data as any).rapsSinEvidencias || [])
+        setShowMapeoModal(true)
+      } else {
+        setErrorMsg(e instanceof ApiError ? e.message : "Error al generar la vista previa.")
+      }
+    } finally {
+      setPreviewLoading(false)
+    }
   }
 
+  async function handleConfirmarActa() {
+    if (!preview) return
+    setConfirmLoading(true)
+    try {
+      await apiFetch<{ actaId: string }>("/api/actas/confirm-native", {
+        method: "POST",
+        body: JSON.stringify({
+          fichaId,
+          numero: numero.trim(),
+          fecha,
+          hora,
+          lugar: lugar.trim(),
+          objetivo: objetivo.trim(),
+          rapIds,
+          participantes: preview.participantes,
+        }),
+      })
+      queryClient.invalidateQueries({ queryKey: ["actas"] })
+      toast.success("Acta generada correctamente.")
+      onClose()
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : "Error al confirmar el acta."
+      setErrorMsg(msg)
+      toast.error(msg)
+    } finally {
+      setConfirmLoading(false)
+      setShowWarningModal(false)
+    }
+  }
+
+  function handleClickGenerarActa() {
+    if (!preview) return
+    if (preview.warningsCount > 0) {
+      setShowWarningModal(true)
+    } else {
+      handleConfirmarActa()
+    }
+  }
+
+  const isBusy = previewLoading || confirmLoading
+
   return (
-    <Dialog open={open} onOpenChange={v => { if (!v && !mutation.isPending) onClose() }}>
-      <DialogContent className="max-w-lg max-h-[90vh] flex flex-col">
-        <DialogHeader className="flex-shrink-0">
-          <DialogTitle>Nueva Acta de Seguimiento</DialogTitle>
-          <DialogDescription>Completa los datos para crear el borrador del acta.</DialogDescription>
-        </DialogHeader>
+    <>
+      <Dialog open={open} onOpenChange={v => { if (!v && !isBusy) onClose() }}>
+        <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col">
+          <DialogHeader className="flex-shrink-0">
+            <DialogTitle>Nueva Acta de Seguimiento — Flujo Nativo</DialogTitle>
+            <DialogDescription>
+              Completa los metadatos, selecciona los RAPs y presiona <strong>Vista Previa</strong> para calcular los juicios en tiempo real.
+            </DialogDescription>
+          </DialogHeader>
 
-        {errorMsg && (
-          <div className="flex-shrink-0 flex items-center gap-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded-md px-3 py-2">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>{errorMsg}</span>
-          </div>
-        )}
-
-        <div className="space-y-4 overflow-y-auto flex-1 pr-1">
-          <div className="space-y-1.5">
-            <Label htmlFor="acta-ficha">Ficha *</Label>
-            <select
-              id="acta-ficha"
-              value={fichaId}
-              onChange={e => setFichaId(e.target.value)}
-              disabled={mutation.isPending}
-              className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
-            >
-              <option value="">Seleccionar ficha...</option>
-              {fichas.map(f => (
-                <option key={f.id} value={f.id}>{f.codigo} — {f.nombre}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="acta-numero">Número de acta *</Label>
-              <Input
-                id="acta-numero"
-                value={numero}
-                onChange={e => setNumero(e.target.value)}
-                placeholder="ej. 01"
-                disabled={mutation.isPending}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="acta-fecha">Fecha *</Label>
-              <Input
-                id="acta-fecha"
-                type="date"
-                value={fecha}
-                onChange={e => setFecha(e.target.value)}
-                disabled={mutation.isPending}
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="acta-hora">Hora *</Label>
-              <Input
-                id="acta-hora"
-                type="time"
-                value={hora}
-                onChange={e => setHora(e.target.value)}
-                disabled={mutation.isPending}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="acta-lugar">Lugar *</Label>
-              <Input
-                id="acta-lugar"
-                value={lugar}
-                onChange={e => setLugar(e.target.value)}
-                disabled={mutation.isPending}
-              />
-            </div>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="acta-objetivo">Objetivo *</Label>
-            <textarea
-              id="acta-objetivo"
-              value={objetivo}
-              onChange={e => setObjetivo(e.target.value)}
-              rows={3}
-              disabled={mutation.isPending}
-              placeholder="Describir el objetivo de la sesión de seguimiento..."
-              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50 resize-none"
-            />
-          </div>
-
-          {raps.length > 0 && (
-            <div className="space-y-1.5">
-              <Label>RAPs a evaluar</Label>
-              <div className="border border-input rounded-md p-3 space-y-2 max-h-40 overflow-y-auto">
-                {raps.map(r => (
-                  <label key={r.id} className="flex items-start gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={rapIds.includes(r.id)}
-                      onChange={() => toggleRap(r.id)}
-                      disabled={mutation.isPending}
-                      className="mt-0.5 h-4 w-4 rounded border-gray-300 text-sena-green focus:ring-sena-green"
-                    />
-                    <span className="text-sm text-gray-700">
-                      <span className="font-mono font-semibold text-gray-900">{r.codigo}</span>
-                      {" — "}
-                      <span className="text-gray-600">{r.descripcion}</span>
-                    </span>
-                  </label>
-                ))}
-              </div>
+          {errorMsg && (
+            <div className="flex-shrink-0 flex items-center gap-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded-md px-3 py-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{errorMsg}</span>
             </div>
           )}
 
-        </div>
+          <div className="space-y-4 overflow-y-auto flex-1 pr-1">
 
-        <DialogFooter className="flex-shrink-0">
-          <Button variant="outline" onClick={onClose} disabled={mutation.isPending}>Cancelar</Button>
-          <Button
-            className="bg-sena-green hover:bg-sena-green/90"
-            onClick={handleSubmit}
-            disabled={mutation.isPending}
-          >
-            {mutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-            Crear Acta
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+            {/* ── Metadatos ── */}
+            <div className="space-y-1.5">
+              <Label htmlFor="acta-ficha">Ficha *</Label>
+              <select
+                id="acta-ficha"
+                value={fichaId}
+                onChange={e => { setFichaId(e.target.value); setPreview(null) }}
+                disabled={isBusy}
+                className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+              >
+                <option value="">Seleccionar ficha...</option>
+                {fichas.map(f => (
+                  <option key={f.id} value={f.id}>{f.codigo} — {f.nombre}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="acta-numero">Número de acta *</Label>
+                <Input id="acta-numero" value={numero} onChange={e => setNumero(e.target.value)} placeholder="ej. 01" disabled={isBusy} />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="acta-fecha">Fecha *</Label>
+                <Input id="acta-fecha" type="date" value={fecha} onChange={e => setFecha(e.target.value)} disabled={isBusy} />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="acta-hora">Hora *</Label>
+                <Input id="acta-hora" type="time" value={hora} onChange={e => setHora(e.target.value)} disabled={isBusy} />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="acta-lugar">Lugar *</Label>
+                <Input id="acta-lugar" value={lugar} onChange={e => setLugar(e.target.value)} disabled={isBusy} />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="acta-objetivo">Objetivo *</Label>
+              <textarea
+                id="acta-objetivo"
+                value={objetivo}
+                onChange={e => setObjetivo(e.target.value)}
+                rows={2}
+                disabled={isBusy}
+                placeholder="Describir el objetivo de la sesión de seguimiento..."
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50 resize-none"
+              />
+            </div>
+
+            {raps.length > 0 && (
+              <div className="space-y-1.5">
+                <Label>RAPs a evaluar *</Label>
+                <div className="border border-input rounded-md p-3 space-y-2 max-h-36 overflow-y-auto">
+                  {raps.map(r => (
+                    <label key={r.id} className="flex items-start gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={rapIds.includes(r.id)}
+                        onChange={() => toggleRap(r.id)}
+                        disabled={isBusy}
+                        className="mt-0.5 h-4 w-4 rounded border-gray-300 text-sena-green focus:ring-sena-green"
+                      />
+                      <span className="text-sm text-gray-700">
+                        <span className="font-mono font-semibold text-gray-900">{r.codigo}</span>
+                        {" — "}
+                        <span className="text-gray-600">{r.descripcion}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* ── Botón Vista Previa ── */}
+            <div className="flex items-center gap-3 pt-1">
+              <Button
+                variant="outline"
+                className="gap-1.5 text-sm"
+                onClick={handleVistaPrevia}
+                disabled={isBusy}
+              >
+                {previewLoading
+                  ? <Loader2 className="w-4 h-4 animate-spin" />
+                  : <AlertTriangle className="w-4 h-4 text-amber-500" />}
+                Vista Previa
+              </Button>
+              {preview && (
+                <span className="text-xs text-gray-500">
+                  {preview.participantes.length} aprendices · {preview.warningsCount > 0
+                    ? <span className="text-amber-600 font-semibold">⚠️ {preview.warningsCount} con evidencias sin calificar</span>
+                    : <span className="text-green-600 font-semibold">Todo calificado ✓</span>}
+                </span>
+              )}
+            </div>
+
+            {/* ── Tabla de Preview ── */}
+            {preview && preview.participantes.length > 0 && (
+              <div className="rounded-md border border-gray-200 overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="text-left px-3 py-2 font-semibold text-gray-500 min-w-[180px]">Aprendiz</th>
+                      {Object.keys(preview.participantes[0].rapStatus).map(codigo => (
+                        <th key={codigo} className="text-center px-2 py-2 font-semibold text-gray-500 whitespace-nowrap">{codigo}</th>
+                      ))}
+                      <th className="text-center px-2 py-2 font-semibold text-gray-500">Juicio</th>
+                      <th className="text-center px-2 py-2 font-semibold text-gray-500 w-8">⚠️</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {preview.participantes.map(p => (
+                      <tr
+                        key={p.aprendizId}
+                        className={p.hasUngraded ? "bg-yellow-50" : "bg-white"}
+                      >
+                        <td className="px-3 py-2 text-gray-700">{p.nombre}</td>
+                        {Object.entries(p.rapStatus).map(([codigo, estado]) => (
+                          <td key={codigo} className="px-2 py-1.5 text-center">
+                            <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-medium ${
+                              estado === "APROBÓ"       ? "bg-green-100 text-green-700" :
+                              estado === "PENDIENTE"    ? "bg-yellow-100 text-yellow-700" :
+                                                          "bg-gray-100 text-gray-500"
+                            }`}>{estado}</span>
+                          </td>
+                        ))}
+                        <td className="px-2 py-1.5 text-center">
+                          <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-semibold ${
+                            p.juicio === "APROBÓ"    ? "bg-green-100 text-green-700" :
+                            p.juicio === "PENDIENTE" ? "bg-yellow-100 text-yellow-700" :
+                                                       "bg-gray-100 text-gray-500"
+                          }`}>{p.juicio}</span>
+                        </td>
+                        <td className="px-2 py-1.5 text-center">
+                          {p.hasUngraded && (
+                            <span title="Tiene entregas sin calificar">
+                              <AlertTriangle className="w-3.5 h-3.5 text-amber-500 mx-auto" />
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {preview && preview.participantes.length === 0 && (
+              <div className="text-sm text-gray-400 italic px-1">No se encontraron aprendices para esta ficha y RAPs seleccionados.</div>
+            )}
+
+          </div>
+
+          <DialogFooter className="flex-shrink-0 gap-2">
+            <Button variant="outline" onClick={onClose} disabled={isBusy}>Cancelar</Button>
+            <Button
+              variant="outline"
+              className="gap-1.5"
+              onClick={handleVistaPrevia}
+              disabled={isBusy}
+            >
+              {previewLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <AlertTriangle className="w-4 h-4 text-amber-500" />}
+              Vista Previa
+            </Button>
+            <Button
+              className={`gap-1.5 ${
+                preview && preview.warningsCount > 0
+                  ? "bg-amber-500 hover:bg-amber-600 text-white"
+                  : "bg-sena-green hover:bg-sena-green/90"
+              }`}
+              onClick={handleClickGenerarActa}
+              disabled={!preview || confirmLoading || previewLoading}
+            >
+              {confirmLoading && <Loader2 className="w-4 h-4 animate-spin" />}
+              {preview && preview.warningsCount > 0 ? "⚠️ Generar Acta Definitiva" : "Generar Acta Definitiva"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Modal Mapeo al Vuelo ── */}
+      <MapeoAlVueloModal
+        open={showMapeoModal}
+        onClose={() => setShowMapeoModal(false)}
+        fichaId={fichaId}
+        rapsSinMapeo={rapsSinMapeo}
+        onSuccess={handleVistaPrevia}
+      />
+
+      {/* ── Modal de advertencia severo ── */}
+      <Dialog open={showWarningModal} onOpenChange={v => { if (!v && !confirmLoading) setShowWarningModal(false) }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-red-600">
+              <AlertTriangle className="w-5 h-5" />
+              Advertencia: Evidencias sin calificar
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="rounded-md bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-800">
+              <p className="font-semibold mb-1">⚠️ {preview?.warningsCount} aprendice{(preview?.warningsCount ?? 0) !== 1 ? "s tienen" : " tiene"} evidencias pendientes por calificar.</p>
+              <p>Si generas el acta ahora, estos aprendices quedarán registrados con el estado actual. Los que solo tienen pendientes podrían quedar como <strong>PENDIENTE</strong> en lugar de <strong>APROBÓ</strong>.</p>
+            </div>
+            <p className="text-sm text-gray-700 font-medium">¿Deseas cerrarla de todos modos asumiendo que perdieron?</p>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setShowWarningModal(false)} disabled={confirmLoading}>
+              Cancelar — volver a revisar
+            </Button>
+            <Button
+              className="bg-red-600 hover:bg-red-700 text-white gap-1.5"
+              onClick={handleConfirmarActa}
+              disabled={confirmLoading}
+            >
+              {confirmLoading && <Loader2 className="w-4 h-4 animate-spin" />}
+              Sí, generar de todos modos
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
 
@@ -308,6 +507,8 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
   const [cerrarConfirm,     setCerrarConfirm]     = useState(false)
   const [deletePartId,      setDeletePartId]      = useState<string | null>(null)
   const [guiaVisible,       setGuiaVisible]       = useState(true)
+  const [showMapeoModal,    setShowMapeoModal]    = useState(false)
+  const [rapsSinMapeo,      setRapsSinMapeo]      = useState<any[]>([])
 
   const { data: acta, isLoading } = useQuery<ActaDetalle>({
     queryKey: ["acta-detalle", actaId],
@@ -395,9 +596,14 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
       }
     },
     onError: (e) => {
-      const msg = e instanceof ApiError ? e.message : "Error al auto-poblar."
-      setPatchError(msg)
-      toast.error(msg)
+      if (e instanceof ApiError && e.status === 422 && (e.data as any)?.error === "RAP_SIN_EVIDENCIAS") {
+        setRapsSinMapeo((e.data as any).rapsSinEvidencias || [])
+        setShowMapeoModal(true)
+      } else {
+        const msg = e instanceof ApiError ? e.message : "Error al auto-poblar."
+        setPatchError(msg)
+        toast.error(msg)
+      }
     },
   })
 
@@ -856,6 +1062,14 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
         </section>
       )}
 
+      {/* ── Modal Mapeo al Vuelo ── */}
+      <MapeoAlVueloModal
+        open={showMapeoModal}
+        onClose={() => setShowMapeoModal(false)}
+        fichaId={acta.fichaId}
+        rapsSinMapeo={rapsSinMapeo}
+        onSuccess={() => autoPoblarMutation.mutate()}
+      />
     </div>
   )
 }

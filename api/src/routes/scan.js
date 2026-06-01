@@ -1,5 +1,5 @@
 const prisma = require("../db/client");
-const { autoScanQueue } = require("../lib/queue");
+const { autoScanQueue, evidenciasQueue } = require("../lib/queue");
 
 async function scanRoutes(fastify) {
   // POST /api/scan/full — escanea TODAS las evidencias del usuario (ignora activaParaScan)
@@ -30,6 +30,12 @@ async function scanRoutes(fastify) {
     const nextAt = lastAt ? new Date(new Date(lastAt).getTime() + 3 * 60 * 60 * 1000) : null;
 
     return { lastAutoScanAt: lastAt, nextAutoScanAt: nextAt, activeCount };
+  });
+
+  // GET /api/scan/progress — estado en vivo de las colas de escaneo
+  fastify.get("/api/scan/progress", { preHandler: fastify.authenticate }, async (req) => {
+    const counts = await evidenciasQueue.getJobCounts();
+    return counts;
   });
 }
 

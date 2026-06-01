@@ -13,7 +13,7 @@ interface EvidenciaActiva {
   id: string
   nombre: string
   href: string
-  tipo: string
+  tipo: string          // "assign" | "forum" | "quiz" | ...
   pendientes: number
   calificados: number
   sinEntregar: number
@@ -33,6 +33,13 @@ interface ScanStatus {
   lastAutoScanAt: string | null
   nextAutoScanAt: string | null
   activeCount: number
+}
+
+interface ScanProgress {
+  active: number
+  waiting: number
+  completed: number
+  failed: number
 }
 
 function tiempoRelativo(fecha: string | null): string {
@@ -64,6 +71,7 @@ export default function Dashboard() {
   const queryClient = useQueryClient()
   const [expandedEv, setExpandedEv]           = useState<string | null>(null)
   const [collapsedFichas, setCollapsedFichas] = useState<Record<string, boolean>>({})
+  const [selectedFichaId, setSelectedFichaId] = useState<string>("ALL")
   // fichas start collapsed; undefined means not yet toggled → treat as collapsed
   const [scanStatus, setScanStatus]           = useState("")
   const [scanLoading, setScanLoading]         = useState(false)
@@ -101,6 +109,20 @@ export default function Dashboard() {
     refetchInterval: 60_000,
   })
 
+  const { data: scanProgress } = useQuery<ScanProgress>({
+    queryKey: ["scan-progress"],
+    queryFn:  () => apiFetch("/api/scan/progress"),
+    enabled:  !!jwt,
+    refetchInterval: (query) => {
+      const p = query.state.data as ScanProgress | undefined
+      if (scanLoading) return 3000
+      if (p && (p.active + p.waiting) > 0) return 3000
+      return 15000 // Poll slower when idle
+    }
+  })
+
+  const isScanning = scanLoading || (scanProgress && (scanProgress.active + scanProgress.waiting) > 0)
+
   // Gatillo silencioso: si pasaron >2 horas o nunca se ha escaneado, y hay activas
   const hasTriggeredAutoScan = useRef(false)
   useEffect(() => {
@@ -132,11 +154,15 @@ export default function Dashboard() {
       await apiFetch("/api/scan/full", { method: "POST" })
       setScanStatus("Scan iniciado. Los datos se actualizarán en breve.")
       queryClient.invalidateQueries({ queryKey: ["scan-status"] })
+      queryClient.invalidateQueries({ queryKey: ["scan-progress"] })
     } catch (err) {
       setScanStatus(err instanceof ApiError ? err.message : "Error al iniciar scan.")
-    } finally {
       setScanLoading(false)
     }
+    // We do NOT set scanLoading=false here on success. We let the polling update `isScanning` 
+    // and when `active + waiting === 0`, it will naturally stop showing the bar.
+    // Actually, we should set scanLoading=false after a few seconds or rely on `isScanning` from progress.
+    setTimeout(() => setScanLoading(false), 4000)
   }
 
   function handleCalificar(ev: EvidenciaActiva, actId: string | null) {
@@ -155,7 +181,24 @@ export default function Dashboard() {
         {/* Status bar */}
         <div className="bg-white rounded-lg border border-gray-200 p-4 flex flex-wrap items-center gap-3">
           <div className="flex-1">
-            {scanStatus_?.lastAutoScanAt ? (
+            {isScanning && scanProgress ? (
+              <div className="flex flex-col gap-1.5 w-full max-w-md">
+                <div className="flex justify-between text-xs text-gray-600 font-medium">
+                  <span>Escaneando en segundo plano...</span>
+                  <span>{scanProgress.active + scanProgress.waiting} restantes</span>
+                </div>
+                <div className="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
+                  <div 
+                    className="bg-blue-600 h-full rounded-full transition-all duration-500 ease-out" 
+                    style={{ 
+                      width: `${(scanProgress.completed + scanProgress.failed + scanProgress.active + scanProgress.waiting) === 0 ? 0 : 
+                        ((scanProgress.completed + scanProgress.failed) / (scanProgress.completed + scanProgress.failed + scanProgress.active + scanProgress.waiting)) * 100}%` 
+                    }}
+                  />
+                </div>
+                <p className="text-xs text-gray-400">Esto puede demorar debido a Zajuna.</p>
+              </div>
+            ) : scanStatus_?.lastAutoScanAt ? (
               <span className="text-sm text-gray-600">
                 Actualizado {tiempoRelativo(scanStatus_?.lastAutoScanAt)}
                 {scanStatus_?.nextAutoScanAt && ` · próximo scan ${tiempoRelativo(scanStatus_?.nextAutoScanAt)}`}
@@ -164,9 +207,9 @@ export default function Dashboard() {
               <span className="text-sm text-gray-400">Auto-scan no configurado aún</span>
             )}
           </div>
-          {scanStatus && <span className="text-sm text-blue-600">{scanStatus}</span>}
-          <Button variant="outline" size="sm" onClick={handleRefrescar} disabled={scanLoading} className="gap-2">
-            <RefreshCw className={`w-3.5 h-3.5 ${scanLoading ? "animate-spin" : ""}`} />
+          {scanStatus && !isScanning && <span className="text-sm text-blue-600">{scanStatus}</span>}
+          <Button variant="outline" size="sm" onClick={handleRefrescar} disabled={!!isScanning} className="gap-2">
+            <RefreshCw className={`w-3.5 h-3.5 ${isScanning ? "animate-spin" : ""}`} />
             Refrescar ahora
           </Button>
         </div>
@@ -183,6 +226,33 @@ export default function Dashboard() {
           </div>
         )}
 
+        {/* Filtro de Fichas */}
+        {fichas.length > 1 && (
+          <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-hide">
+            <Button 
+              variant={selectedFichaId === "ALL" ? "default" : "outline"} 
+              size="sm" 
+              onClick={() => setSelectedFichaId("ALL")}
+              className="whitespace-nowrap h-8 text-xs bg-white text-gray-700 border-gray-200 shadow-sm data-[active=true]:bg-sena-green data-[active=true]:text-white data-[active=true]:border-sena-green"
+              data-active={selectedFichaId === "ALL"}
+            >
+              Todas las fichas
+            </Button>
+            {fichas.map(f => (
+              <Button 
+                key={f.id}
+                variant={selectedFichaId === f.id ? "default" : "outline"} 
+                size="sm" 
+                onClick={() => setSelectedFichaId(f.id)}
+                className="whitespace-nowrap h-8 text-xs bg-white text-gray-700 border-gray-200 shadow-sm data-[active=true]:bg-sena-green data-[active=true]:text-white data-[active=true]:border-sena-green"
+                data-active={selectedFichaId === f.id}
+              >
+                Ficha {f.codigo}
+              </Button>
+            ))}
+          </div>
+        )}
+
         {/* Lista de evidencias */}
         {isLoading ? (
           <div className="bg-white rounded-lg border p-8 text-center text-gray-500 text-sm">Cargando...</div>
@@ -196,7 +266,7 @@ export default function Dashboard() {
           </div>
         ) : (
           <div className="space-y-3">
-            {fichas.map(f => {
+            {(selectedFichaId === "ALL" ? fichas : fichas.filter(f => f.id === selectedFichaId)).map(f => {
               const evOrdenadas  = [...f.evidencias].sort((a, b) => gaNum(a.nombre) - gaNum(b.nombre) || a.nombre.localeCompare(b.nombre))
               const isCollapsed  = collapsedFichas[f.id] ?? true
               const pendFicha    = f.evidencias.reduce((s, ev) => s + ev.pendientes, 0)
@@ -241,7 +311,22 @@ export default function Dashboard() {
                               >
                                 {isExpanded ? "Ocultar" : "Ver aprendices"}
                               </Button>
-                              {ev.pendientes > 0 && (
+
+                              {/* FORO: píldora conversacional → redirige al foro en Moodle */}
+                              {ev.tipo === "forum" && ev.pendientes > 0 && (
+                                <a
+                                  href={ev.href}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  title="Ir al foro en Zajuna para calificar manualmente"
+                                  className="inline-flex items-center gap-1 h-7 px-2.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700 hover:bg-blue-200 transition-colors whitespace-nowrap"
+                                >
+                                  💬 {ev.pendientes} comentario{ev.pendientes !== 1 ? "s" : ""} sin calificar
+                                </a>
+                              )}
+
+                              {/* NO-FORO: botón Calificar normal */}
+                              {ev.tipo !== "forum" && ev.pendientes > 0 && (
                                 <Button
                                   size="sm"
                                   className="h-7 text-xs px-2 bg-sena-green hover:bg-sena-green/90"
@@ -250,15 +335,17 @@ export default function Dashboard() {
                                   Calificar
                                 </Button>
                               )}
+
                               {ev.calificandoAt && (
                                 <Button
-                                  variant="ghost"
+                                  variant="outline"
                                   size="sm"
-                                  className="h-7 text-xs px-2 text-gray-400"
+                                  className="h-7 text-xs px-2.5 text-gray-600 border-gray-300 hover:bg-gray-100 flex items-center gap-1.5"
                                   onClick={() => calificandoMutation.mutate({ id: ev.id, calificando: false })}
-                                  title="Quitar marca 'Calificando'"
+                                  title="Forzar estado a 'Al día' si ya terminaste de calificar en Zajuna y quedan pendientes"
                                 >
-                                  ✕
+                                  <span>Forzar Al día</span>
+                                  <span className="text-gray-400 font-bold">✕</span>
                                 </Button>
                               )}
                             </div>

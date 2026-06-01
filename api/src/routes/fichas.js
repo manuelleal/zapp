@@ -134,6 +134,56 @@ async function fichasRoutes(fastify) {
       otrosCursos: [],
     };
   });
+  // GET /api/fichas/:id/reporte-pendientes — genera un reporte CSV tipo semáforo
+  fastify.get("/api/fichas/:id/reporte-pendientes", { preHandler: fastify.authenticate }, async (req, reply) => {
+    const ficha = await prisma.ficha.findUnique({
+      where: { id: req.params.id },
+      include: {
+        evidencias: { orderBy: { nombre: "asc" } },
+        aprendices: { orderBy: { nombre: "asc" }, include: { entregas: true } }
+      }
+    });
+
+    if (!ficha)                       return reply.code(404).send({ error: "Ficha no encontrada." });
+    if (ficha.userId !== req.user.id) return reply.code(403).send({ error: "Sin acceso." });
+
+    // Armar la matriz CSV
+    const evidencias = ficha.evidencias;
+    const aprendices = ficha.aprendices;
+
+    // Fila 1: Cabeceras
+    const header = ["Aprendiz", ...evidencias.map(e => `"${e.nombre.replace(/"/g, '""')}"`)];
+    const rows = [header.join(",")];
+
+    for (const a of aprendices) {
+      const entregasMap = new Map();
+      for (const ent of a.entregas) {
+        entregasMap.set(ent.evidenciaId, ent);
+      }
+
+      const row = [`"${a.nombre.replace(/"/g, '""')}"`];
+      
+      for (const ev of evidencias) {
+        const entrega = entregasMap.get(ev.id);
+        if (!entrega) {
+          row.push('"Sin entregar"');
+        } else if (entrega.estado.toLowerCase().includes("calificar") || entrega.notaActual === null) {
+          row.push('"Por calificar (P)"');
+        } else {
+          row.push(`"Calificado: ${entrega.notaActual}"`);
+        }
+      }
+      rows.push(row.join(","));
+    }
+
+    const csvContent = "\uFEFF" + rows.join("\n"); // \uFEFF para BOM de Excel UTF-8
+    const filename = `Reporte_Zajuna_${ficha.codigo}_${new Date().toISOString().slice(0,10)}.csv`;
+
+    return reply
+      .header("Content-Disposition", `attachment; filename="${filename}"`)
+      .header("Content-Type", "text/csv; charset=utf-8")
+      .send(csvContent);
+  });
 }
 
 module.exports = fichasRoutes;

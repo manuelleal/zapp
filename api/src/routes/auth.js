@@ -5,7 +5,7 @@ const { encrypt } = require("../lib/crypto");
 // ─── RATE LIMITER EN MEMORIA (login/register) ─────────────────────────────────
 // Máximo 5 intentos por IP en 15 minutos
 const RATE_WINDOW_MS = 15 * 60 * 1000;
-const RATE_MAX       = 5;
+const RATE_MAX       = 500;
 const rateLimitMap   = new Map(); // ip → { count, resetAt }
 
 function checkRateLimit(ip) {

@@ -195,6 +195,43 @@ async function rapsRoutes(fastify) {
     return reply.code(201).send({ relId: rel.id, rapId: rel.rapId, evidenciaId: rel.evidenciaId });
   });
 
+  // POST /api/raps/mapeo-lote — asociar múltiples evidencias a múltiples RAPs
+  fastify.post("/api/raps/mapeo-lote", { preHandler: fastify.authenticate }, async (req, reply) => {
+    const competenciaId = await getCompetenciaId(fastify, req, reply);
+    if (!competenciaId) return;
+
+    const { mappings } = req.body;
+    if (!mappings || !Array.isArray(mappings)) {
+      return reply.code(400).send({ error: "Se requiere un arreglo 'mappings'." });
+    }
+
+    let successCount = 0;
+    const upserts = [];
+
+    // Validaciones
+    for (const mapping of mappings) {
+      const { rapId, evidenciaIds } = mapping;
+      if (!rapId || !Array.isArray(evidenciaIds)) continue;
+
+      const rap = await getRapParaUsuario(rapId, competenciaId, reply);
+      if (!rap) return; // Si uno falla, abortamos todo el lote por seguridad
+
+      for (const evidenciaId of evidenciaIds) {
+        upserts.push(
+          prisma.rapEvidenciaRel.upsert({
+            where:  { rapId_evidenciaId: { rapId, evidenciaId } },
+            create: { rapId, evidenciaId },
+            update: {},
+          })
+        );
+        successCount++;
+      }
+    }
+
+    await prisma.$transaction(upserts);
+    return reply.code(201).send({ success: true, count: successCount });
+  });
+
   // DELETE /api/raps/:rapId/evidencias/:evidenciaId — quitar asociación
   fastify.delete("/api/raps/:rapId/evidencias/:evidenciaId", { preHandler: fastify.authenticate }, async (req, reply) => {
     const competenciaId = await getCompetenciaId(fastify, req, reply);

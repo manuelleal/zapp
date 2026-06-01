@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Plus, Search, Pencil, Archive, ArchiveRestore, Trash2, ChevronDown, ChevronRight } from "lucide-react"
+import { Plus, Search, Pencil, Archive, ArchiveRestore, Trash2, ChevronDown, ChevronRight, Download } from "lucide-react"
 import Layout from "@/components/Layout"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -11,6 +11,7 @@ import { apiFetch, ApiError } from "@/api/client"
 import { useAuthStore } from "@/store/auth"
 import { useNavigate } from "react-router-dom"
 import { useEffect } from "react"
+import { toast } from "sonner"
 
 interface Ficha {
   id: string
@@ -131,6 +132,26 @@ export default function Fichas() {
     }
   }
 
+  async function descargarReporte(fichaId: string, codigo: string) {
+    try {
+      const res = await fetch(`/api/fichas/${fichaId}/reporte-pendientes`, {
+        headers: { Authorization: `Bearer ${jwt}` }
+      })
+      if (!res.ok) throw new Error("No se pudo generar el reporte.")
+      
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = `Reporte_Zajuna_${codigo}_${new Date().toISOString().slice(0,10)}.csv`
+      a.click()
+      URL.revokeObjectURL(url)
+      toast.success("Reporte descargado")
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Error al descargar el reporte")
+    }
+  }
+
   const todasFichas = data?.fichas ?? []
   const activas     = todasFichas.filter(f => !f.archivedAt).sort((a, b) => a.codigo.localeCompare(b.codigo))
   const archivadas  = todasFichas.filter(f =>  f.archivedAt).sort((a, b) => a.codigo.localeCompare(b.codigo))
@@ -145,6 +166,9 @@ export default function Fichas() {
         <td className="px-5 py-3 text-gray-700 max-w-xs truncate" title={f.nombre}>{f.nombre || <span className="text-gray-400">Sin nombre</span>}</td>
         <td className="px-5 py-3">
           <div className="flex items-center gap-1">
+            <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => descargarReporte(f.id, f.codigo)} title="Descargar Semáforo">
+              <Download className="w-3.5 h-3.5 text-blue-600" />
+            </Button>
             <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => openEditar(f)} title="Editar">
               <Pencil className="w-3.5 h-3.5" />
             </Button>

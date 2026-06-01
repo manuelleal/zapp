@@ -336,7 +336,7 @@ function parsearCSVActa(csvText) {
   };
 }
 
-module.exports = { parsearCSVActa, clasificarAprendiz, esNombreValido, esDocumentoValido };
+module.exports = { parsearCSV, parsearCSVActa, clasificarAprendiz, esNombreValido, esDocumentoValido };
 
 // ─── Tests inline (node scraper/csvParser.js) ──────────────────────────────────
 
