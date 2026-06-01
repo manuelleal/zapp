@@ -90,6 +90,12 @@ model Evidencia {
   configCacheAt  DateTime?
   activaParaScan Boolean          @default(false)
   calificandoAt  DateTime?
+  // CAPA 2 (perf): cache del instance id (assignid) y contextid resueltos desde
+  // el cmid. mod_assign_list_participants exige assignid, no el cmid del href.
+  // SENA tiene capadas mod_assign_get_assignments / core_course_get_contents, así
+  // que se resuelven una vez leyendo data-assignmentid del grader HTML y se cachean.
+  assignId       Int?
+  contextId      Int?
   ficha              Ficha               @relation(fields: [fichaId], references: [id])
   entregas           Entrega[]
   configAudits       ConfigAudit[]

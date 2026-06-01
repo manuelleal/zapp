@@ -1,6 +1,6 @@
 # CLAUDE.md — Zajuna App
 
-> **Última actualización:** 25 mayo 2026 (auditoría arquitectónica).
+> **Última actualización:** 31 mayo 2026 (Fase 2 + optimización de velocidad de scan «Capa 1», sin commitear).
 > Este documento es la **fuente única de verdad** para los agentes de IA. Contiene las reglas del proyecto, decisiones de arquitectura y comandos de desarrollo. 
 
 ## 1. Qué es este proyecto
@@ -94,7 +94,7 @@ ZAJUNA_PASS=
 
 ---
 
-## 7. Estado Actual y Pendientes (actualizado 25 mayo 2026)
+## 7. Estado Actual y Pendientes (actualizado 28 mayo 2026)
 
 ---
 
@@ -102,10 +102,19 @@ ZAJUNA_PASS=
 
 | Rama | Estado | Qué tiene |
 |---|---|---|
+| `feature/gradebook-scan-v2` | 🔄 **Rama actual** — cambios sin commitear | Gradebook Tree + canonicalización hrefs + calcularEstado estricto + foroDescubrir + Fase 2 UI en progreso |
 | `feature/strict-rap-mapping` | ✅ Lista, sin mergear | Fix actas.js (eliminado rapPorSufijo), scripts vincular/extraer |
-| `feature/gradebook-scan-v2` | 🔄 Rama actual (2 commits adelante del 24-may) | Gradebook Tree + canonicalización hrefs + calcularEstado estricto + foroDescubrir end-to-end |
+| `fix/mensaje-template-vars` | 🔄 En progreso | Fix interpolación `{{nombre}}`/`{{ficha}}`/`{{instructor}}` en mensajes |
+| `fix/actas-autopoblar-v2` | ❓ Sin revisar | Fix autopoblar actas v2 |
+| `fix/skip-suspended-users` | ❓ Sin revisar | Skip de usuarios suspendidos en scraping |
+| `feat/extractor-guias-raps` | ❓ Sin revisar | Extractor de guías y RAPs |
+| `feat/frontend-resilience-e2e` | ❓ Sin revisar | Resiliencia frontend + tests E2E |
+| `feat/scan-progress` | ❓ Sin revisar | Progreso de scan en tiempo real |
+| `feature/actas-nativas-fastsync` | ❓ Sin revisar | Actas nativas con sync rápido |
+| `feature/csv-and-robust-scraping` | ❓ Sin revisar | CSV parser + scraping robusto |
 
-**Sin remote configurado** — el `git push` falla con "origin does not appear to be a git repository". Cuando se configure, ambas ramas listas para subir.
+> **⚠️ Sin remote configurado** — el `git push` falla con "origin does not appear to be a git repository". Cuando se configure, ramas listas para subir.
+> **⚠️ Rama default es `master`** (no `main`) — los comandos de merge del Paso 4 deben usar `master`.
 
 ---
 
@@ -128,20 +137,53 @@ ZAJUNA_PASS=
 
 ---
 
-### 🔴 FASE ACTUAL — FASE 2: UI de Selección Masiva por Competencia
+### 🟡 FASE ACTUAL — FASE 2: UI en progreso (sin commitear, 28 mayo)
 
-**Objetivo:** Construir en la UI la pantalla que permite al instructor seleccionar masivamente evidencias agrupadas por competencia, para marcarlas como revisadas / calificar / generar actas.
+**Cambios en working tree — pendientes de commit:**
 
-**Diseño propuesto:**
-- Ruta: `ActasPage` (o nueva `EvidenciasPage`) con agrupación por `Competencia`.
-- Cada competencia muestra sus evidencias con estado (entregada, calificada, sin entregar).
-- El instructor puede seleccionar un subconjunto y disparar acciones en lote (calificar, generar acta).
-- Backend: `GET /api/evidencias?fichaId=&competenciaId=` + acción batch.
+| Archivo | Cambio |
+|---|---|
+| `api/src/routes/scan.js` | +`GET /api/scan/progress` — devuelve contadores BullMQ de la cola evidencias |
+| `api/src/workers/evidenciasWorker.js` | ⚡ Capa 1 (DB en lote: preload aprendices, `findMany` entregas, `createMany`+`$transaction`; quita nav muerta) **+ Capa 2** (bloque sesskey→resolver assignId→batch `mod_assign_list_participants`; rama assign con fallback DOM). |
+| `scraper/evidencias.js` | +`obtenerSesskey`, `resolverAssignInfo`, `estadoDesdeParticipante`, `listarParticipantesBatch` (Capa 2 AJAX). |
+| `prisma/schema.prisma` + migración `add_evidencia_assign_instance_id` | +`assignId Int?` / `contextId Int?` en `Evidencia` (cache del instance id para el AJAX). |
+| `scripts/probe-ws-token.js`, `probe-ajax-participants.js`, `probe-capa2-flow.js` | Probes de diagnóstico (token WS, disponibilidad AJAX, cadena Capa 2). Read-only, no escriben DB. |
+| `scraper/auth.js` | TIMEOUT aumentado 30 000 ms → 90 000 ms (fix timeouts de auth frecuentes) |
+| `scraper/csvParser.js` | Export de `parsearCSV` que faltaba en el módulo |
+| `web/src/pages/ActasPage.tsx` | +509 líneas: flujo nativo multi-paso con `PreviewNativeResult`, step de preview, modales de warning/422, navigate post-confirm |
+| `web/src/pages/Dashboard.tsx` | +`ScanProgress` interface + query polleando `/api/scan/progress` (3 s activo / 15 s idle), `isScanning` flag, `selectedFichaId` filter |
+| `web/src/pages/EvidenciasConfig.tsx` | +barra búsqueda por nombre/código de competencia, filtro Todas/Activas/Inactivas, collapse por guía |
+| `web/tests/e2e/actas-flow.spec.ts` | Tests E2E ampliados +130 líneas para el flujo nativo |
 
-**Archivos clave a tocar:**
-- `web/src/pages/ActasPage.tsx` (o crear `EvidenciasPage.tsx`)
-- `api/src/routes/scan.js` — agregar endpoint de evidencias por competencia si no existe
-- `api/src/workers/evidenciasWorker.js` — revisar si hay batch action disponible
+**Estado:** Trabajo real avanzado. Falta revisar si está completo antes de commitear.
+
+---
+
+### ⚡ ANÁLISIS DE VELOCIDAD DEL SCAN (31 mayo 2026)
+
+> Objetivo: acelerar la carga de evidencias del primer scan y compararla con cómo lo hace la **Extensión Z** (la extensión de Chrome que usan los instructores SENA, ya documentada en `docs/MOODLE_REFERENCE.md` como ingeniería inversa de `root.PiOpq-8m.js`).
+
+**Cómo carga evidencias el scan hoy (`api/src/workers/evidenciasWorker.js`):** todo secuencial vía DOM con Playwright. El cuello de botella es la **Fase 2**, que por **cada** evidencia activa hace un `page.goto(...&action=grading)` y raspa la tabla HTML (~2-4 s c/u), y por **cada** alumno hace 3 queries secuenciales a Postgres (`aprendiz.upsert` + `entrega.findUnique` + `create/update`). Con 50 evidencias × 30 alumnos eran ~50 navegaciones DOM seriales + ~4500 queries una-a-una.
+
+**Cómo lo hace la Extensión Z:** NO raspa DOM por actividad. Corre dentro del navegador ya autenticado y usa los endpoints JSON de Moodle con el `sesskey` de la sesión:
+`POST /lib/ajax/service.php?sesskey={k}&info=mod_assign_list_participants` → devuelve por actividad un JSON con todos los participantes (`submitted`/`requiregrading`/`isSuspended`), sin renderizar la tabla de grading. Es ~5-10× más liviano que cargar el HTML.
+
+**Probe de token WS (Camino 1) — VEREDICTO: muerto para SENA.**
+`node scripts/probe-ws-token.js` → `/login/token.php` responde **HTTP 200 pero `invalidlogin`**. Causa: el login de SENA NO es el nativo de Moodle (ver `scraper/auth.js:35-49`: entra por el portal raíz `https://zajuna.sena.edu.co` con `typeDocument`/`document`/`form_login_user`, no por `/login/index.php`). Es un **SSO/portal federado**: el usuario Moodle no tiene contraseña interna, así que `token.php` lo rechaza. **No se puede obtener token con usuario+clave.** → Hay que ir por el **Camino 2** (reusar la sesión Playwright + `sesskey` + `/lib/ajax/service.php`), que es exactamente lo que hace la Extensión Z.
+
+**Plan en dos capas:**
+
+- **🟢 CAPA 1 — APLICADA (31 may, sin commitear) en `evidenciasWorker.js`:**
+  1. Eliminada la navegación muerta a `/course/view.php` (~2 s, su resultado no se usaba).
+  2. Escrituras a DB **en lote**: se pre-cargan todos los aprendices de la ficha en 1 query (Map en memoria); los faltantes se crean con `createMany`; las entregas previas de cada evidencia se traen con 1 `findMany` (no N `findUnique`); y los create/update/historial se ejecutan con `createMany` + `$transaction`. Pasa de ~4500 queries seriales a unas decenas de round-trips. **Mismas reglas de negocio** (override CSV, umbral, `fechaScan`, `calificandoAt`, cierre manual) — sólo cambia el patrón de acceso a DB.
+  - ⚠️ NO se derivaron los matriculados del CSV (idea inicial descartada): el CSV no trae `moodleUserId`, que es imprescindible para mensajes/calificación y para el filtro de suspendidos. Esa fuente la da el grade report o, mejor, el AJAX de la Capa 2.
+
+- **🟢 CAPA 2 — APLICADA y VALIDADA EN VIVO (31 may, sin commitear):** el estado de los `assign` se lee por `mod_assign_list_participants` (AJAX JSON) en vez de raspar el DOM de `view.php?action=grading`.
+  - **Toolbox confirmado contra SENA** (probe en vivo `scripts/probe-ajax-participants.js`): `mod_assign_list_participants` ✅ y `core_grades_get_enrolled_users_for_selector` ✅ están habilitadas sobre la sesión (sesskey). `mod_assign_get_assignments`, `mod_assign_get_submissions`, `mod_assign_get_grades`, `core_course_get_contents`, `gradereport_user_get_grade_items` → ❌ `servicenotavailable` (capadas). El token WS (`/login/token.php`) → ❌ `invalidlogin` (login SSO de SENA, no nativo Moodle).
+  - **Resolver `cmid→assignid`:** como las WS de mapeo están capadas, se resuelve igual que la Extensión Z — leyendo `data-assignmentid`/`data-contextid` del grader HTML (`/mod/assign/view.php?id={cmid}&action=grader`) **una sola vez** y cacheando en `Evidencia.assignId`/`contextId` (migración `add_evidencia_assign_instance_id`).
+  - **Flujo:** worker saca el sesskey → resuelve assignIds faltantes (concurrencia 5) → **1 POST batch** `mod_assign_list_participants` para todos los assigns activos → mapea `submitted`/`requiregrading`/`submissionstatus` a `calificado`/`pendiente`/`sin_entregar` (la nota la sigue poniendo el CSV). **Fallback a DOM** (`revisarEntregas`) intacto si falta sesskey, no se resolvió assignId, o el batch falla.
+  - **Medido en vivo** (ficha 3186684, courseId 51083): resolución cmid→assignid ~385-785 ms c/u; batch de 3 assigns (147 participantes) en **1 POST = 2,7 s**. Con assignId ya cacheado, el scan recurrente queda en ~1 batch sin importar el nº de evidencias.
+  - **Archivos:** `scraper/evidencias.js` (+`obtenerSesskey`, `resolverAssignInfo`, `estadoDesdeParticipante`, `listarParticipantesBatch`), `api/src/workers/evidenciasWorker.js` (bloque CAPA 2 + rama assign con fallback), `prisma/schema.prisma` + migración. Probes: `scripts/probe-ws-token.js`, `scripts/probe-ajax-participants.js`, `scripts/probe-capa2-flow.js`.
 
 ---
 
@@ -160,9 +202,10 @@ ZAJUNA_PASS=
 
 ### 🔴 PRÓXIMOS PASOS (en orden)
 
-**Paso 1 — Construir UI Fase 2 (selección masiva por competencia)**
-- Diseñar `EvidenciasPage.tsx` con agrupación por competencia y acciones en lote.
-- Conectar al backend con filtros `fichaId` + `competenciaId`.
+**Paso 1 — Revisar y commitear trabajo Fase 2 pendiente**
+- Revisar que los cambios en `ActasPage.tsx`, `Dashboard.tsx`, `EvidenciasConfig.tsx` estén completos.
+- Probar flujo en browser antes de commitear.
+- `git add` selectivo (no incluir scripts debug de root).
 
 **Paso 2 — Vincular evidencias a RAPs**
 ```powershell
@@ -172,15 +215,18 @@ node scripts/vincularEvidenciasRAPs.js              # ejecutar
 Resultado esperado: `RapEvidenciaRel` pasa de 0 a ~190 registros.
 Las actas pasan de `global-fallback` a modo **`per-rap`** real.
 
-**Paso 3 — Resolver extracción de guías (mod/folder o link directo)**
-Ver sección "PENDIENTE: Extracción de Guías" arriba.
+**Paso 3 — Revisar ramas pendientes**
+Hay 8 ramas sin revisar (ver tabla de ramas). Antes de mergear, auditar cuáles están completas y cuáles están a medias.
 
-**Paso 4 — Mergear `feature/strict-rap-mapping` a `main`**
+**Paso 4 — Mergear a `master`** (no `main`)
 ```powershell
-git checkout main
+git checkout master
 git merge feature/strict-rap-mapping
 git merge feature/gradebook-scan-v2
 ```
+
+**Paso 5 — Resolver extracción de guías (mod/folder o link directo)**
+Ver sección "PENDIENTE: Extracción de Guías" arriba.
 
 ---
 
@@ -280,7 +326,7 @@ Este repositorio está orquestado por **Antigravity (Arquitecto Principal)**. Si
 | Hallazgo | Severidad | Detalle |
 |---|---|---|
 | **0 tests backend** | 🔴 Alta | `find api -name "*.test.js"` → vacío. Cualquier refactor es a ciegas. `calcularEstado`/`esAprobada` solo tienen smoke test inline ad-hoc. |
-| **36 scripts huérfanos en root** | 🟠 Media | `test-*.js`, `debug-*.js`, `check-*.js`, `dump-*.js`, `diag-*.js`, etc. — basura de debug que no debería vivir en raíz. `.gitignore` no los cubre (están untracked manualmente). |
+| **39 scripts huérfanos en root** | 🟠 Media | `test-*.js`, `debug-*.js`, `check-*.js`, `dump-*.js`, `diag-*.js`, etc. — basura de debug que no debería vivir en raíz. `.gitignore` no los cubre (están untracked manualmente). Crecieron de 36 a 39 desde el 25-may. |
 | **Boilerplate Playwright duplicado** | 🟠 Media | 9 de 14 workers repiten el mismo bloque de 30 líneas (`loadSession` → `chromium.launch` → verificar URL → `login` → `saveSession`). Cualquier fix de auth se replica en 9 lugares. |
 | **Sin `/health` endpoint** | 🟠 Media | No hay manera de saber si Redis/Postgres están conectados antes de aceptar requests. Bloqueante para load balancer / k8s readiness probes. |
 | **`docs/ARCHITECTURE.md` referenciado pero no existe** | 🟡 Baja | CLAUDE.md sección 4 dice "ver `docs/ARCHITECTURE.md`" — solo hay `docs/MOODLE_REFERENCE.md`. Documentación arquitectónica está dispersa. |
@@ -343,11 +389,13 @@ Este repositorio está orquestado por **Antigravity (Arquitecto Principal)**. Si
 
 ---
 
-## 10. Próximos pasos sugeridos (post-25 mayo)
+## 10. Próximos pasos sugeridos (post-28 mayo)
 
-1. ✅ Hecho hoy: cleanup duplicados, hrefs canónicos, calcularEstado estricto, foroDescubrir end-to-end.
-2. 🟢 **Vincular RAPs**: `node scripts/vincularEvidenciasRAPs.js --dry-run` → ejecutar → `RapEvidenciaRel` pasa de 0 a ~190 y las actas usan modo `per-rap` real.
-3. 🟢 **UI Fase 2 (selección masiva por competencia)**: pendiente desde el 24-may. Construir `EvidenciasPage.tsx` con agrupación.
-4. 🟠 Configurar remote git y push de las dos ramas pendientes (`feature/strict-rap-mapping`, `feature/gradebook-scan-v2`).
-5. 🟠 Mergear `feature/strict-rap-mapping` a `main`, después `feature/gradebook-scan-v2`.
-6. 🟡 Atacar al menos uno de los puntos 1-4 de la sección 9.3 antes del próximo chicharrón.
+1. ✅ Hecho 25-may: cleanup duplicados, hrefs canónicos, calcularEstado estricto, foroDescubrir end-to-end.
+2. 🔄 **En progreso (sin commitear)**: scan/progress endpoint, auth timeout fix, Fase 2 UI (ActasPage nativa, Dashboard polling, EvidenciasConfig búsqueda/filtro).
+3. 🟢 **Commitear Fase 2**: revisar que esté completo en browser → `git add` selectivo → commit.
+4. 🟢 **Vincular RAPs**: `node scripts/vincularEvidenciasRAPs.js --dry-run` → ejecutar → `RapEvidenciaRel` pasa de 0 a ~190 y las actas usan modo `per-rap` real.
+5. 🟠 Auditar las 8 ramas sin revisar (ver tabla §7) antes de mergear.
+6. 🟠 Configurar remote git y push de ramas a origin.
+7. 🟠 Mergear ramas listas a `master` (no `main`).
+8. 🟡 Atacar al menos uno de los puntos 1-4 de la sección 9.3 antes del próximo chicharrón.

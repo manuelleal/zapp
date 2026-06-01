@@ -471,4 +471,127 @@ async function descargarGradebookCSV(page, courseId) {
   }
 }
 
-module.exports = { obtenerEvidencias, revisarEntregas, revisarEntregasForo, revisarEntregasQuiz, extraerPostsForo, obtenerMatriculados, descargarGradebookCSV };
+// ═══════════════════════════════════════════════════════════════════════════
+// CAPA 2 (perf) — Leer entregas de `assign` vía el AJAX interno de Moodle
+// (mod_assign_list_participants sobre /lib/ajax/service.php con el sesskey de la
+// sesión), en vez de navegar y raspar el DOM de view.php?action=grading.
+//
+// Por qué así (decidido tras probar contra SENA el 31-may, ver CLAUDE.md):
+//   • mod_assign_list_participants  → ✅ habilitado sobre la sesión (sesskey).
+//   • mod_assign_get_assignments / core_course_get_contents → ❌ capadas en SENA,
+//     así que el cmid→assignid se resuelve leyendo data-assignmentid del grader
+//     HTML una sola vez y se cachea en Evidencia.assignId (igual que la Extensión Z).
+//   • El token WS (/login/token.php) NO sirve: el login de SENA es SSO, lo rechaza.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Extrae el sesskey de la sesión Moodle desde la página actual.
+ * window.M.cfg.sesskey está presente en cualquier página post-login de Moodle.
+ */
+async function obtenerSesskey(page) {
+  return await page.evaluate(() => (window.M && window.M.cfg && window.M.cfg.sesskey) || null);
+}
+
+/**
+ * Resuelve cmid → { assignId, contextId } leyendo el grader HTML.
+ * mod_assign_list_participants exige el assignid (instance id), que NO viene en
+ * el Gradebook Tree (solo tenemos el cmid). El grader expone ambos en atributos
+ * data-*. Es una lectura única por evidencia: el worker cachea el resultado.
+ */
+async function resolverAssignInfo(page, cmid) {
+  const url = `${BASE_URL}/mod/assign/view.php?id=${cmid}&action=grader`;
+  const html = await page.evaluate(async (u) => {
+    try {
+      const res = await fetch(u, { credentials: "include" });
+      return await res.text();
+    } catch { return ""; }
+  }, url);
+  const mA = html.match(/data-assignmentid="?(\d+)"?/);
+  const mC = html.match(/data-contextid="?(\d+)"?/);
+  return {
+    assignId:  mA ? parseInt(mA[1], 10) : null,
+    contextId: mC ? parseInt(mC[1], 10) : null,
+  };
+}
+
+/**
+ * Traduce un participante de mod_assign_list_participants al estado interno.
+ * Mantiene la semántica del scraper DOM (revisarEntregas):
+ *   draft/reopened o requiregrading → "pendiente"; entregado y ya calificado →
+ *   "calificado"; sin entrega → "sin_entregar". La NOTA la pone luego el CSV.
+ */
+function estadoDesdeParticipante(p) {
+  const ss = (p.submissionstatus || "").toLowerCase();
+  if (ss === "draft" || ss === "reopened") return "pendiente";
+  if (p.requiregrading)                     return "pendiente";
+  if (p.submitted)                          return "calificado";
+  return "sin_entregar";
+}
+
+/**
+ * Llama mod_assign_list_participants para VARIOS assigns en UN solo POST batch
+ * (el AJAX de Moodle acepta un array de métodos y los resuelve del lado servidor;
+ * la Extensión Z hace exactamente esto en vez de Promise.all).
+ *
+ * @param {import('playwright').Page} page
+ * @param {string} sesskey
+ * @param {Array<{cmid:string, assignId:number}>} assigns
+ * @returns {Promise<Map<string, {participantes?:Array, error?:string}>>} keyed por cmid
+ */
+async function listarParticipantesBatch(page, sesskey, assigns) {
+  const out = new Map();
+  if (!sesskey || assigns.length === 0) return out;
+
+  const body = assigns.map((a, i) => ({
+    index: i,
+    methodname: "mod_assign_list_participants",
+    args: {
+      assignid: a.assignId,
+      groupid: 0,
+      filter: "",
+      skip: 0,
+      limit: 0,
+      onlyids: false,         // queremos los campos de estado, no solo ids
+      includeenrolments: true,
+      tablesort: false,
+    },
+  }));
+
+  const resp = await page.evaluate(async ({ base, sesskey, body }) => {
+    const url = `${base}/lib/ajax/service.php?sesskey=${encodeURIComponent(sesskey)}&info=mod_assign_list_participants`;
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(body),
+      });
+      const text = await res.text();
+      try { return { status: res.status, json: JSON.parse(text) }; }
+      catch { return { status: res.status, raw: text.slice(0, 300) }; }
+    } catch (e) { return { error: String(e && e.message || e) }; }
+  }, { base: BASE_URL, sesskey, body });
+
+  const arr = Array.isArray(resp.json) ? resp.json : [];
+  if (arr.length === 0) {
+    log(`[ajax-participants] sin respuesta usable (status=${resp.status || "?"} ${resp.error || resp.raw || ""})`);
+    return out;
+  }
+
+  arr.forEach((item, i) => {
+    const a = assigns[(item && item.index != null) ? item.index : i];
+    if (!a) return;
+    if (item.error) {
+      out.set(a.cmid, { error: (item.exception && item.exception.errorcode) || "error" });
+    } else {
+      out.set(a.cmid, { participantes: Array.isArray(item.data) ? item.data : [] });
+    }
+  });
+  return out;
+}
+
+module.exports = {
+  obtenerEvidencias, revisarEntregas, revisarEntregasForo, revisarEntregasQuiz,
+  extraerPostsForo, obtenerMatriculados, descargarGradebookCSV,
+  obtenerSesskey, resolverAssignInfo, estadoDesdeParticipante, listarParticipantesBatch,
+};
