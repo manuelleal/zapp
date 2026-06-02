@@ -1,13 +1,8 @@
 const prisma = require("../db/client");
 const { cambiarFechaQueue, cambiarConfigQueue } = require("../lib/queue");
+const { actIdFromHref } = require("../lib/hrefUtils");
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
-
-function actIdFromHref(href) {
-  if (!href) return null;
-  const m = href.match(/[?&]id=(\d+)/);
-  return m ? m[1] : null;
-}
 
 function parsearDatetime(str) {
   if (!str || typeof str !== "string") return null;

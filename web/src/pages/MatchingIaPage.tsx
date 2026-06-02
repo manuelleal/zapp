@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   Sparkles, ChevronDown, ChevronRight, CheckCircle, XCircle,
@@ -7,7 +7,8 @@ import {
 import Layout from "@/components/Layout"
 import { Button }  from "@/components/ui/button"
 import { Badge }   from "@/components/ui/badge"
-import { apiFetch, authFetch, ApiError } from "@/api/client"
+import { apiFetch, ApiError } from "@/api/client"
+import { usePollJob } from "@/hooks/usePollJob"
 import { toast } from "sonner"
 import { useAuthStore } from "@/store/auth"
 import { useNavigate } from "react-router-dom"
@@ -71,41 +72,6 @@ function estadoBadge(estado: string) {
   if (estado === "aprobado")  return <Badge variant="green"  className="text-xs">Aprobada</Badge>
   if (estado === "rechazado") return <Badge variant="destructive" className="text-xs">Rechazada</Badge>
   return null
-}
-
-// ─── Polling hook ─────────────────────────────────────────────────────────────
-
-function usePollJob() {
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
-
-  function stop() {
-    if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null }
-  }
-
-  function start(
-    jobId:       string,
-    onDone:      (resultado: unknown) => void,
-    onError:     (msg: string) => void,
-    onProgress?: (p: number) => void,
-  ) {
-    stop()
-    intervalRef.current = setInterval(async () => {
-      try {
-        const res  = await authFetch(`/api/jobs/${encodeURIComponent(jobId)}`)
-        const data = await res.json()
-        if (!res.ok) { stop(); onError(data?.errorMsg || `Error ${res.status}`); return }
-        if (data.status === "done")        { stop(); onDone(data.resultado) }
-        else if (data.status === "error")  { stop(); onError(data.errorMsg || "El job falló.") }
-        else onProgress?.(data.progreso || 0)
-      } catch (e) {
-        stop()
-        onError(e instanceof Error ? e.message : "Error de red.")
-      }
-    }, 3000)
-  }
-
-  useEffect(() => () => stop(), [])
-  return { start, stop }
 }
 
 // ─── Main page ────────────────────────────────────────────────────────────────

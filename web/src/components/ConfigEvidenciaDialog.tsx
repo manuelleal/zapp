@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect } from "react"
 import {
   Dialog,
   DialogContent,
@@ -9,7 +9,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Settings, Loader2, CheckCircle, AlertCircle, Zap, RefreshCw } from "lucide-react"
-import { apiFetch, authFetch, ApiError } from "@/api/client"
+import { apiFetch, ApiError } from "@/api/client"
+import { usePollJob } from "@/hooks/usePollJob"
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -64,40 +65,6 @@ function configToForm(c: Config) {
     limiteHora:   c.limiteHora   ?? "",
     intentos:     c.intentos === "Ilimitado" ? "-1" : c.intentos !== null ? String(c.intentos) : "",
   }
-}
-
-// ─── Polling hook ─────────────────────────────────────────────────────────────
-
-function usePollJob() {
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
-
-  function stop() {
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current)
-      intervalRef.current = null
-    }
-  }
-
-  function start(jobId: string, onDone: (resultado: unknown) => void, onError: (msg: string) => void, onProgress?: (p: number) => void) {
-    stop()
-    intervalRef.current = setInterval(async () => {
-      try {
-        const res  = await authFetch(`/api/jobs/${encodeURIComponent(jobId)}`)
-        const data = await res.json()
-        if (!res.ok) { stop(); onError(data?.errorMsg || `Error ${res.status}`); return }
-        if (data.status === "done")  { stop(); onDone(data.resultado) }
-        else if (data.status === "error") { stop(); onError(data.errorMsg || "El job falló.") }
-        else onProgress?.(data.progreso || 0)
-      } catch (e) {
-        stop()
-        onError(e instanceof Error ? e.message : "Error de red.")
-      }
-    }, 3000)
-  }
-
-  useEffect(() => () => stop(), [])
-
-  return { start, stop }
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────

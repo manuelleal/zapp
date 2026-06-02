@@ -6,6 +6,7 @@ import Layout from "@/components/Layout"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { apiFetch, ApiError } from "@/api/client"
+import { tiempoRelativo, gaNum } from "@/lib/utils"
 import { useAuthStore } from "@/store/auth"
 import AprendicesPanel from "@/components/AprendicesPanel"
 
@@ -42,21 +43,6 @@ interface ScanProgress {
   failed: number
 }
 
-function tiempoRelativo(fecha: string | null): string {
-  if (!fecha) return "Sin escanear"
-  const diff = Date.now() - new Date(fecha).getTime()
-  const mins = Math.floor(diff / 60000)
-  if (mins < 1) return "Hace un momento"
-  if (mins < 60) return `Hace ${mins} min`
-  const hrs = Math.floor(mins / 60)
-  if (hrs < 24) return `Hace ${hrs}h`
-  return `Hace ${Math.floor(hrs / 24)}d`
-}
-
-function gaNum(nombre: string): number {
-  const m = nombre.match(/GA(\d+)/i)
-  return m ? parseInt(m[1]) : 999
-}
 
 function PendientesBadge({ ev }: { ev: EvidenciaActiva }) {
   if (ev.calificandoAt) return <Badge variant="yellow" className="text-xs">Calificando</Badge>

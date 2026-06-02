@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef, useMemo } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { apiFetch, authFetch, ApiError } from "@/api/client"
+import { apiFetch, ApiError } from "@/api/client"
+import { usePollJob, pollJobOnce } from "@/hooks/usePollJob"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { RefreshCw, Loader2, Search, X, CheckCircle, AlertCircle, Save, Square, CheckSquare } from "lucide-react"
@@ -57,27 +58,6 @@ function configToEdit(c: ConfigCache | null): RowEdit {
     limiteHora:   c.limiteHora   ?? "",
     intentos:     c.intentos === "Ilimitado" ? "-1" : c.intentos != null ? String(c.intentos) : "",
   }
-}
-
-// ─── Polling hook (igual que ConfigEvidenciaDialog) ──────────────────────────
-function usePollJob() {
-  const ref = useRef<ReturnType<typeof setInterval> | null>(null)
-  const stop = () => { if (ref.current) { clearInterval(ref.current); ref.current = null } }
-  function start(jobId: string, onDone: (r: unknown) => void, onError: (m: string) => void, onProgress?: (p: number) => void) {
-    stop()
-    ref.current = setInterval(async () => {
-      try {
-        const res = await authFetch(`/api/jobs/${encodeURIComponent(jobId)}`)
-        const data = await res.json()
-        if (!res.ok) { stop(); onError(data?.errorMsg || `Error ${res.status}`); return }
-        if (data.status === "done") { stop(); onDone(data.resultado) }
-        else if (data.status === "error") { stop(); onError(data.errorMsg || "El job falló.") }
-        else onProgress?.(data.progreso || 0)
-      } catch (e) { stop(); onError(e instanceof Error ? e.message : "Error de red.") }
-    }, 3000)
-  }
-  useEffect(() => () => stop(), [])
-  return { start, stop }
 }
 
 // ─── Componente ──────────────────────────────────────────────────────────────
@@ -332,16 +312,3 @@ function DateTimeCell({ enabled, fecha, hora, onFecha, onHora }: {
   )
 }
 
-// Poll de un job hasta done/error. Función simple (no es hook) para usar dentro
-// de saveRow. Cada llamada abre su propio intervalo y lo limpia al terminar.
-function pollJobOnce(jobId: string, onDone: () => void, onError: (m: string) => void) {
-  const iv = setInterval(async () => {
-    try {
-      const res = await authFetch(`/api/jobs/${encodeURIComponent(jobId)}`)
-      const data = await res.json()
-      if (!res.ok) { clearInterval(iv); onError(data?.errorMsg || `Error ${res.status}`); return }
-      if (data.status === "done") { clearInterval(iv); onDone() }
-      else if (data.status === "error") { clearInterval(iv); onError(data.errorMsg || "El job falló.") }
-    } catch (e) { clearInterval(iv); onError(e instanceof Error ? e.message : "Error de red.") }
-  }, 3000)
-}

@@ -6,12 +6,7 @@
 
 const prisma = require("../db/client");
 const { foroRatingQueue, foroDescubrirQueue } = require("../lib/queue");
-
-function actIdFromHref(href) {
-  if (!href) return null;
-  const m = href.match(/[?&]id=(\d+)/);
-  return m ? m[1] : null;
-}
+const { actIdFromHref } = require("../lib/hrefUtils");
 
 async function foroRatingRoutes(fastify) {
   // PATCH /api/evidencias/:id/foro/calificar

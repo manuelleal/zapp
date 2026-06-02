@@ -1,14 +1,9 @@
 const prisma = require("../db/client");
 const { configQueue, leerConfigQueue, leerConfigLoteQueue } = require("../lib/queue");
 const { encrypt } = require("../lib/crypto");
+const { actIdFromHref } = require("../lib/hrefUtils");
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
-
-function actIdFromHref(href) {
-  if (!href) return null;
-  const m = href.match(/[?&]id=(\d+)/);
-  return m ? m[1] : null;
-}
 
 async function getEvidenciaConAcceso(evidenciaId, userId) {
   const ev = await prisma.evidencia.findUnique({

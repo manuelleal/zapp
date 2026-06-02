@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { ChevronDown, ChevronRight, RefreshCw, Zap, Settings, CheckSquare, Square, Calendar, X, CheckCircle, AlertCircle, Loader2, SlidersHorizontal, Search, Archive, ArchiveRestore } from "lucide-react"
 import Layout from "@/components/Layout"
@@ -6,12 +6,14 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
 import { Checkbox } from "@/components/ui/checkbox"
-import { apiFetch, authFetch, ApiError } from "@/api/client"
+import { apiFetch, ApiError } from "@/api/client"
 import { useAuthStore } from "@/store/auth"
 import { useNavigate } from "react-router-dom"
 import ConfigEvidenciaDialog from "@/components/ConfigEvidenciaDialog"
 import BatchConfigModal, { BatchCambios } from "@/components/BatchConfigModal"
 import ConfigTabla from "@/components/ConfigTabla"
+import { usePollJob } from "@/hooks/usePollJob"
+import { tiempoRelativo, gaNum } from "@/lib/utils"
 
 interface Evidencia {
   id: string
@@ -40,21 +42,6 @@ interface ScanStatus {
 
 type BatchPhase = "idle" | "confirm" | "running" | "done" | "error"
 
-function tiempoRelativo(fecha: string | null): string {
-  if (!fecha) return "Nunca"
-  const diff = Date.now() - new Date(fecha).getTime()
-  const mins = Math.floor(diff / 60000)
-  if (mins < 1) return "Hace un momento"
-  if (mins < 60) return `Hace ${mins} min`
-  const hrs = Math.floor(mins / 60)
-  if (hrs < 24) return `Hace ${hrs}h`
-  return `Hace ${Math.floor(hrs / 24)}d`
-}
-
-function gaNum(nombre: string): number {
-  const m = nombre.match(/GA(\d+)/i)
-  return m ? parseInt(m[1]) : 999
-}
 
 function agruparPorGA(evidencias: Evidencia[]): { label: string; gaKey: number; items: Evidencia[] }[] {
   const mapa: Record<number, Evidencia[]> = {}
@@ -78,41 +65,6 @@ function tipoBadge(tipo: string) {
       {map[tipo] ?? tipo}
     </Badge>
   )
-}
-
-// ─── Polling hook reutilizable ────────────────────────────────────────────────
-
-function usePollJob() {
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
-
-  function stop() {
-    if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null }
-  }
-
-  function start(
-    jobId: string,
-    onDone:     (resultado: unknown) => void,
-    onError:    (msg: string) => void,
-    onProgress?: (p: number) => void,
-  ) {
-    stop()
-    intervalRef.current = setInterval(async () => {
-      try {
-        const res  = await authFetch(`/api/jobs/${encodeURIComponent(jobId)}`)
-        const data = await res.json()
-        if (!res.ok) { stop(); onError(data?.errorMsg || `Error ${res.status}`); return }
-        if (data.status === "done")  { stop(); onDone(data.resultado) }
-        else if (data.status === "error") { stop(); onError(data.errorMsg || "El job falló.") }
-        else onProgress?.(data.progreso || 0)
-      } catch (e) {
-        stop()
-        onError(e instanceof Error ? e.message : "Error de red.")
-      }
-    }, 3000)
-  }
-
-  useEffect(() => () => stop(), [])
-  return { start, stop }
 }
 
 // ─── Componente principal ─────────────────────────────────────────────────────
