@@ -1,4 +1,4 @@
-const { Queue, QueueEvents } = require("bullmq");
+const { Queue } = require("bullmq");
 const IORedis = require("ioredis");
 
 const connection = new IORedis(process.env.REDIS_URL, { maxRetriesPerRequest: null });
@@ -11,7 +11,6 @@ const retryOpts = {
 };
 
 const fichasQueue       = new Queue("fichas",     { connection, defaultJobOptions: retryOpts });
-const fichasQueueEvents = new QueueEvents("fichas", { connection });
 const evidenciasQueue   = new Queue("evidencias", { connection, defaultJobOptions: retryOpts });
 const configQueue       = new Queue("config",     { connection, defaultJobOptions: { ...retryOpts, attempts: 2 } });
 const leerConfigQueue   = new Queue("leerConfig",   { connection, defaultJobOptions: { ...retryOpts, attempts: 2 } });
@@ -35,4 +34,4 @@ autoScanQueue.add("auto-scan-all", {}, {
 }).then(() => console.log("[autoScan] repeatable job registered (cada 3h)"))
   .catch(e => console.error("[autoScan] no se pudo registrar repeatable job:", e.message));
 
-module.exports = { fichasQueue, fichasQueueEvents, evidenciasQueue, configQueue, leerConfigQueue, leerConfigLoteQueue, cambiarFechaQueue, cambiarConfigQueue, foroRatingQueue, foroDescubrirQueue, autoScanQueue, matchingIaQueue, mensajesQueue, syncParticipantesQueue, emailMasivoQueue, descubrirCompetenciasQueue, connection };
+module.exports = { fichasQueue, evidenciasQueue, configQueue, leerConfigQueue, leerConfigLoteQueue, cambiarFechaQueue, cambiarConfigQueue, foroRatingQueue, foroDescubrirQueue, autoScanQueue, matchingIaQueue, mensajesQueue, syncParticipantesQueue, emailMasivoQueue, descubrirCompetenciasQueue, connection };

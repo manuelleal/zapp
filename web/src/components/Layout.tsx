@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from "react-router-dom"
-import { LogOut, LayoutDashboard, FolderOpen, Settings2, BookOpen, Sparkles, ClipboardList, Mail, Settings } from "lucide-react"
+import { LogOut, LayoutDashboard, FolderOpen, Settings2, BookOpen, ClipboardList, Mail, Settings } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAuthStore } from "@/store/auth"
 

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { ChevronDown, ChevronRight, RefreshCw, Zap, Settings, CheckSquare, Square, Calendar, X, CheckCircle, AlertCircle, Loader2, SlidersHorizontal, Search, Filter, Archive, ArchiveRestore } from "lucide-react"
+import { ChevronDown, ChevronRight, RefreshCw, Zap, Settings, CheckSquare, Square, Calendar, X, CheckCircle, AlertCircle, Loader2, SlidersHorizontal, Search, Archive, ArchiveRestore } from "lucide-react"
 import Layout from "@/components/Layout"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"

@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   ClipboardList, Plus, Loader2, AlertCircle, Users,
   MessageSquare, ChevronDown, ChevronRight, ChevronUp, Lock, Download, FileText,
-  Trash2, Archive, ArchiveRestore, AlertTriangle, Send, Settings,
+  Trash2, Archive, ArchiveRestore, AlertTriangle, Send,
 } from "lucide-react"
 import Layout from "@/components/Layout"
 import { Button } from "@/components/ui/button"
