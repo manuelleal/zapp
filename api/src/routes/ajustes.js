@@ -3,7 +3,7 @@ const prisma = require("../db/client");
 const { encrypt, decrypt } = require("../lib/crypto");
 const { descubrirCompetenciasQueue } = require("../lib/queue");
 
-const SUPERADMIN = "ddiddimmo@gmail.com";
+const SUPERADMIN = process.env.SUPERADMIN_EMAIL ?? "ddiddimmo@gmail.com";
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
