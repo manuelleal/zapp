@@ -1,6 +1,6 @@
 # CLAUDE.md — Zajuna App
 
-> **Última actualización:** 31 mayo 2026 (scan Capa 1+2 commiteado en `58d1e2a`; diagnosticado el bloqueador de actas `RapEvidenciaRel=0`; Fase 2 UI aún sin commitear).
+> **Última actualización:** 1 junio 2026 (auditoría de producción Opus — ver **§11**: bottleneck de proceso único, causa real del OOM, fetch ya al ~70%, triaje P0/P1/P2, infra recomendada. Scan Capa 1+2 commiteado en `58d1e2a`; bloqueador de actas `RapEvidenciaRel=0` sigue **ABIERTO**; Fase 2 UI aún sin commitear).
 > Este documento es la **fuente única de verdad** para los agentes de IA. Contiene las reglas del proyecto, decisiones de arquitectura y comandos de desarrollo. 
 
 ## 1. Qué es este proyecto
@@ -28,7 +28,7 @@ docker-compose up -d
 # 2. Matar nodes viejos (¡CRÍTICO! Los workers leen la config solo al arrancar)
 Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force
 
-# 3. Arrancar el server (inicia API en puerto 3000 + 12 workers)
+# 3. Arrancar el server (inicia API en puerto 3000 + 15 workers — TODO en UN proceso, ver §11.1)
 node api/src/server.js
 
 # 4. Frontend en modo desarrollo (HMR en puerto 5173, opcional)
@@ -337,13 +337,13 @@ Este repositorio está orquestado por **Antigravity (Arquitecto Principal)**. Si
 
 | Hallazgo | Severidad | Detalle |
 |---|---|---|
-| **0 tests backend** | 🔴 Alta | `find api -name "*.test.js"` → vacío. Cualquier refactor es a ciegas. `calcularEstado`/`esAprobada` solo tienen smoke test inline ad-hoc. |
+| **Tests backend parciales** | 🟡 Baja | Existe `api/src/lib/calificacion.test.js` y `package.json` corre `node --test`. La cobertura es mínima pero la infraestructura existe. |
 | **39 scripts huérfanos en root** | 🟠 Media | `test-*.js`, `debug-*.js`, `check-*.js`, `dump-*.js`, `diag-*.js`, etc. — basura de debug que no debería vivir en raíz. `.gitignore` no los cubre (están untracked manualmente). Crecieron de 36 a 39 desde el 25-may. |
-| **Boilerplate Playwright duplicado** | 🟠 Media | 9 de 14 workers repiten el mismo bloque de 30 líneas (`loadSession` → `chromium.launch` → verificar URL → `login` → `saveSession`). Cualquier fix de auth se replica en 9 lugares. |
-| **Sin `/health` endpoint** | 🟠 Media | No hay manera de saber si Redis/Postgres están conectados antes de aceptar requests. Bloqueante para load balancer / k8s readiness probes. |
+| **Boilerplate Playwright duplicado** | 🟠 Media | 15 workers repiten bloque de inicialización. Cualquier fix de auth se replica en muchos lugares. |
+| **Endpoint `/health` existente** | ✅ Resuelto | Ya existe en `server.js:63-74` haciendo `SELECT 1` y `redis.ping()`. |
 | **`docs/ARCHITECTURE.md` referenciado pero no existe** | 🟡 Baja | CLAUDE.md sección 4 dice "ver `docs/ARCHITECTURE.md`" — solo hay `docs/MOODLE_REFERENCE.md`. Documentación arquitectónica está dispersa. |
 | **`pdf-parse` con API no estándar** | 🟡 Baja | `const { PDFParse } = require("pdf-parse")` + `new PDFParse({...}).getText()` no es la API oficial del paquete. Si actualizas la versión, todo extractor de guías se rompe. Fija la versión en `package.json` o migra a la API estándar. |
-| **Rate limit in-memory** | 🟡 Baja | `auth.js` usa `new Map()`. No escala con múltiples instancias y se pierde en restart. OK para tu caso (single node) pero bloqueante al escalar. |
+| **Rate limit in-memory + bug** | 🔴 Alta | `auth.js` usa `new Map()`. RATE_MAX es 500 pero el comentario dice 5. Bloqueante al escalar y agujero de seguridad. |
 | **`autoScan` cron sin guard** | 🟡 Baja | Repeatable cada 3h. Si Redis está caído al arrancar, el `.then().catch()` solo loguea. No re-intenta. |
 | **AIPI ACTA... .docx + acta_03_...pdf borrados sin commit** | 🟡 Baja | `git status` muestra archivos `D` (deleted) desde hace días. Decidir si recuperar o `git rm`. |
 
@@ -410,4 +410,67 @@ Este repositorio está orquestado por **Antigravity (Arquitecto Principal)**. Si
 5. 🟠 Auditar las 8 ramas sin revisar (ver tabla §7) antes de mergear.
 6. 🟠 Configurar remote git y push de ramas a origin.
 7. 🟠 Mergear ramas listas a `master` (no `main`).
-8. 🟡 Atacar al menos uno de los puntos 1-4 de la sección 9.3 antes del próximo chicharrón.
+8. 🔴 **Implementar Refactor P0 (Bloqueador Producción)**: Ver **§11** (auditoría de producción). Separar API de workers en PM2, usar Playwright compartido + context-por-job, y bloquear recursos (OOM Fix).
+
+---
+
+## 11. Auditoría de producción / despliegue (1 junio 2026 — sesión Opus)
+
+> Sesión disparada por el handoff *"Technical Debt & Production Bottlenecks"*. Tres conclusiones que reordenan ese documento:
+> 1. **El cuello de botella #1 no es Playwright; es que la API y los 15 workers corren en UN solo proceso** (§11.1). Eso convierte un OOM de scraper en una caída total de la app.
+> 2. **Varios "pendientes" del handoff ya estaban resueltos** en el código (ver §9.2): `/health` existe, hay infra de tests (`calificacion.test.js`), Capa 2 AJAX y cacheo de sesión en Redis ya están.
+> 3. **El bloqueador real del producto sigue siendo actas** (`RapEvidenciaRel=0`, §Paso 0), NO la infraestructura. Hoy generar actas devuelve **422 a todo usuario**. Optimizar para "+100 instructores" antes de arreglar eso es prematuro.
+
+### 11.1 — Hallazgo central: proceso único (no está en el handoff)
+
+`api/src/server.js:96-110` hace `require()` de la API **y de los 15 workers en el mismo proceso Node**. Consecuencias:
+- Un OOM de cualquier scraper **tumba también la API** — los instructores ven la app caída, no solo el scan.
+- La concurrencia real de navegadores = **suma de todas las colas**. Workers que lanzan Chromium: `fichas=5 + evidencias=3 + foroRating=2 + foroDescubrir=2 + (config, leerConfig, leerConfigLote, cambiarFecha, cambiarConfig, mensajes, syncParticipantes, descubrirCompetencias)=1 c/u` → **hasta ~19-20 Chromium simultáneos en un proceso** (`matchingIa` y `emailMasivo` no lanzan browser). A 150-300 MB c/u = 3-6 GB solo de navegadores.
+- Cada job hace `chromium.launch()` nuevo (**browser-por-job**), no un browser compartido con contextos. Lanzar el browser es lo caro; un context son pocos MB.
+- **Cero bloqueo de recursos:** ningún worker usa `page.route`/abort. Se descargan imágenes/CSS/fuentes/media inútiles en cada navegación. Confirmado por grep.
+
+→ **Eso es el OOM**, no "un scan grande".
+
+### 11.2 — Q2 (fetch con cookies, −90% RAM): viable y YA al ~70% construido
+
+- `scraper/evidencias.js:541` `listarParticipantesBatch` **ya** consulta `mod_assign_list_participants` por `fetch()` con `credentials:"include"`, en lote. **Pero corre dentro de `page.evaluate()`** → todavía dentro de Chromium (gana "JSON vs DOM", NO gana "matar Chromium").
+- `api/src/lib/sessionStore.js` **ya** persiste el `storageState` (cookies) en Redis cifrado, TTL 2h.
+- `api/src/lib/fetchWithRetry.js` **ya** es el helper Node (modelado en la Extensión Z) — pero **NO se importa en ningún worker** (cableado a medias).
+- **Gap exacto:** sacar el `fetch` de `page.evaluate` a Node → extraer cookies del `storageState` → header `Cookie` + `fetchWithRetry`; parsear HTML con **cheerio** (falta en `package.json`). El `sesskey` se obtiene con regex (ya se hace en `resolverAssignInfo`).
+- **Lo que NO se puede sacar de Chromium:** el LOGIN (portal SSO con JS de SENA, `scraper/auth.js:33-49`; por eso `token.php` da `invalidlogin`). Solución: un worker de "acuñar sesión" que solo loguea y guarda `storageState`; todo lo demás (lecturas y la mayoría de escrituras, regla #7) pasa a Node fetch.
+- **Riesgo a validar ANTES de migrar:** WAF/Cloudflare con fingerprint TLS (JA3) podría bloquear un `fetch` crudo de Node donde Chromium pasaba. Probe de 1 archivo en Node con cookies vivas antes de comprometer la migración.
+
+### 11.3 — Triaje para v1.0.0 (P0 / P1 / P2)
+
+**🔴 P0 — bloqueadores de producción (~1 día total):**
+1. **Separar API y workers en procesos PM2 distintos** (`worker-entry.js`; quitar los `require` de workers de `server.js`). Un OOM de scraper deja de tumbar la API. ~1h. *(Mantener los workers en UN proceso: si corres 2, duplicas browsers por usuario → Moodle invalida la sesión.)*
+2. **Browser compartido + context-por-job** (un `chromium.launch` long-lived por proceso de worker). ~2h.
+3. **Bloqueo de recursos** (`ctx.route` que aborte `image/font/media/stylesheet`). ~1h.
+4. **Cap global de navegadores concurrentes** (semáforo en `lib/`). ~1h.
+5. **Fix rate-limit:** `RATE_MAX=500` con comentario que dice "5" (`api/src/routes/auth.js:8`). Decidir valor real. ~15min.
+
+> Con P0 #1-4 el OOM se va **sin** migrar a fetch — eso compra tiempo para hacer la migración (P1 #7) con calma.
+
+**🟠 P1 — post-launch (~3-4 días):**
+6. `api/src/lib/playwrightSession.js` factory (dedupe el boilerplate login/sesión de ~12 workers; aísla el riesgo "SENA cambia el selector → editar 12 archivos").
+7. **Migrar la ruta de LECTURA a Node fetch** (probe WAF → evidencias → cheerio). El −90% RAM real de §11.2.
+8. Rate limiter a Redis (ya hay `ioredis`).
+9. `autoScan` fail-safe (re-registrar al reconectar Redis + manejo de jobs `stalled`; hoy si Redis cae al boot solo loguea, `lib/queue.js:35`).
+10. Idempotencia `foroRating` (`attempts:1` o trackear `moodleUserId` ya posteados; hoy `attempts:3` → riesgo de doble calificación).
+
+**🟡 P2 — higiene (cuando puedas):**
+11. **Limpieza de basura — inventario verificado en `docs/CLEANUP_AUDIT.md`** (3 agentes Sonnet + verificación manual, 2 jun): ~7 MB de binarios/logs **tracked** a purgar con `git rm --cached` (root.*.js, vendor.*.js, server logs, ~30 probe PNGs, 7 PDFs), ~39 scripts de debug ignorados a borrar del disco, código muerto (`EvidenciasModal` 656 líneas, `fetchWithRetry`, `fichasQueueEvents`, `apiFetchWithRetry`/`configCache`), duplicación (`usePollJob`×4, `actIdFromHref`×3), y 2 worktrees clutter. ⚠️ Los agentes alucinaron `worker-entry.js`/`playwrightSession.js` (no existen — descartar).
+12. Tests del motor (`calcularEstado`/`esAprobada`/`normalizarHref`; infra ya existe).
+13. **SSE/WebSockets en vez de polling: DIFERIR.** A 100 usuarios el polling cada 3-15s es perfectamente sostenible; no es bloqueador de v1.0.0.
+
+### 11.4 — Infra recomendada (respuesta a Q1)
+
+- **1 VPS robusto (Hetzner CPX31/41, ~€15-25/mes)** — NO serverless, NO k8s. Costo total realista **USD 20-40/mes**.
+- **Serverless (Lambda/Cloud Run):** cold start de Chromium brutal + límite de tiempo de ejecución + pelea con la restricción de **1 sesión Moodle por usuario** (afinidad de sesión dolorosa). Mal encaje.
+- **k8s:** sobreingeniería para 100 usuarios; el costo operativo supera al de infra.
+- **PM2:** app `api` (puede ir cluster, es HTTP stateless) + app `workers` (fork, **1 instancia**). Redis + Postgres en la misma caja con backups diarios para arrancar; Postgres gestionado (Neon/Supabase) si se quiere HA.
+- El escalado horizontal real **no es más cajas, es sacar las lecturas de Chromium** (P1 #7). Un worker de lectura por fetch pesa decenas de MB.
+
+### 11.5 — Nota estratégica (prioridad de negocio)
+
+El handoff pregunta *"¿cómo soporto +100 instructores?"* mientras la función estrella (generar actas) devuelve **422 a todos** por `RapEvidenciaRel=0` (§Paso 0). **Secuencia recomendada:** P0 (estabilizar, ~1 día) → **desbloquear actas** → ponerlo frente a ~5 instructores reales → decidir P1 con datos de uso real. *No construir para 100 instructores hasta tener 10 contentos.*
