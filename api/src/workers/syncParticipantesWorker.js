@@ -1,7 +1,7 @@
 require("dotenv").config({ path: require("path").resolve(__dirname, "../../../.env") });
 
 const { Worker } = require("bullmq");
-const { chromium } = require("playwright");
+const { acquireContext, releaseContext } = require("../lib/browserPool");
 const { connection } = require("../lib/queue");
 const { decrypt } = require("../lib/crypto");
 const prisma = require("../db/client");
@@ -22,8 +22,7 @@ const worker = new Worker("syncParticipantes", async (job) => {
   const zajunaUser = decrypt(zajunaUserEnc);
   const zajunaPass = decrypt(zajunaPassEnc);
 
-  const browser = await chromium.launch({ headless: true });
-  const ctx     = await browser.newContext({ locale: "es-CO", timezoneId: "America/Bogota" });
+  const ctx     = await acquireContext({ locale: "es-CO", timezoneId: "America/Bogota" });
   const page    = await ctx.newPage();
   page.setDefaultTimeout(45_000);
 
@@ -69,7 +68,7 @@ const worker = new Worker("syncParticipantes", async (job) => {
     log(`[syncParticipantesWorker] fichaId=${fichaId} — actualizados=${actualizados}, sinMatch=${sinMatch}, total=${participantes.length}`);
     return { actualizados, creadosEmails, sinMatch, total: participantes.length };
   } finally {
-    try { await browser.close(); } catch (_) {}
+    await releaseContext(ctx);
   }
 }, { connection, concurrency: 1 });
 

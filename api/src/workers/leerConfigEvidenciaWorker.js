@@ -1,7 +1,7 @@
 require("dotenv").config({ path: require("path").resolve(__dirname, "../../../.env") });
 
 const { Worker, UnrecoverableError } = require("bullmq");
-const { chromium } = require("playwright");
+const { acquireContext, releaseContext } = require("../lib/browserPool");
 const { connection } = require("../lib/queue");
 const { decrypt } = require("../lib/crypto");
 const { saveSession, loadSession } = require("../lib/sessionStore");
@@ -27,18 +27,17 @@ const worker = new Worker("leerConfig", async (job) => {
   const zajunaPass = decrypt(zajunaPassEnc);
 
   const savedSession = await loadSession(userId);
-  let browser = await chromium.launch({ headless: true });
-  let browserClosed = false;
-
-  async function closeBrowser() {
-    if (!browserClosed) { browserClosed = true; await browser.close(); }
-  }
-
-  const ctx = await browser.newContext({
+  const ctx = await acquireContext({
     locale: "es-CO",
     timezoneId: "America/Bogota",
     ...(savedSession ? { storageState: savedSession } : {}),
   });
+  let ctxReleased = false;
+  // Cierra el primer context de forma idempotente. En el path de reintento por
+  // sesión expirada se libera este context y se adquiere uno nuevo (ctx2).
+  async function releaseFirst() {
+    if (!ctxReleased) { ctxReleased = true; await releaseContext(ctx); }
+  }
   const page = await ctx.newPage();
   page.setDefaultTimeout(30_000);
 
@@ -83,10 +82,9 @@ const worker = new Worker("leerConfig", async (job) => {
       ) {
         log(`[leerConfigWorker] Primer intento falló (${firstErr.message}). Borrando sesión y reintentando con login fresco.`);
         await saveSession(userId, null).catch(() => {});
-        await closeBrowser();
+        await releaseFirst();
 
-        const browser2 = await chromium.launch({ headless: true });
-        const ctx2     = await browser2.newContext({ locale: "es-CO", timezoneId: "America/Bogota" });
+        const ctx2     = await acquireContext({ locale: "es-CO", timezoneId: "America/Bogota" });
         const page2    = await ctx2.newPage();
         page2.setDefaultTimeout(30_000);
         try {
@@ -105,7 +103,7 @@ const worker = new Worker("leerConfig", async (job) => {
           await prisma.job.update({ where: { id: jobId }, data: { progreso: 65 } });
           configActual = await leerConfigEvidencia(page2, actId);
         } finally {
-          await browser2.close();
+          await releaseContext(ctx2);
         }
         // Persist and return early from the retry path
         await prisma.evidenciaConfig.create({ data: { evidenciaId, raw: configActual.raw ?? {} } });
@@ -142,7 +140,7 @@ const worker = new Worker("leerConfig", async (job) => {
     });
 
   } finally {
-    await closeBrowser();
+    await releaseFirst();
   }
 
 }, { connection, concurrency: 1 });

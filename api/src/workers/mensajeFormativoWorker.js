@@ -1,7 +1,7 @@
 require("dotenv").config({ path: require("path").resolve(__dirname, "../../../.env") });
 
 const { Worker } = require("bullmq");
-const { chromium } = require("playwright");
+const { acquireContext, releaseContext } = require("../lib/browserPool");
 const { connection } = require("../lib/queue");
 const { decrypt } = require("../lib/crypto");
 const { saveSession, loadSession } = require("../lib/sessionStore");
@@ -30,8 +30,7 @@ const worker = new Worker("mensajes", async (job) => {
 
   async function getPaginaAutenticada() {
     const savedSession = await loadSession(userId);
-    const browser = await chromium.launch({ headless: true });
-    const ctx = await browser.newContext({
+    const ctx = await acquireContext({
       locale:     "es-CO",
       timezoneId: "America/Bogota",
       ...(savedSession ? { storageState: savedSession } : {}),
@@ -51,14 +50,14 @@ const worker = new Worker("mensajes", async (job) => {
       const state = await ctx.storageState();
       await saveSession(userId, state).catch(e => log(`[mensajeFormativoWorker] no se pudo guardar sesión: ${e.message}`));
     }
-    return { browser, page, ctx };
+    return { ctx, page };
   }
 
   // ─── Login inicial ─────────────────────────────────────────────────────────
 
-  let browser, page;
+  let ctx, page;
   try {
-    ({ browser, page } = await getPaginaAutenticada());
+    ({ ctx, page } = await getPaginaAutenticada());
   } catch (err) {
     await prisma.mensajeFormativo.update({
       where: { id: mensajeId },
@@ -107,10 +106,10 @@ const worker = new Worker("mensajes", async (job) => {
             resultado.error.includes("session")
           )) {
             log("[mensajeFormativoWorker] Posible sesión inválida, reconectando...");
-            try { await browser.close(); } catch (_) {}
+            await releaseContext(ctx);
             try {
               await saveSession(userId, null).catch(() => {});
-              ({ browser, page } = await getPaginaAutenticada());
+              ({ ctx, page } = await getPaginaAutenticada());
             } catch (reconnErr) {
               log(`[mensajeFormativoWorker] No se pudo reconectar: ${reconnErr.message}`);
             }
@@ -122,10 +121,10 @@ const worker = new Worker("mensajes", async (job) => {
 
         if (errDest.message.includes("sesion fue expulsada") || errDest.message.includes("session")) {
           log("[mensajeFormativoWorker] Sesión inválida detectada, reconectando...");
-          try { await browser.close(); } catch (_) {}
+          await releaseContext(ctx);
           try {
             await saveSession(userId, null).catch(() => {});
-            ({ browser, page } = await getPaginaAutenticada());
+            ({ ctx, page } = await getPaginaAutenticada());
           } catch (reconnErr) {
             log(`[mensajeFormativoWorker] No se pudo reconectar: ${reconnErr.message}`);
           }
@@ -155,7 +154,7 @@ const worker = new Worker("mensajes", async (job) => {
 
     log(`[mensajeFormativoWorker] Completado: ${enviados} enviados, ${fallidos} fallidos de ${total}`);
   } finally {
-    try { await browser.close(); } catch (_) {}
+    await releaseContext(ctx);
   }
 
 }, { connection, concurrency: 1 });

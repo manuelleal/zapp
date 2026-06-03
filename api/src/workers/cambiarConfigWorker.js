@@ -1,7 +1,7 @@
 require("dotenv").config({ path: require("path").resolve(__dirname, "../../../.env") });
 
 const { Worker, UnrecoverableError } = require("bullmq");
-const { chromium } = require("playwright");
+const { acquireContext, releaseContext } = require("../lib/browserPool");
 const { connection } = require("../lib/queue");
 const { decrypt } = require("../lib/crypto");
 const { saveSession, loadSession } = require("../lib/sessionStore");
@@ -34,8 +34,7 @@ const worker = new Worker("cambiarConfig", async (job) => {
 
   async function getPaginaAutenticada() {
     const savedSession = await loadSession(userId);
-    const browser = await chromium.launch({ headless: true });
-    const ctx = await browser.newContext({
+    const ctx = await acquireContext({
       locale: "es-CO",
       timezoneId: "America/Bogota",
       ...(savedSession ? { storageState: savedSession } : {}),
@@ -55,12 +54,12 @@ const worker = new Worker("cambiarConfig", async (job) => {
       const state = await ctx.storageState();
       await saveSession(userId, state).catch((e) => log(`[cambiarConfigWorker] no se pudo guardar sesión: ${e.message}`));
     }
-    return { browser, page, ctx };
+    return { ctx, page };
   }
 
-  let browser, page;
+  let ctx, page;
   try {
-    ({ browser, page } = await getPaginaAutenticada());
+    ({ ctx, page } = await getPaginaAutenticada());
   } catch (err) {
     const msg = `Login fallido: ${err.message}`;
     await prisma.configChangeJob.update({ where: { id: configChangeJobId }, data: { status: "error", errorMsg: msg, detalle: [] } });
@@ -113,10 +112,10 @@ const worker = new Worker("cambiarConfig", async (job) => {
 
         if (errMsg.includes("sesion fue expulsada") || errMsg.includes("Formulario modedit no encontrado")) {
           log("[cambiarConfigWorker] Sesión inválida, reconectando...");
-          try { await browser.close(); } catch (_) {}
+          await releaseContext(ctx);
           try {
             await saveSession(userId, null).catch(() => {});
-            ({ browser, page } = await getPaginaAutenticada());
+            ({ ctx, page } = await getPaginaAutenticada());
           } catch (reconnErr) {
             log(`[cambiarConfigWorker] No se pudo reconectar: ${reconnErr.message}`);
           }
@@ -145,7 +144,7 @@ const worker = new Worker("cambiarConfig", async (job) => {
 
     log(`[cambiarConfigWorker] Completado: ${exitosas} exitosas, ${fallidas} fallidas de ${total}`);
   } finally {
-    try { await browser.close(); } catch (_) {}
+    await releaseContext(ctx);
   }
 
 }, { connection, concurrency: 1 });

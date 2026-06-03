@@ -1,7 +1,7 @@
 require("dotenv").config({ path: require("path").resolve(__dirname, "../../../.env") });
 
 const { Worker, UnrecoverableError } = require("bullmq");
-const { chromium } = require("playwright");
+const { acquireContext, releaseContext } = require("../lib/browserPool");
 const { connection } = require("../lib/queue");
 const { decrypt } = require("../lib/crypto");
 const { saveSession, loadSession } = require("../lib/sessionStore");
@@ -40,8 +40,7 @@ const worker = new Worker("cambiarFecha", async (job) => {
   // ── Helper: obtener una página Playwright autenticada ──────────────────────
   async function getPaginaAutenticada() {
     const savedSession = await loadSession(userId);
-    const browser = await chromium.launch({ headless: true });
-    const ctx     = await browser.newContext({
+    const ctx     = await acquireContext({
       locale:     "es-CO",
       timezoneId: "America/Bogota",
       ...(savedSession ? { storageState: savedSession } : {}),
@@ -61,12 +60,12 @@ const worker = new Worker("cambiarFecha", async (job) => {
       const state = await ctx.storageState();
       await saveSession(userId, state).catch((e) => log(`[cambiarFechaWorker] no se pudo guardar sesión: ${e.message}`));
     }
-    return { browser, page, ctx };
+    return { ctx, page };
   }
 
-  let browser, page;
+  let ctx, page;
   try {
-    ({ browser, page } = await getPaginaAutenticada());
+    ({ ctx, page } = await getPaginaAutenticada());
   } catch (err) {
     const msg = `Login fallido: ${err.message}`;
     log(`[cambiarFechaWorker] ${msg}`);
@@ -176,12 +175,12 @@ const worker = new Worker("cambiarFecha", async (job) => {
         // Si la sesión fue expulsada, reconectar para el próximo
         if (errMsg.includes("sesion fue expulsada") || errMsg.includes("Formulario modedit no encontrado")) {
           log("[cambiarFechaWorker] Sesión inválida, reconectando...");
-          try { await browser.close(); } catch (_) {}
+          await releaseContext(ctx);
           try {
             await saveSession(userId, null).catch(() => {});
             const reconect = await getPaginaAutenticada();
-            browser = reconect.browser;
-            page    = reconect.page;
+            ctx  = reconect.ctx;
+            page = reconect.page;
           } catch (reconnErr) {
             log(`[cambiarFechaWorker] No se pudo reconectar: ${reconnErr.message}`);
           }
@@ -231,7 +230,7 @@ const worker = new Worker("cambiarFecha", async (job) => {
     log(`[cambiarFechaWorker] Completado: ${exitosas} exitosas, ${fallidas} fallidas de ${total}`);
 
   } finally {
-    try { await browser.close(); } catch (_) {}
+    await releaseContext(ctx);
   }
 
 }, { connection, concurrency: 1 });
