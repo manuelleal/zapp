@@ -516,16 +516,29 @@ async function resolverAssignInfo(page, cmid) {
 
 /**
  * Traduce un participante de mod_assign_list_participants al estado interno.
- * Mantiene la semántica del scraper DOM (revisarEntregas):
- *   draft/reopened o requiregrading → "pendiente"; entregado y ya calificado →
- *   "calificado"; sin entrega → "sin_entregar". La NOTA la pone luego el CSV.
+ * Alinea con la semántica del scraper DOM (revisarEntregas), donde "calificado"
+ * gana SOBRE el estado de la entrega (borrador/reabierto).
+ *
+ * OJO: en el AJAX de SENA NO vienen `grade` ni `gradingstatus` (verificado en
+ * vivo). Los campos reales son `submitted`, `requiregrading` y
+ * `submissionstatus`. `requiregrading` es la señal AUTORITATIVA de Moodle:
+ *   false = NO falta calificar (ya calificado, o nada que calificar).
+ *
+ * Bug que esto corrige: un alumno calificado y luego REABIERTO
+ * (submissionstatus="reopened", requiregrading=false) caía en la regla
+ * "draft/reopened → pendiente" ANTES de mirar requiregrading, y quedaba pegado
+ * como "pendiente" scan tras scan aunque ya estuviera calificado.
+ * La NOTA numérica la sigue poniendo el CSV.
  */
 function estadoDesdeParticipante(p) {
   const ss = (p.submissionstatus || "").toLowerCase();
-  if (ss === "draft" || ss === "reopened") return "pendiente";
-  if (p.requiregrading)                     return "pendiente";
-  if (p.submitted)                          return "calificado";
-  return "sin_entregar";
+  // Participó = entregó, o tiene un intento enviado/reabierto (un intento
+  // reabierto implica que hubo una entrega previa).
+  const participo = p.submitted || ss === "reopened" || ss === "submitted";
+  if (p.requiregrading) return "pendiente";   // Moodle: falta calificar
+  if (participo)        return "calificado";   // participó y NO requiere calificación → calificado
+  if (ss === "draft")   return "pendiente";    // borrador sin enviar → atención del instructor
+  return "sin_entregar";                       // "new"/vacío → nunca participó
 }
 
 /**
