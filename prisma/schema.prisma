@@ -96,6 +96,9 @@ model Evidencia {
   // que se resuelven una vez leyendo data-assignmentid del grader HTML y se cachean.
   assignId       Int?
   contextId      Int?
+  // itemid del libro de calificaciones (grade item). Permite casar nota↔evidencia
+  // por id determinista (como la Extensión Z) en vez de por nombre de columna.
+  itemid         Int?
   ficha              Ficha               @relation(fields: [fichaId], references: [id])
   entregas           Entrega[]
   configAudits       ConfigAudit[]
@@ -137,6 +140,9 @@ model Entrega {
   fechaScan    DateTime         @default(now())
   moodlePostId String?
   notaActual   Float?
+  // Nota cualitativa de la escala SENA (A=Aprobado / D=Deficiente). Muchos cursos
+  // califican con letra, no con número; antes se perdía (parseFloat("A")=NaN).
+  notaCualitativa String?
   evidencia    Evidencia        @relation(fields: [evidenciaId], references: [id])
   aprendiz     Aprendiz         @relation(fields: [aprendizId], references: [id])
   historial    HistorialEstado[]
