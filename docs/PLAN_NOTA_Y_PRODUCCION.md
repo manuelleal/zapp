@@ -78,6 +78,29 @@
 
 ---
 
+> **Estado 2026-06-03:** Fases 1-4 HECHAS, commiteadas y verificadas en vivo
+> (VICTOR → notaCualitativa "A", Evidencia.itemid poblado). Falta Fase 5 (UI) y Fase 6.
+
+## FASE 6 — Estados finos: borrador / reabierto / enviado
+**Objetivo:** distinguir en la UI "Borrador", "Reabierto", "Enviado" en vez de aplastar todo
+en pendiente/calificado. **El dato YA lo tenemos**: el AJAX `mod_assign_list_participants` da
+`submissionstatus` (draft/reopened/submitted/new) — hoy lo colapsamos en `estadoDesdeParticipante`.
+La Extensión Z hace esto con sus constantes BR/RV/SN.
+- DB: `Entrega.subestado String?` (migración).
+- `scraper/evidencias.js`: `estadoDesdeParticipante` (o el mapeo del worker) que ADEMÁS del estado
+  devuelva el `submissionstatus` crudo → guardarlo en `subestado`. No re-scrapea nada nuevo.
+- UI: etiqueta "Borrador"/"Reabierto" junto al estado.
+- **No toca** la lógica de aprobación (umbral/A/D). Self-contained, commiteable sola.
+- **Commit:** `feat(scan): subestado de entrega (borrador/reabierto/enviado)`.
+
+## FASE 7 — Auto-escaneo / auto-vinculación de RAPs (desbloquea ACTAS)
+**Objetivo:** que `RapEvidenciaRel` se pueble solo (hoy = 0 → actas dan 422 a todos).
+- Correr/automatizar `scripts/vincularEvidenciasRAPs.js` (inglés auto + IA para el resto) tras el
+  scan, o desde un botón en la UI ("vincular evidencias a RAPs").
+- "Un par de cosas más" del usuario: revisar que el match RAP↔evidencia sea correcto antes de
+  aplicar (regla #8: la IA propone, el instructor decide) y manejar competencias sin RAPs.
+- **Es el bloqueador #1 de producto.** Ver [[project_actas_blocker]] / CLAUDE.md §Paso 0.
+
 ## Roadmap a PRODUCCIÓN (lo que falta para que otros la prueben)
 
 Orden recomendado (de mayor a menor impacto en el usuario):
