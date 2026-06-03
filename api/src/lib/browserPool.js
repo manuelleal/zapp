@@ -12,6 +12,15 @@ const { chromium } = require("playwright");
 
 const LAUNCH_ARGS = ["--no-sandbox", "--disable-dev-shm-usage"];
 
+// Bloqueo de recursos inutiles: en cada navegacion Moodle descarga
+// imagenes/CSS/fuentes/media que el scraper nunca usa. Abortarlos reduce ancho
+// de banda y RAM (CLAUDE.md 11.1 / 11.3 P0 #3). NO se bloquean document/script/
+// xhr/fetch (Moodle los necesita; el AJAX de Capa 2 va por fetch).
+// Kill-switch: BROWSER_BLOCK_RESOURCES=0 lo desactiva sin tocar codigo, por si
+// el portal SSO de SENA fallara con recursos bloqueados.
+const BLOCK_RESOURCES = process.env.BROWSER_BLOCK_RESOURCES !== "0";
+const BLOCKED_TYPES   = new Set(["image", "stylesheet", "font", "media", "other"]);
+
 let browserPromise = null;
 
 // Singleton con auto-relanzamiento: si el browser murio (crash/disconnect) se
@@ -50,7 +59,16 @@ async function getBrowser() {
 // que browser.newContext() (locale, timezoneId, storageState, ...).
 async function acquireContext(opts = {}) {
   const browser = await getBrowser();
-  return browser.newContext(opts);
+  const context = await browser.newContext(opts);
+
+  if (BLOCK_RESOURCES) {
+    await context.route("**/*", (route) => {
+      if (BLOCKED_TYPES.has(route.request().resourceType())) return route.abort();
+      return route.continue();
+    });
+  }
+
+  return context;
 }
 
 // Cierra SOLO el context (no el browser compartido). Idempotente/silencioso.
