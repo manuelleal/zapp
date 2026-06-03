@@ -3,9 +3,13 @@ const prisma = require("../db/client");
 const { encrypt } = require("../lib/crypto");
 
 // ─── RATE LIMITER EN MEMORIA (login/register) ─────────────────────────────────
-// Máximo 5 intentos por IP en 15 minutos
+// Máximo RATE_MAX intentos por IP dentro de la ventana (default 10 / 15 min).
+// Configurable vía env RATE_MAX. Antes estaba hardcodeado en 500 (el comentario
+// decía 5) — efectivamente sin límite real (CLAUDE.md §9.2 / §11.3 P0 #5).
+// NOTA: el Map en memoria no sobrevive reinicios ni se comparte entre procesos;
+// migrar a Redis es P1 (§11.3 #8).
 const RATE_WINDOW_MS = 15 * 60 * 1000;
-const RATE_MAX       = 500;
+const RATE_MAX       = Number(process.env.RATE_MAX) || 10;
 const rateLimitMap   = new Map(); // ip → { count, resetAt }
 
 function checkRateLimit(ip) {
