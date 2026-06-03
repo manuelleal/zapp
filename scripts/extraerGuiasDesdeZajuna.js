@@ -224,14 +224,26 @@ async function descubrirGuias(page, courseId) {
       const actLinks = await page.evaluate(() =>
         Array.from(document.querySelectorAll("a[href]"))
           .map(a => ({ nombre: (a.textContent || "").replace(/\s+/g, " ").trim(), href: a.href }))
-          .filter(l => /actividad\s+de\s+proyecto/i.test(l.nombre) && l.href.startsWith("http"))
+          .filter(l =>
+            /actividad\s+de\s+proyecto/i.test(l.nombre) &&
+            l.href.startsWith("http") &&
+            // Excluir recursos descargables (archivos, URLs externas) — solo navegar páginas
+            !l.href.includes("/mod/resource/") &&
+            !l.href.includes("/mod/url/")
+          )
       );
 
       for (const act of actLinks) {
         if (vistas.has(act.href)) continue;
         vistas.add(act.href);
         console.log(`      → Act. proyecto: "${act.nombre}"`);
-        await page.goto(act.href, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+        try {
+          await page.goto(act.href, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+        } catch (e) {
+          // Puede disparar descarga si el link apunta a un archivo — skip silencioso
+          console.log(`        ⚠  Skip (descarga o error de nav): ${e.message.split("\n")[0]}`);
+          continue;
+        }
         await cerrarModal(page);
 
         const guiaLinks = await page.evaluate(() =>
