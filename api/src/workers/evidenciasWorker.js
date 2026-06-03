@@ -8,7 +8,7 @@ const { saveSession, loadSession } = require("../lib/sessionStore");
 const prisma = require("../db/client");
 const { login, cerrarModal, BASE_URL, TIMEOUT, log } = require("../../../scraper/auth");
 const { obtenerEvidencias, revisarEntregas, revisarEntregasForo, revisarEntregasQuiz, obtenerMatriculados, descargarGradebookCSV,
-        obtenerSesskey, resolverAssignInfo, estadoDesdeParticipante, listarParticipantesBatch } = require("../../../scraper/evidencias");
+        obtenerNotasGrader, obtenerSesskey, resolverAssignInfo, estadoDesdeParticipante, listarParticipantesBatch } = require("../../../scraper/evidencias");
 const { parsearCSV } = require("../../../scraper/csvParser");
 
 // Normaliza una URL de Moodle conservando solo el parámetro ?id=NNN.
@@ -165,6 +165,14 @@ const worker = new Worker("evidencias", async (job) => {
       select: { id: true, nombre: true, moodleId: true, documento: true },
     });
     const aprendizPorNombre = new Map(aprendicesDb.map(a => [a.nombre, a]));
+
+    // Notas del libro (número o A/D) por itemid → moodleUserId, leídas UNA vez
+    // del grader report (como la Extensión Z). Fuente determinista de la nota;
+    // no depende de casar columnas del CSV por nombre.
+    const notasPorItem = await obtenerNotasGrader(page, courseId).catch(e => {
+      log(`[evidenciasWorker] notas grader fallo (${e.message}) → se usa CSV de fallback`);
+      return {};
+    });
 
     // =========================================================================
     // CAPA 2 (perf): leer las entregas de los `assign` activos vía AJAX EN LOTE,
@@ -359,6 +367,18 @@ const worker = new Worker("evidencias", async (job) => {
            }
         }
 
+        // --- NOTA DEL GRADER REPORT por itemid (determinista; gana sobre el CSV) ---
+        // Captura número Y la cualitativa A/D del libro. Si hay nota, la evidencia
+        // está calificada (un "D" reprueba pero igual está calificado).
+        if (evDb.itemid != null && entrega.aprendizMoodleId) {
+          const nota = notasPorItem[evDb.itemid]?.[entrega.aprendizMoodleId];
+          if (nota) {
+            if (nota.numero != null) entrega.notaActual = nota.numero;
+            if (nota.letra)          entrega.notaCualitativa = nota.letra;
+            if (nota.numero != null || nota.letra) entrega.estado = "calificado";
+          }
+        }
+
         // --- Diff contra lo que ya hay en DB (sin findUnique: usamos el Map) ---
         const entregaExistente = entregaPorAprendiz.get(aprendizDb.id);
 
@@ -370,15 +390,17 @@ const worker = new Worker("evidencias", async (job) => {
             entregaCreates.push({
               evidenciaId:  evDb.id,
               aprendizId:   aprendizDb.id,
-              estado:       entrega.estado,
-              moodlePostId: entrega.moodlePostId || null,
-              notaActual:   entrega.notaActual ?? null,
+              estado:          entrega.estado,
+              moodlePostId:    entrega.moodlePostId || null,
+              notaActual:      entrega.notaActual ?? null,
+              notaCualitativa: entrega.notaCualitativa ?? null,
             });
           }
         } else {
           const estadoCambio = entregaExistente.estado !== entrega.estado;
           // notaCambio: la nota del CSV difiere de lo que ya tenemos en DB
           const notaCambio = entrega.notaActual != null && entregaExistente.notaActual !== entrega.notaActual;
+          const cualiCambio = entrega.notaCualitativa != null && entregaExistente.notaCualitativa !== entrega.notaCualitativa;
           if (estadoCambio) {
             historialCreates.push({
               entregaId:      entregaExistente.id,
@@ -386,16 +408,17 @@ const worker = new Worker("evidencias", async (job) => {
               estadoNuevo:    entrega.estado,
             });
           }
-          if (estadoCambio || notaCambio || entrega.moodlePostId) {
+          if (estadoCambio || notaCambio || cualiCambio || entrega.moodlePostId) {
             entregaUpdates.push(
               prisma.entrega.update({
                 where: { id: entregaExistente.id },
                 data:  {
                   ...(estadoCambio ? { estado: entrega.estado } : {}),
-                  // fechaScan se refresca cuando cambia estado O nota, no solo estado
-                  ...((estadoCambio || notaCambio) ? { fechaScan: new Date() } : {}),
+                  // fechaScan se refresca cuando cambia estado O nota (num/cualitativa)
+                  ...((estadoCambio || notaCambio || cualiCambio) ? { fechaScan: new Date() } : {}),
                   ...(entrega.moodlePostId ? { moodlePostId: entrega.moodlePostId } : {}),
                   ...(notaCambio ? { notaActual: entrega.notaActual } : {}),
+                  ...(cualiCambio ? { notaCualitativa: entrega.notaCualitativa } : {}),
                 },
               })
             );
