@@ -91,23 +91,10 @@ fastify.register(require("./routes/actasImport"));
 fastify.register(require("./routes/mensajes"));
 fastify.register(require("./routes/ajustes"));
 
-// ─── WORKER ──────────────────────────────────────────────────────────────────
-
-require("./workers/fichasWorker");
-require("./workers/evidenciasWorker");
-require("./workers/configWorker");
-require("./workers/leerConfigEvidenciaWorker");
-require("./workers/leerConfigLoteWorker");
-require("./workers/cambiarFechaWorker");
-require("./workers/cambiarConfigWorker");
-require("./workers/foroRatingWorker");
-require("./workers/foroDescubrirWorker");
-require("./workers/autoScanWorker");
-require("./workers/matchingIaWorker");
-require("./workers/mensajeFormativoWorker");
-require("./workers/syncParticipantesWorker");
-require("./workers/emailMasivoWorker");
-require("./workers/descubrirCompetenciasWorker");
+// ─── WORKERS ─────────────────────────────────────────────────────────────────
+// Los workers BullMQ ya NO viven aquí. Corren en un proceso separado
+// (api/src/worker-entry.js, app "workers" en ecosystem.config.js) para que un
+// OOM de scraper no tumbe la API. Ver CLAUDE.md §11.1 / §11.3 P0 #1.
 
 // ─── START ───────────────────────────────────────────────────────────────────
 
