@@ -21,6 +21,14 @@ const LAUNCH_ARGS = ["--no-sandbox", "--disable-dev-shm-usage"];
 const BLOCK_RESOURCES = process.env.BROWSER_BLOCK_RESOURCES !== "0";
 const BLOCKED_TYPES   = new Set(["image", "stylesheet", "font", "media", "other"]);
 
+// Cap global de contexts concurrentes. Aunque el browser se comparta, cada
+// context consume RAM; este semaforo limita cuantos viven a la vez en el
+// proceso (CLAUDE.md 11.3 P0 #4). Ajustable via BROWSER_MAX_CONTEXTS.
+const MAX_CONTEXTS = Number(process.env.BROWSER_MAX_CONTEXTS) || 10;
+let activeContexts = 0;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 let browserPromise = null;
 
 // Singleton con auto-relanzamiento: si el browser murio (crash/disconnect) se
@@ -58,23 +66,42 @@ async function getBrowser() {
 // Abre un context nuevo sobre el browser compartido. Acepta las mismas opciones
 // que browser.newContext() (locale, timezoneId, storageState, ...).
 async function acquireContext(opts = {}) {
-  const browser = await getBrowser();
-  const context = await browser.newContext(opts);
-
-  if (BLOCK_RESOURCES) {
-    await context.route("**/*", (route) => {
-      if (BLOCKED_TYPES.has(route.request().resourceType())) return route.abort();
-      return route.continue();
-    });
+  // Espera a que haya cupo en el semaforo antes de abrir el context.
+  let waited = false;
+  while (activeContexts >= MAX_CONTEXTS) {
+    if (!waited) { waited = true; console.log(`[browserPool] cap alcanzado (${MAX_CONTEXTS}), encolando context...`); }
+    await sleep(500);
   }
+  activeContexts++;
 
-  return context;
+  let context = null;
+  try {
+    const browser = await getBrowser();
+    context = await browser.newContext(opts);
+
+    if (BLOCK_RESOURCES) {
+      await context.route("**/*", (route) => {
+        if (BLOCKED_TYPES.has(route.request().resourceType())) return route.abort();
+        return route.continue();
+      });
+    }
+
+    return context;
+  } catch (err) {
+    // Fallo al preparar el context: cerrarlo si alcanzo a crearse y liberar el
+    // cupo reservado del semaforo.
+    if (context) { try { await context.close(); } catch (_) {} }
+    activeContexts = Math.max(0, activeContexts - 1);
+    throw err;
+  }
 }
 
-// Cierra SOLO el context (no el browser compartido). Idempotente/silencioso.
+// Cierra SOLO el context (no el browser compartido) y libera el cupo del
+// semaforo. Idempotente/silencioso.
 async function releaseContext(context) {
   if (!context) return;
   try { await context.close(); } catch (_) { /* ya cerrado */ }
+  activeContexts = Math.max(0, activeContexts - 1);
 }
 
 module.exports = { getBrowser, acquireContext, releaseContext };
