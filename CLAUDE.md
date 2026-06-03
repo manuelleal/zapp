@@ -1,6 +1,7 @@
 # CLAUDE.md — Zajuna App
 
-> **Última actualización:** 1 junio 2026 (auditoría de producción Opus — ver **§11**: bottleneck de proceso único, causa real del OOM, fetch ya al ~70%, triaje P0/P1/P2, infra recomendada. Scan Capa 1+2 commiteado en `58d1e2a`; bloqueador de actas `RapEvidenciaRel=0` sigue **ABIERTO**; Fase 2 UI aún sin commitear).
+> **Última actualización:** 2 junio 2026 (refactor P0 de producción — los **5 fixes P0 de §11.3 implementados y commiteados** en rama `refactor/p0-process-split`: API/workers separados, browser Chromium compartido, bloqueo de recursos, semáforo de contexts, rate-limit real. Validado en vivo: scans reales corren por el pool nuevo. Ver §11.3 y tabla de ramas. El bloqueador de **actas `RapEvidenciaRel=0` sigue ABIERTO** — es el #1 de producto, no la infra).
+> _(1 jun 2026: auditoría de producción Opus — §11: bottleneck de proceso único, causa real del OOM, fetch ya al ~70%, triaje P0/P1/P2, infra recomendada. Scan Capa 1+2 commiteado en `58d1e2a`; Fase 2 UI aún sin commitear.)_
 > Este documento es la **fuente única de verdad** para los agentes de IA. Contiene las reglas del proyecto, decisiones de arquitectura y comandos de desarrollo. 
 
 ## 1. Qué es este proyecto
@@ -26,10 +27,17 @@ docker start zajuna-redis-1
 docker-compose up -d
 
 # 2. Matar nodes viejos (¡CRÍTICO! Los workers leen la config solo al arrancar)
-Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force
+#    OJO Windows: `Get-Process node | Stop-Process` a veces NO los mata todos y
+#    quedan worker-entry duplicados (duplican browsers → Moodle invalida sesión).
+#    Usar taskkill y verificar que quedan 0:
+taskkill /F /IM node.exe
+Get-Process node -ErrorAction SilentlyContinue   # debe estar vacío
 
-# 3. Arrancar el server (inicia API en puerto 3000 + 15 workers — TODO en UN proceso, ver §11.1)
-node api/src/server.js
+# 3. Arrancar API y workers — AHORA SON DOS PROCESOS (ver §11.1 / §11.3 P0 #1)
+#    Producción: pm2 start ecosystem.config.js  (apps: api + workers)
+#    Dev (dos terminales o ambos en background):
+node api/src/server.js        # API HTTP en puerto 3000 (sin workers)
+node api/src/worker-entry.js  # los 15 workers BullMQ (sin HTTP)
 
 # 4. Frontend en modo desarrollo (HMR en puerto 5173, opcional)
 cd web && npm run dev
@@ -102,7 +110,8 @@ ZAJUNA_PASS=
 
 | Rama | Estado | Qué tiene |
 |---|---|---|
-| `feature/gradebook-scan-v2` | 🔄 **Rama actual** — scan Capa 1+2 commiteado (`58d1e2a`); Fase 2 UI aún sin commitear | Gradebook Tree + hrefs canónicos + calcularEstado estricto + foroDescubrir + **scan perf Capa 1 (DB en lote) + Capa 2 (AJAX list_participants)** + Fase 2 UI en progreso |
+| `refactor/p0-process-split` | 🔄 **Rama actual** (forkeada de gradebook-scan-v2, 2 jun) — **5 fixes P0 commiteados y validados en vivo**; falta test de carga + merge | `worker-entry.js` + `lib/browserPool.js` (browser compartido + bloqueo recursos + semáforo) + `ecosystem.config.js` (api/workers) + rate-limit real. Ver §11.3 |
+| `feature/gradebook-scan-v2` | ✅ Base del refactor — scan Capa 1+2 commiteado (`58d1e2a`); Fase 2 UI aún sin commitear | Gradebook Tree + hrefs canónicos + calcularEstado estricto + foroDescubrir + **scan perf Capa 1 (DB en lote) + Capa 2 (AJAX list_participants)** + Fase 2 UI en progreso |
 | `feature/strict-rap-mapping` | ✅ Lista, sin mergear | Fix actas.js (eliminado rapPorSufijo), scripts vincular/extraer |
 | `fix/mensaje-template-vars` | 🔄 En progreso | Fix interpolación `{{nombre}}`/`{{ficha}}`/`{{instructor}}` en mensajes |
 | `fix/actas-autopoblar-v2` | ❓ Sin revisar | Fix autopoblar actas v2 |
@@ -442,14 +451,15 @@ Este repositorio está orquestado por **Antigravity (Arquitecto Principal)**. Si
 
 ### 11.3 — Triaje para v1.0.0 (P0 / P1 / P2)
 
-**🔴 P0 — bloqueadores de producción (~1 día total):**
-1. **Separar API y workers en procesos PM2 distintos** (`worker-entry.js`; quitar los `require` de workers de `server.js`). Un OOM de scraper deja de tumbar la API. ~1h. *(Mantener los workers en UN proceso: si corres 2, duplicas browsers por usuario → Moodle invalida la sesión.)*
-2. **Browser compartido + context-por-job** (un `chromium.launch` long-lived por proceso de worker). ~2h.
-3. **Bloqueo de recursos** (`ctx.route` que aborte `image/font/media/stylesheet`). ~1h.
-4. **Cap global de navegadores concurrentes** (semáforo en `lib/`). ~1h.
-5. **Fix rate-limit:** `RATE_MAX=500` con comentario que dice "5" (`api/src/routes/auth.js:8`). Decidir valor real. ~15min.
+**✅ P0 — COMPLETADOS (rama `refactor/p0-process-split`, 2 jun 2026). 5 commits `refactor(p0):`:**
+1. ✅ **API y workers en procesos distintos** — `api/src/worker-entry.js` (nuevo) carga los 15 workers; `server.js` ya no; `ecosystem.config.js` con apps `api` + `workers` (workers `instances:1` fork — 2+ duplicaría browsers → Moodle invalida sesión). Un OOM de scraper ya no tumba la API.
+2. ✅ **Browser compartido + context-por-job** — `api/src/lib/browserPool.js` (nuevo): `getBrowser()` singleton long-lived con auto-relanzamiento + `acquireContext()`/`releaseContext()`. Los **11 workers** que hacían `chromium.launch()` migrados; ninguno llama `browser.close()`.
+3. ✅ **Bloqueo de recursos** — `acquireContext` aborta `image/stylesheet/font/media/other`; deja pasar `document/script/xhr/fetch`. Kill-switch `BROWSER_BLOCK_RESOURCES=0`.
+4. ✅ **Cap global de contexts** — semáforo `BROWSER_MAX_CONTEXTS` (default 10) en `browserPool.js`.
+5. ✅ **Rate-limit real** — `auth.js`: `RATE_MAX = process.env.RATE_MAX || 10` (antes 500 hardcodeado con comentario "5").
 
-> Con P0 #1-4 el OOM se va **sin** migrar a fetch — eso compra tiempo para hacer la migración (P1 #7) con calma.
+> **Verificado:** 22/22 tests verdes; smoke del pool (1 browser, N contexts, semáforo respetado); bloqueo de recursos contra sitio real (imgs/CSS abortados, document/script pasan). **Validado en vivo:** scans reales del autoScan corrieron por el pool nuevo — login SSO ✓, export CSV ✓, Capa 2 AJAX (`mod_assign_list_participants` por fetch) ✓ con el bloqueo activo.
+> **Pendiente:** test de carga 3-15 scans concurrentes con credenciales → merge a master → `pm2 start ecosystem.config.js`. Con esto el OOM se va **sin** migrar a fetch — compra tiempo para la migración (P1 #7) con calma.
 
 **🟠 P1 — post-launch (~3-4 días):**
 6. `api/src/lib/playwrightSession.js` factory (dedupe el boilerplate login/sesión de ~12 workers; aísla el riesgo "SENA cambia el selector → editar 12 archivos").
@@ -459,7 +469,7 @@ Este repositorio está orquestado por **Antigravity (Arquitecto Principal)**. Si
 10. Idempotencia `foroRating` (`attempts:1` o trackear `moodleUserId` ya posteados; hoy `attempts:3` → riesgo de doble calificación).
 
 **🟡 P2 — higiene (cuando puedas):**
-11. **Limpieza de basura — inventario verificado en `docs/CLEANUP_AUDIT.md`** (3 agentes Sonnet + verificación manual, 2 jun): ~7 MB de binarios/logs **tracked** a purgar con `git rm --cached` (root.*.js, vendor.*.js, server logs, ~30 probe PNGs, 7 PDFs), ~39 scripts de debug ignorados a borrar del disco, código muerto (`EvidenciasModal` 656 líneas, `fetchWithRetry`, `fichasQueueEvents`, `apiFetchWithRetry`/`configCache`), duplicación (`usePollJob`×4, `actIdFromHref`×3), y 2 worktrees clutter. ⚠️ Los agentes alucinaron `worker-entry.js`/`playwrightSession.js` (no existen — descartar).
+11. **Limpieza de basura — inventario verificado en `docs/CLEANUP_AUDIT.md`** (3 agentes Sonnet + verificación manual, 2 jun): ~7 MB de binarios/logs **tracked** a purgar con `git rm --cached` (root.*.js, vendor.*.js, server logs, ~30 probe PNGs, 7 PDFs), ~39 scripts de debug ignorados a borrar del disco, código muerto (`EvidenciasModal` 656 líneas, `fetchWithRetry`, `fichasQueueEvents`, `apiFetchWithRetry`/`configCache`), duplicación (`usePollJob`×4, `actIdFromHref`×3), y 2 worktrees clutter. ⚠️ Nota: `worker-entry.js` **ya existe** (creado en el refactor P0, 2 jun). `playwrightSession.js` sigue sin existir (factory de P1 #6, aún no escrita — no asumir que está).
 12. Tests del motor (`calcularEstado`/`esAprobada`/`normalizarHref`; infra ya existe).
 13. **SSE/WebSockets en vez de polling: DIFERIR.** A 100 usuarios el polling cada 3-15s es perfectamente sostenible; no es bloqueador de v1.0.0.
 
