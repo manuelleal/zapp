@@ -35,7 +35,16 @@ async function obtenerEvidencias(page, courseId) {
       else if (href.includes("/mod/quiz/")) tipo = "quiz";
       else if (!href.includes("/mod/assign/")) return null; // categorías u otros ítems
 
-      return { texto, hrefOriginal: href, actId: m[1], tipo };
+      // itemid del grade item (para casar la nota del grader report por id).
+      // Defensivo: distintos temas/versiones lo exponen distinto; si no aparece
+      // queda null y el worker cae al match por CSV.
+      const idAttr = row.getAttribute("data-itemid")
+        || row.querySelector("[data-itemid]")?.getAttribute("data-itemid")
+        || (row.id && (row.id.match(/(\d+)/) || [])[1])
+        || null;
+      const itemid = idAttr ? parseInt(idAttr, 10) : null;
+
+      return { texto, hrefOriginal: href, actId: m[1], tipo, itemid };
     }).filter(Boolean);
   }).catch(() => []);
 
@@ -46,6 +55,7 @@ async function obtenerEvidencias(page, courseId) {
     href:  `${BASE_URL}/mod/${it.tipo}/view.php?id=${it.actId}`,
     actId: it.actId,
     tipo:  it.tipo,
+    itemid: it.itemid ?? null,
   }));
 
   log(`[gradebook-tree] Evidencias encontradas: ${items.length}`);

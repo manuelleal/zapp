@@ -128,8 +128,9 @@ const worker = new Worker("evidencias", async (job) => {
       const href = normalizarHref(ev.href);
       await prisma.evidencia.upsert({
         where:  { fichaId_href: { fichaId, href } },
-        update: { nombre: ev.texto, tipo: ev.tipo },
-        create: { fichaId, nombre: ev.texto, href, tipo: ev.tipo },
+        // itemid solo si el tree lo expuso (no pisar un cache previo con null).
+        update: { nombre: ev.texto, tipo: ev.tipo, ...(ev.itemid != null ? { itemid: ev.itemid } : {}) },
+        create: { fichaId, nombre: ev.texto, href, tipo: ev.tipo, itemid: ev.itemid ?? null },
       });
     }
 
