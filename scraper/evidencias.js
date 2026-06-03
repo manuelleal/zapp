@@ -603,8 +603,63 @@ async function listarParticipantesBatch(page, sesskey, assigns) {
   return out;
 }
 
+/**
+ * Lee las notas del libro de calificaciones (grader report) indexadas por el
+ * itemid del grade item, igual que la Extensión Z. Captura número O letra A/D
+ * (la escala cualitativa SENA), tomando SOLO el input editable o el
+ * span.gradevalue de cada celda (NO el textContent, que trae el menú "Acciones
+ * de la celda" y ensuciaría el regex).
+ *
+ * @returns {Promise<Object>} { [itemid]: { [moodleUserId]: { numero:Number|null, letra:'A'|'D'|null } } }
+ */
+async function obtenerNotasGrader(page, courseId) {
+  const url = `${BASE_URL}/grade/report/grader/index.php?id=${courseId}&perpage=5000`;
+  log(`[notas] GET ${url}`);
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+  await cerrarModal(page);
+
+  const data = await page.evaluate(() => {
+    const out = {};
+    const rows = Array.from(document.querySelectorAll("tr[data-uid].userrow"));
+    for (const row of rows) {
+      if (row.querySelector("th.usersuspended")) continue;
+      const profileLink = row.querySelector(
+        'a[href*="/user/view.php?id="], a[href*="/user/profile.php?id="]'
+      );
+      const m = profileLink?.href.match(/[?&]id=(\d+)/);
+      const uid = m?.[1] ?? row.getAttribute("data-uid");
+      if (!uid) continue;
+
+      for (const td of row.querySelectorAll("td[data-itemid]")) {
+        const itemid = td.getAttribute("data-itemid");
+        if (!itemid) continue;
+        const input = td.querySelector("input");
+        const span = td.querySelector('span[class*="gradevalue"], .gradevalue');
+        const raw = (input ? input.value : (span ? span.textContent : "")) || "";
+        const mm = raw.match(/(\d+(?:[.,]\d+)?|A|D)/i);
+        if (!mm) continue;
+        const tok = mm[1].toUpperCase();
+        let numero = null, letra = null;
+        if (tok === "A" || tok === "D") {
+          letra = tok;
+        } else {
+          const n = parseFloat(tok.replace(",", "."));
+          if (!isNaN(n)) numero = n;
+        }
+        if (numero === null && letra === null) continue;
+        (out[itemid] || (out[itemid] = {}))[uid] = { numero, letra };
+      }
+    }
+    return out;
+  });
+
+  const nItems = Object.keys(data).length;
+  log(`[notas] ${nItems} grade items con notas leídas del grader report`);
+  return data;
+}
+
 module.exports = {
   obtenerEvidencias, revisarEntregas, revisarEntregasForo, revisarEntregasQuiz,
-  extraerPostsForo, obtenerMatriculados, descargarGradebookCSV,
+  extraerPostsForo, obtenerMatriculados, descargarGradebookCSV, obtenerNotasGrader,
   obtenerSesskey, resolverAssignInfo, estadoDesdeParticipante, listarParticipantesBatch,
 };
