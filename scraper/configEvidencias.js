@@ -1,6 +1,11 @@
 /**
  * scraper/configEvidencias.js
  *
+ * NOTA: Esta es la variante antigua que usa Chromium/Playwright. Para procesos en lote,
+ * usar la variante moderna fetch+cheerio -> scraper/configEvidenciasFetch.js. Ambos
+ * archivos comparten la misma lógica de negocio (FIELD_MAPS, extraerFecha, aplicarFecha)
+ * que se exporta desde aquí. Modifica las reglas de mapeo SOLO aquí.
+ *
  * Técnica: igual a la Extensión Z.
  *   1. GET /course/modedit.php?update={actId}  →  serializar TODOS los campos del formulario
  *   2. Sobreescribir solo los campos enviados (merge parcial)
@@ -454,4 +459,8 @@ async function guardarConfigEvidencia(page, actId, config) {
   return { ok: true };
 }
 
-module.exports = { leerConfigEvidencia, guardarConfigEvidencia, enableEditMode };
+module.exports = {
+  leerConfigEvidencia, guardarConfigEvidencia, enableEditMode,
+  // Helpers puros reutilizados por la variante fetch (configEvidenciasFetch.js):
+  FIELD_MAPS, extraerFecha, aplicarFecha,
+};
