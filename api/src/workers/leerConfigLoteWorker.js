@@ -67,14 +67,25 @@ const worker = new Worker("leerConfigLote", async (job) => {
     }
 
     // ── Modo edición una sola vez para toda la ficha ─────────────────────────
+    // enableEditMode setea una preferencia de usuario → aplica a TODAS las
+    // pestañas del context (misma sesión Moodle), por eso basta hacerlo en una.
     if (courseId) await enableEditMode(page, courseId);
     await prisma.job.update({ where: { id: jobId }, data: { progreso: 8 } });
 
-    // ── Recorrer todas las evidencias ────────────────────────────────────────
-    for (let i = 0; i < total; i++) {
-      const { evidenciaId, actId } = evidencias[i];
+    // ── Recorrer evidencias en PARALELO con un pool de pestañas ──────────────
+    // Antes: 1 pestaña secuencial (~2-4s × N en serie). Ahora: CONCURRENCY
+    // pestañas en el MISMO context (una sola cookie/sesión) procesan el lote en
+    // paralelo → ~CONCURRENCY× más rápido. La pestaña inicial `page` se reusa
+    // como worker 0; las demás se abren y se cierran al terminar.
+    const CONCURRENCY = Math.min(Number(process.env.LEER_CONFIG_CONCURRENCY) || 4, total);
+
+    let cursor = 0;     // índice del próximo ítem a tomar (compartido entre workers)
+    let hechas = 0;     // contador de progreso (leídas + fallidas)
+
+    async function procesarUno(workerPage, idx) {
+      const { evidenciaId, actId } = evidencias[idx];
       try {
-        const configActual = await leerConfigEvidencia(page, actId);
+        const configActual = await leerConfigEvidencia(workerPage, actId);
 
         await prisma.evidencia.update({
           where: { id: evidenciaId },
@@ -93,8 +104,33 @@ const worker = new Worker("leerConfigLote", async (job) => {
       }
 
       // Progreso 8% → 98% repartido entre las evidencias.
-      const progreso = Math.min(98, 8 + Math.round(((i + 1) / total) * 90));
+      hechas++;
+      const progreso = Math.min(98, 8 + Math.round((hechas / total) * 90));
       await prisma.job.update({ where: { id: jobId }, data: { progreso } }).catch(() => {});
+    }
+
+    // Cada "carril" consume del cursor compartido hasta agotar la cola.
+    async function carril(workerPage) {
+      for (;;) {
+        const idx = cursor++;
+        if (idx >= total) return;
+        await procesarUno(workerPage, idx);
+      }
+    }
+
+    const paginas = [page];
+    for (let k = 1; k < CONCURRENCY; k++) {
+      const p = await ctx.newPage();
+      p.setDefaultTimeout(30_000);
+      paginas.push(p);
+    }
+    try {
+      await Promise.all(paginas.map((p) => carril(p)));
+    } finally {
+      // Cerrar las pestañas extra; `page` la cierra el releaseContext del finally externo.
+      for (let k = 1; k < paginas.length; k++) {
+        await paginas[k].close().catch(() => {});
+      }
     }
 
     await prisma.job.update({

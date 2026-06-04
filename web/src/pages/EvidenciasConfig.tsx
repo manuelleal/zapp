@@ -454,7 +454,8 @@ export default function EvidenciasConfig() {
         {viewMode === "tabla" && (
           selectedFichaId === "all"
             ? <div className="bg-white rounded-lg border border-gray-200 p-8 text-center text-sm text-gray-500">Selecciona una ficha arriba para editar sus fechas en tabla.</div>
-            : <ConfigTabla fichaId={selectedFichaId} />
+            // Lo seleccionado en la Lista se lleva a la Tabla como filtro inicial.
+            : <ConfigTabla fichaId={selectedFichaId} preselectIds={Array.from(selectedIds)} />
         )}
 
         {/* Fichas + evidencias (vista LISTA) */}

@@ -107,6 +107,11 @@ async function configEvidenciasRoutes(fastify) {
   fastify.post("/api/fichas/:fichaId/config/leer-todo", { preHandler: fastify.authenticate }, async (req, reply) => {
     const { fichaId } = req.params;
 
+    // Opcional: subconjunto de evidencias a leer (las que el usuario seleccionó
+    // en la Lista). Si no viene o viene vacío, se leen TODAS (comportamiento
+    // histórico intacto).
+    const idsPedidos = Array.isArray(req.body?.evidenciaIds) ? req.body.evidenciaIds : null;
+
     const ficha = await prisma.ficha.findUnique({
       where:   { id: fichaId },
       select:  { id: true, userId: true, courseId: true },
@@ -115,7 +120,9 @@ async function configEvidenciasRoutes(fastify) {
     if (ficha.userId !== req.user.id) return reply.code(403).send({ error: "Sin acceso a esta ficha." });
 
     const evs = await prisma.evidencia.findMany({
-      where:  { fichaId },
+      where:  idsPedidos && idsPedidos.length > 0
+        ? { fichaId, id: { in: idsPedidos } }   // solo las seleccionadas de esta ficha
+        : { fichaId },                          // todas
       select: { id: true, href: true },
     });
 

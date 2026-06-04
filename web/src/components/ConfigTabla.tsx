@@ -5,6 +5,7 @@ import { usePollJob, pollJobOnce } from "@/hooks/usePollJob"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { RefreshCw, Loader2, Search, X, CheckCircle, AlertCircle, Save, Square, CheckSquare } from "lucide-react"
+import { toast } from "sonner"
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 interface ConfigCache {
@@ -61,15 +62,23 @@ function configToEdit(c: ConfigCache | null): RowEdit {
 }
 
 // ─── Componente ──────────────────────────────────────────────────────────────
-export default function ConfigTabla({ fichaId }: { fichaId: string }) {
+export default function ConfigTabla({ fichaId, preselectIds = [] }: { fichaId: string; preselectIds?: string[] }) {
   const queryClient = useQueryClient()
   const [edits, setEdits]       = useState<Record<string, RowEdit>>({})
   const [rowState, setRowState] = useState<Record<string, RowState>>({})
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [saving, setSaving] = useState(false)
   const [search, setSearch]     = useState("")
   const [loadPhase, setLoadPhase] = useState<"idle" | "loading" | "error">("idle")
   const [loadMsg, setLoadMsg]   = useState("")
   const pollLoad = usePollJob()
+
+  // Si la Lista trae evidencias preseleccionadas, arrancamos mostrando solo esas.
+  // El usuario puede alternar a "ver todas" con el botón del toolbar.
+  const hayPreselect = preselectIds.length > 0
+  const preselectSet = useMemo(() => new Set(preselectIds), [preselectIds])
+  const [soloSeleccionadas, setSoloSeleccionadas] = useState(hayPreselect)
+  useEffect(() => { setSoloSeleccionadas(hayPreselect) }, [hayPreselect, fichaId])
 
   const { data, isLoading } = useQuery<FilaConfig[]>({
     queryKey: ["ficha-config", fichaId],
@@ -87,9 +96,11 @@ export default function ConfigTabla({ fichaId }: { fichaId: string }) {
 
   const filas = useMemo(() => {
     const q = search.trim().toLowerCase()
-    const arr = data ?? []
+    let arr = data ?? []
+    // Filtro por preselección de la Lista (si está activo).
+    if (soloSeleccionadas && hayPreselect) arr = arr.filter(f => preselectSet.has(f.evidenciaId))
     return q ? arr.filter(f => f.nombre.toLowerCase().includes(q) || f.tipo.toLowerCase().includes(q)) : arr
-  }, [data, search])
+  }, [data, search, soloSeleccionadas, hayPreselect, preselectSet])
 
   function setField(id: string, key: keyof RowEdit, val: string) {
     setEdits(prev => ({ ...prev, [id]: { ...prev[id], [key]: val } }))
@@ -103,12 +114,19 @@ export default function ConfigTabla({ fichaId }: { fichaId: string }) {
     setSelected(prev => prev.size === filas.length ? new Set() : new Set(filas.map(f => f.evidenciaId)))
   }
 
-  // ── Cargar/actualizar fechas de TODA la ficha (B1) ──────────────────────────
+  // ── Cargar/actualizar fechas desde Moodle (B1) ──────────────────────────────
+  // Si hay preselección activa, lee SOLO esas evidencias (más rápido); si no,
+  // lee todas las de la ficha.
   async function cargarTodo() {
+    const leerSoloSel = soloSeleccionadas && hayPreselect
     setLoadPhase("loading"); setLoadMsg("Iniciando lectura...")
     try {
       const { jobId, total } = await apiFetch<{ jobId: string; total: number }>(
-        `/api/fichas/${encodeURIComponent(fichaId)}/config/leer-todo`, { method: "POST" }
+        `/api/fichas/${encodeURIComponent(fichaId)}/config/leer-todo`,
+        {
+          method: "POST",
+          ...(leerSoloSel ? { body: JSON.stringify({ evidenciaIds: preselectIds }) } : {}),
+        }
       )
       setLoadMsg(`Leyendo ${total} evidencias desde Moodle...`)
       pollLoad.start(
@@ -175,10 +193,19 @@ export default function ConfigTabla({ fichaId }: { fichaId: string }) {
 
   async function saveSelected() {
     const seleccionadas = filas.filter(f => selected.has(f.evidenciaId))
+    if (seleccionadas.length === 0) return
+    setSaving(true)
+    const tid = toast.loading(`Guardando ${seleccionadas.length} evidencia${seleccionadas.length > 1 ? "s" : ""}…`)
+    let ok = 0; let err = 0
     for (const fila of seleccionadas) {
       // eslint-disable-next-line no-await-in-loop
-      await saveRow(fila)
+      const result = await saveRow(fila)
+      result ? ok++ : err++
     }
+    setSaving(false)
+    toast.dismiss(tid)
+    if (err === 0) toast.success(`${ok} evidencia${ok > 1 ? "s" : ""} guardada${ok > 1 ? "s" : ""} en Moodle`)
+    else toast.warning(`${ok} guardadas, ${err} con error — revisa las filas marcadas en rojo`)
   }
 
   const totalSel = selected.size
@@ -189,8 +216,13 @@ export default function ConfigTabla({ fichaId }: { fichaId: string }) {
       <div className="p-3 border-b border-gray-100 flex flex-wrap items-center gap-3">
         <Button size="sm" className="gap-2 bg-sena-green hover:bg-sena-green/90" onClick={cargarTodo} disabled={loadPhase === "loading"}>
           {loadPhase === "loading" ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-          Cargar fechas de todas
+          {soloSeleccionadas && hayPreselect ? `Cargar seleccionadas (${preselectIds.length})` : "Cargar fechas de todas"}
         </Button>
+        {hayPreselect && (
+          <Button size="sm" variant="outline" className="gap-1" onClick={() => setSoloSeleccionadas(v => !v)} title="Alternar entre las seleccionadas y todas">
+            {soloSeleccionadas ? "Ver todas" : `Ver solo seleccionadas (${preselectIds.length})`}
+          </Button>
+        )}
         {loadMsg && (
           <span className={`text-sm ${loadPhase === "error" ? "text-red-600" : "text-blue-600"}`}>{loadMsg}</span>
         )}
@@ -204,8 +236,9 @@ export default function ConfigTabla({ fichaId }: { fichaId: string }) {
           {search && <button onClick={() => setSearch("")} className="absolute right-2 top-1/2 -translate-y-1/2"><X className="w-4 h-4 text-gray-400" /></button>}
         </div>
         {totalSel > 0 && (
-          <Button size="sm" variant="outline" className="gap-1 border-sena-green text-sena-green" onClick={saveSelected}>
-            <Save className="w-3.5 h-3.5" /> Guardar seleccionadas ({totalSel})
+          <Button size="sm" variant="outline" className="gap-1 border-sena-green text-sena-green" onClick={saveSelected} disabled={saving}>
+            {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+            {saving ? "Guardando…" : `Guardar seleccionadas (${totalSel})`}
           </Button>
         )}
       </div>
