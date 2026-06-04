@@ -184,6 +184,123 @@ async function fichasRoutes(fastify) {
       .header("Content-Type", "text/csv; charset=utf-8")
       .send(csvContent);
   });
+  // GET /api/fichas/:id/reporte-excel — genera un reporte interactivo en Excel (Mejor que V2 Z)
+  fastify.get("/api/fichas/:id/reporte-excel", { preHandler: fastify.authenticate }, async (req, reply) => {
+    const ficha = await prisma.ficha.findUnique({
+      where: { id: req.params.id },
+      include: {
+        evidencias: {
+          orderBy: { nombre: "asc" },
+          include: { rapRels: { include: { rap: true } } }
+        },
+        aprendices: { orderBy: { nombre: "asc" }, include: { entregas: true } }
+      }
+    });
+
+    if (!ficha) return reply.code(404).send({ error: "Ficha no encontrada." });
+    if (ficha.userId !== req.user.id) return reply.code(403).send({ error: "Sin acceso." });
+
+    const ExcelJS = require('exceljs');
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("Reporte Zajuna");
+
+    // Fila 1: RAPs
+    const rowRaps = ["Resultados de Aprendizaje (RAP)"];
+    ficha.evidencias.forEach(ev => {
+      const raps = ev.rapRels.map(r => r.rap.codigo).join("\n");
+      rowRaps.push(raps || "Sin RAP");
+    });
+    const headerRaps = sheet.addRow(rowRaps);
+    headerRaps.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    headerRaps.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+    headerRaps.eachCell((cell) => {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4F46E5' } };
+      cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+    });
+
+    // Fila 2: Evidencias
+    const rowEvidencias = ["Aprendiz"];
+    ficha.evidencias.forEach(ev => {
+      rowEvidencias.push(ev.nombre);
+    });
+    const headerEvi = sheet.addRow(rowEvidencias);
+    headerEvi.font = { bold: true };
+    headerEvi.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+    headerEvi.height = 40;
+    headerEvi.eachCell((cell) => {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3F4F6' } };
+      cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+    });
+
+    sheet.getColumn(1).width = 35;
+    for (let i = 2; i <= rowEvidencias.length; i++) {
+      sheet.getColumn(i).width = 25;
+    }
+    sheet.views = [{ state: 'frozen', xSplit: 1, ySplit: 2 }];
+
+    // Filas de Aprendices
+    ficha.aprendices.forEach(a => {
+      const rowData = [a.nombre];
+      
+      const entregasMap = new Map();
+      a.entregas.forEach(ent => entregasMap.set(ent.evidenciaId, ent));
+
+      const row = sheet.addRow(rowData);
+      row.alignment = { vertical: 'middle' };
+      row.getCell(1).border = { left: { style: 'thin' }, right: { style: 'thin' }, bottom: { style: 'thin' } };
+
+      ficha.evidencias.forEach((ev, idx) => {
+        const colIndex = idx + 2;
+        const cell = row.getCell(colIndex);
+        const entrega = entregasMap.get(ev.id);
+
+        cell.border = { left: { style: 'thin' }, right: { style: 'thin' }, bottom: { style: 'thin' } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+
+        if (!entrega) {
+          cell.value = "Sin entregar";
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE5E7EB' } }; // Gris claro
+          cell.font = { color: { argb: 'FF6B7280' } };
+        } else if (entrega.estado.toLowerCase().includes("calificar") || entrega.estado.toLowerCase().includes("borrador") || entrega.notaActual === null) {
+          cell.value = "Por calificar (P)";
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF08A' } }; // Amarillo claro
+          cell.font = { color: { argb: 'FF854D0E' }, bold: true };
+          
+          // Crear link al grader
+          let cmid = null;
+          if (ev.href) {
+            const match = ev.href.match(/id=(\d+)/);
+            if (match) cmid = match[1];
+          }
+          if (cmid && a.moodleId && ev.tipo === "assign") {
+            const gradeUrl = `https://zajuna.sena.edu.co/zajuna/mod/assign/view.php?id=${cmid}&action=grader&userid=${a.moodleId}`;
+            cell.value = { text: "Por calificar (Ir)", hyperlink: gradeUrl, tooltip: "Clic para calificar en Zajuna" };
+            cell.font = { color: { argb: 'FF2563EB' }, underline: true, bold: true };
+          }
+        } else {
+          // Ya está calificado. Usar la nota A/D o numérica.
+          const notaLetra = entrega.notaCualitativa || entrega.notaActual;
+          cell.value = `Calificado: ${notaLetra}`;
+          
+          if (String(notaLetra).toUpperCase() === "A" || (typeof notaLetra === "number" && notaLetra >= 70)) {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFBBF7D0' } }; // Verde claro
+            cell.font = { color: { argb: 'FF166534' } };
+          } else {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFECACA' } }; // Rojo claro
+            cell.font = { color: { argb: 'FF991B1B' } };
+          }
+        }
+      });
+    });
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    const filename = `Reporte_Avanzado_${ficha.codigo}_${new Date().toISOString().slice(0,10)}.xlsx`;
+
+    reply
+      .header("Content-Disposition", `attachment; filename="${filename}"`)
+      .header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+      .send(buffer);
+  });
 }
 
 module.exports = fichasRoutes;

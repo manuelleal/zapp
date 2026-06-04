@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Plus, Search, Pencil, Archive, ArchiveRestore, Trash2, ChevronDown, ChevronRight, Download } from "lucide-react"
+import { Plus, Search, Pencil, Archive, ArchiveRestore, Trash2, ChevronDown, ChevronRight, Download, FileSpreadsheet } from "lucide-react"
 import Layout from "@/components/Layout"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -134,21 +134,21 @@ export default function Fichas() {
 
   async function descargarReporte(fichaId: string, codigo: string) {
     try {
-      const res = await fetch(`/api/fichas/${fichaId}/reporte-pendientes`, {
+      const res = await fetch(`/api/fichas/${fichaId}/reporte-excel`, {
         headers: { Authorization: `Bearer ${jwt}` }
       })
-      if (!res.ok) throw new Error("No se pudo generar el reporte.")
+      if (!res.ok) throw new Error("No se pudo generar el reporte Excel.")
       
       const blob = await res.blob()
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
       a.href = url
-      a.download = `Reporte_Zajuna_${codigo}_${new Date().toISOString().slice(0,10)}.csv`
+      a.download = `Reporte_Zajuna_${codigo}_${new Date().toISOString().slice(0,10)}.xlsx`
       a.click()
       URL.revokeObjectURL(url)
-      toast.success("Reporte descargado")
+      toast.success("Excel descargado con éxito")
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Error al descargar el reporte")
+      toast.error(e instanceof Error ? e.message : "Error al descargar el Excel")
     }
   }
 
@@ -166,8 +166,8 @@ export default function Fichas() {
         <td className="px-5 py-3 text-gray-700 max-w-xs truncate" title={f.nombre}>{f.nombre || <span className="text-gray-400">Sin nombre</span>}</td>
         <td className="px-5 py-3">
           <div className="flex items-center gap-1">
-            <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => descargarReporte(f.id, f.codigo)} title="Descargar Semáforo">
-              <Download className="w-3.5 h-3.5 text-blue-600" />
+            <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => descargarReporte(f.id, f.codigo)} title="Descargar Excel Mágico">
+              <FileSpreadsheet className="w-3.5 h-3.5 text-green-600" />
             </Button>
             <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => openEditar(f)} title="Editar">
               <Pencil className="w-3.5 h-3.5" />
