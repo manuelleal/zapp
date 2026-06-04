@@ -1,3 +1,14 @@
+/**
+ * emailMasivoWorker.js — Cola "emailMasivo".
+ *
+ * QUÉ HACE: envía correos masivos por SMTP (nodemailer) — distinto de
+ * mensajeFormativoWorker, que usa la mensajería interna de Moodle. Este NO toca
+ * Zajuna ni Playwright: lee el MensajeFormativo y dispara emails reales.
+ *
+ * job.data: { mensajeFormativoId, userId }
+ * concurrency: 1.
+ */
+
 require("dotenv").config({ path: require("path").resolve(__dirname, "../../../.env") });
 
 const { Worker } = require("bullmq");

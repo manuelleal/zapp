@@ -1,3 +1,15 @@
+/**
+ * foroRatingWorker.js — Cola "foroRating".
+ *
+ * QUÉ HACE: aplica calificaciones (ratings) a los posts de un foro evaluable en
+ * Moodle. Recibe una lista de ratings por aprendiz y los postea uno a uno.
+ *
+ * job.data: { jobId, userId, evidenciaId, actId, ratings, zajunaUserEnc, zajunaPassEnc }
+ *
+ * ⚠️ IDEMPOTENCIA: si la cola reintenta tras un post sin respuesta de Moodle,
+ *   podría re-calificar. Riesgo conocido (CLAUDE.md P1 #10). concurrency: 2.
+ */
+
 require("dotenv").config({ path: require("path").resolve(__dirname, "../../../.env") });
 
 const { Worker, UnrecoverableError } = require("bullmq");

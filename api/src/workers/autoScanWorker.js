@@ -1,3 +1,17 @@
+/**
+ * autoScanWorker.js — Cola "autoScan" (job repetible cada 3h, ver lib/queue.js).
+ *
+ * QUÉ HACE: barre todos los usuarios y re-encola scans de evidencias en segundo
+ * plano, para que el dashboard del instructor esté fresco sin que él lo pida.
+ * No scrapea él mismo: delega encolando jobs en `evidenciasQueue`.
+ *
+ * job.data: { userId?, full? }  — sin userId procesa todos; full=true incluye
+ *   fichas activas aunque tengan 0 evidencias en DB.
+ *
+ * ⚠️ Si Redis está caído al arrancar, el registro del repetible solo loguea y no
+ *   reintenta (CLAUDE.md P1 #9). concurrency: 1.
+ */
+
 require("dotenv").config({ path: require("path").resolve(__dirname, "../../../.env") });
 
 const { Worker } = require("bullmq");

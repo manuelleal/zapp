@@ -1,3 +1,22 @@
+/**
+ * fichasWorker.js — Cola "fichas".
+ *
+ * QUÉ HACE: descubre las fichas (grupos de aprendices) que el instructor tiene en
+ * Zajuna y las upsertea en la tabla `Ficha`. Es normalmente lo PRIMERO que corre
+ * para un usuario: sin fichas no hay evidencias que escanear.
+ *
+ * job.data: { jobId, userId, zajunaUserEnc, zajunaPassEnc, competenciaCodigo }
+ *   competenciaCodigo opcional → filtra el descubrimiento a una competencia.
+ *
+ * FLUJO (patrón estándar de los workers Playwright, ver DEVELOPER_ONBOARDING.md):
+ *   1. Reusar sesión Moodle de Redis (sessionStore); si expiró, login fresco.
+ *   2. scraper/fichas.descubrirFichas(page, competenciaCodigo) raspa el listado.
+ *   3. upsert por (userId, codigo) — idempotente, no duplica.
+ *   4. Actualiza Job.status/progreso en cada hito (5→30→70→100).
+ *
+ * Credenciales incorrectas → UnrecoverableError (no reintenta). concurrency: 5.
+ */
+
 require("dotenv").config({ path: require("path").resolve(__dirname, "../../../.env") });
 
 const { Worker, UnrecoverableError } = require("bullmq");

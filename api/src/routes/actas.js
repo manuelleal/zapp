@@ -1,8 +1,46 @@
+/**
+ * api/src/routes/actas.js — Actas de seguimiento (módulo M7).
+ *
+ * QUÉ HACE: gestiona las "actas de seguimiento" del SENA — el documento donde el
+ * instructor registra, por aprendiz y por RAP (Resultado de Aprendizaje), si
+ * aprobó/reprobó cada evidencia. Expone el CRUD del acta, el auto-poblado desde
+ * los datos ya scrapeados, y la descarga en Word (formato institucional GOR-F-084).
+ *
+ * CONCEPTO CLAVE — el mapa RAP → Evidencias:
+ *   Un acta evalúa RAPs, pero las notas viven en Evidencias. El puente son dos
+ *   tablas: `RapEvidenciaRel` (vínculo manual/IA) y `MatchingPropuesta(aceptado)`.
+ *   `auto-poblar` y `preview-native` arman ese mapa SOLO desde esas dos tablas.
+ *   ⚠️ BLOQUEADOR CONOCIDO (jun 2026): ambas están VACÍAS en la DB
+ *   (`RapEvidenciaRel = 0`), así que estos endpoints devuelven 422
+ *   `RAP_SIN_EVIDENCIAS` a todo. Fix: correr `scripts/vincularEvidenciasRAPs.js`.
+ *   Ver CLAUDE.md §"Paso 0" y la memoria project_actas_blocker.
+ *
+ * REGLAS DE NEGOCIO (no tocar sin discutir, ver CLAUDE.md §5):
+ *   - Umbral de aprobación 70/100 + cualitativa A (calcularEstado/esAprobada en
+ *     lib/calificacion.js). Una evidencia `sin_entregar` cuenta como NO aprobada.
+ *   - Multi-tenant: todo pasa por verificarFichaDelUsuario/verificarActaDelUsuario.
+ *
+ * ÍNDICE DE RUTAS (todas requieren JWT):
+ *   POST   /api/actas                         crear acta
+ *   GET    /api/actas                         listar actas del usuario
+ *   GET    /api/actas/:id                     detalle (con participantes)
+ *   PATCH  /api/actas/:id                     editar metadatos
+ *   DELETE /api/actas/:id                     borrar acta
+ *   POST   /api/actas/:id/participantes       agregar participante manual
+ *   DELETE /api/actas/:id/participantes/:pid  quitar participante
+ *   POST   /api/actas/:id/auto-poblar         ★ llenar juicios desde RAP↔Evidencia
+ *   POST   /api/actas/:id/cerrar              cerrar acta (estado final)
+ *   GET    /api/actas/:id/download            descargar Word genérico
+ *   GET    /api/actas/:id/download/gor-f-084  descargar Word formato SENA oficial
+ *   POST   /api/actas/preview-native          ★ previsualizar acta nativa (sin crear)
+ *   POST   /api/actas/confirm-native          confirmar y crear acta nativa
+ */
+
 const prisma = require("../db/client");
 const { filtrarAprendicesValidos } = require("../lib/aprendices");
 const { calcularEstado, calcularJuicio } = require("../lib/calificacion");
 
-// ─── Helpers ───────────────────────────────────────────────────────────────────
+// ─── Helpers de autorización (IDOR check multi-tenant) ──────────────────────────
 
 async function verificarFichaDelUsuario(fichaId, userId, reply) {
   let ficha;
@@ -243,6 +281,12 @@ async function actasRoutes(fastify) {
     return reply.code(200).send({ deleted: true });
   });
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // AUTO-POBLADO — corazón del módulo. Cruza RAP↔Evidencia↔Entrega y calcula, por
+  // participante y por RAP, el juicio (aprobó/no) con las reglas SENA. Aquí pega
+  // el bloqueador RapEvidenciaRel=0 (ver cabecera del archivo).
+  // ═══════════════════════════════════════════════════════════════════════════
+
   // ── POST /api/actas/:id/auto-poblar ─────────────────────────────────────────
   fastify.post("/api/actas/:id/auto-poblar", { preHandler: fastify.authenticate }, async (req, reply) => {
     const acta = await verificarActaDelUsuario(req.params.id, req.user.id, reply);
@@ -476,6 +520,12 @@ async function actasRoutes(fastify) {
 
     return actualizada;
   });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // GENERACIÓN DE WORD — arma el .docx del acta. `download` = formato genérico;
+  // `download/gor-f-084` = plantilla institucional SENA oficial. Ambas leen el
+  // acta ya poblada y la serializan a Word (sin tocar Moodle).
+  // ═══════════════════════════════════════════════════════════════════════════
 
   // ── GET /api/actas/:id/download ─────────────────────────────────────────────
   fastify.get("/api/actas/:id/download", { preHandler: fastify.authenticate }, async (req, reply) => {
@@ -1115,6 +1165,13 @@ async function actasRoutes(fastify) {
       .header("Content-Disposition", `attachment; filename="${filename}"`)
       .send(buffer);
   });
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FLUJO "NATIVO" — versión nueva en dos pasos: `preview-native` calcula el acta
+  // completa SIN persistir (para que el instructor la revise en la UI), y
+  // `confirm-native` la crea ya aprobada. Misma lógica de mapeo RAP↔Evidencia que
+  // auto-poblar (mismo bloqueador RapEvidenciaRel=0).
+  // ═══════════════════════════════════════════════════════════════════════════
+
   // ── POST /api/actas/preview-native ──────────────────────────────────────────
   fastify.post("/api/actas/preview-native", { preHandler: fastify.authenticate }, async (req, reply) => {
     const { fichaId, rapIds } = req.body || {};

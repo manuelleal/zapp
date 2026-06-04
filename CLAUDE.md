@@ -484,3 +484,10 @@ Este repositorio está orquestado por **Antigravity (Arquitecto Principal)**. Si
 ### 11.5 — Nota estratégica (prioridad de negocio)
 
 El handoff pregunta *"¿cómo soporto +100 instructores?"* mientras la función estrella (generar actas) devuelve **422 a todos** por `RapEvidenciaRel=0` (§Paso 0). **Secuencia recomendada:** P0 (estabilizar, ~1 día) → **desbloquear actas** → ponerlo frente a ~5 instructores reales → decidir P1 con datos de uso real. *No construir para 100 instructores hasta tener 10 contentos.*
+
+### 11.6 — Migración a fetch+cheerio (junio 2026)
+
+Se documenta la migración de lectura de configuración de evidencias (fechas/intentos) de Playwright a **fetch nativo de Node + cheerio** en la rama `experimento/node-fetch-modedit`:
+- **Beneficios:** Chromium se reduce a usarse SOLO para el login inicial. Esto disminuye drásticamente el uso de memoria (RAM) y permite mayor concurrencia en los workers (ej. `leerConfigLoteWorker.js`), ya que la lectura de formularios se hace vía `fetch` usando la cookie de sesión SSO.
+- **Nuevas Dependencias:** Se agregó `cheerio` para parsear HTML de forma ligera. También se utiliza `undici` (Agent nativo de Node) para proporcionar un dispatcher TLS relajado (`rejectUnauthorized: false`), vital para tolerar la cadena de certificados incompleta que envía Zajuna en ciertos endpoints.
+- **Gotcha (REGLA CLAVE - disabledIf):** Moodle aplica una regla JavaScript que deshabilita selects de fechas (year, month, day, etc.) cuando su correspondiente checkbox `[enabled]` está apagado. Dado que Cheerio parsea HTML sin ejecutar JavaScript, puede extraer valores obsoletos ("stale") de estos campos que el DOM original oculta. Para evitar que Moodle rechace un POST silenciosamente (devolviendo HTTP 200 sin guardar), `configEvidenciasFetch.js` emula manualmente este comportamiento eliminando los sufijos de fecha si `[enabled] != "1"`. (Todo el flujo está validado con probe de paridad, ya removido).
