@@ -76,13 +76,13 @@ const worker = new Worker("leerConfigLote", async (job) => {
       try {
         const configActual = await leerConfigEvidencia(page, actId);
 
-        await prisma.evidenciaConfig.create({
-          data: { evidenciaId, raw: configActual.raw ?? {} },
-        });
         await prisma.evidencia.update({
           where: { id: evidenciaId },
           data:  { configCache: configActual, configCacheAt: new Date() },
-        }).catch((e) => log(`[leerConfigLote] no se pudo cachear ${evidenciaId}: ${e.message}`));
+        });
+        await prisma.evidenciaConfig.create({
+          data: { evidenciaId, raw: configActual.raw ?? {} },
+        }).catch((e) => log(`[leerConfigLote] no se pudo guardar historial ${evidenciaId}: ${e.message}`));
 
         leidas++;
         detalle.push({ evidenciaId, ok: true });
