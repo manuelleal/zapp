@@ -200,98 +200,159 @@ async function fichasRoutes(fastify) {
     if (!ficha) return reply.code(404).send({ error: "Ficha no encontrada." });
     if (ficha.userId !== req.user.id) return reply.code(403).send({ error: "Sin acceso." });
 
+    // ── Orden natural por guía (GA1, GA2, GA3…) y selección opcional ──────────
+    // El nombre trae el código "GAx-...-AAy-EVzz"; ordenamos por GA→AA→EV (no
+    // alfabético, que mezclaba las guías). Filtros: ?gas=1,2,3 o ?evidenciaIds=...
+    const claveGA = (n) => {
+      const s = n || "";
+      const ga = parseInt((s.match(/GA\s*(\d+)/i) || [])[1] || "999", 10);
+      const aa = parseInt((s.match(/AA\s*(\d+)/i) || [])[1] || "99", 10);
+      const ev = parseInt((s.match(/EV\s*(\d+)/i) || [])[1] || "99", 10);
+      return ga * 10000 + aa * 100 + ev;
+    };
+    const gaDe = (n) => parseInt((String(n).match(/GA\s*(\d+)/i) || [])[1] || "-1", 10);
+    const gasPedidas = String(req.query.gas || "").split(",").map(s => parseInt(s, 10)).filter(x => !isNaN(x));
+    const idsPedidos = String(req.query.evidenciaIds || "").split(",").map(s => s.trim()).filter(Boolean);
+    let evids = ficha.evidencias;
+    if (idsPedidos.length) evids = evids.filter(e => idsPedidos.includes(e.id));
+    else if (gasPedidas.length) evids = evids.filter(e => gasPedidas.includes(gaDe(e.nombre)));
+    evids.sort((a, b) => claveGA(a.nombre) - claveGA(b.nombre));
+    ficha.evidencias = evids;
+
     const ExcelJS = require('exceljs');
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet("Reporte Zajuna");
 
+    // ── Paleta Zajuna (NUESTRA, no la de la Extensión Z) ──────────────────────
+    const C = {
+      rap:       'FF4F46E5',                       // indigo (encabezado RAP)
+      hdrAssign: 'FFE0E7FF', hdrQuiz: 'FFFCE7F3', hdrForum: 'FFD1FAE5', hdrFijo: 'FFF3F4F6',
+      okBg:  'FFBBF7D0', okTx:  'FF166534',         // aprobado (verde)
+      malBg: 'FFFECACA', malTx: 'FF991B1B',         // reprobado (rojo)
+      pendBg:'FFFEF08A', pendTx:'FF854D0E', pendLink:'FF2563EB', // por calificar
+      seBg:  'FFE5E7EB', seTx:  'FF6B7280',         // sin entregar
+    };
+    const borde = { top:{style:'thin'}, left:{style:'thin'}, bottom:{style:'thin'}, right:{style:'thin'} };
+    const fill = (argb) => ({ type:'pattern', pattern:'solid', fgColor:{ argb } });
+    // URL al grader/actividad de Moodle por tipo (links que la Extensión Z NO tiene).
+    const urlCalificar = (ev, moodleId) => {
+      const cmid = (String(ev.href||"").match(/id=(\d+)/) || [])[1];
+      if (!cmid) return null;
+      const base = "https://zajuna.sena.edu.co/zajuna/mod";
+      if (ev.tipo === "quiz")  return `${base}/quiz/report.php?id=${cmid}&mode=grading`;
+      if (ev.tipo === "forum") return `${base}/forum/view.php?id=${cmid}`;
+      return `${base}/assign/view.php?id=${cmid}&action=grader${moodleId ? `&userid=${moodleId}` : ""}`;
+    };
+
+    const N = ficha.evidencias.length;
+    const colAprob = 3 + N; // 1=Aprendiz, 2=Documento, 3..2+N=evidencias, última=Aprobadas
+
     // Fila 1: RAPs
-    const rowRaps = ["Resultados de Aprendizaje (RAP)"];
-    ficha.evidencias.forEach(ev => {
-      const raps = ev.rapRels.map(r => r.rap.codigo).join("\n");
-      rowRaps.push(raps || "Sin RAP");
-    });
+    const rowRaps = ["Resultados de Aprendizaje (RAP)", ""];
+    ficha.evidencias.forEach(ev => rowRaps.push(ev.rapRels.map(r => r.rap.codigo).join("\n") || "Sin RAP"));
+    rowRaps.push("");
     const headerRaps = sheet.addRow(rowRaps);
-    headerRaps.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    headerRaps.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 9 };
     headerRaps.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
-    headerRaps.eachCell((cell) => {
-      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4F46E5' } };
-      cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
-    });
+    headerRaps.eachCell(c => { c.fill = fill(C.rap); c.border = borde; });
 
-    // Fila 2: Evidencias
-    const rowEvidencias = ["Aprendiz"];
-    ficha.evidencias.forEach(ev => {
-      rowEvidencias.push(ev.nombre);
-    });
+    // Fila 2: Encabezados (Aprendiz, Documento, evidencias coloreadas por tipo, Aprobadas)
+    const rowEvidencias = ["Aprendiz", "Documento", ...ficha.evidencias.map(ev => ev.nombre), "Aprobadas"];
     const headerEvi = sheet.addRow(rowEvidencias);
-    headerEvi.font = { bold: true };
+    headerEvi.font = { bold: true, size: 9 };
     headerEvi.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
-    headerEvi.height = 40;
-    headerEvi.eachCell((cell) => {
-      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3F4F6' } };
-      cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+    headerEvi.height = 46;
+    headerEvi.eachCell((cell, col) => {
+      let bg = C.hdrFijo;
+      if (col >= 3 && col <= 2 + N) {
+        const t = ficha.evidencias[col - 3].tipo;
+        bg = t === "quiz" ? C.hdrQuiz : t === "forum" ? C.hdrForum : C.hdrAssign;
+      }
+      cell.fill = fill(bg); cell.border = borde;
     });
 
-    sheet.getColumn(1).width = 35;
-    for (let i = 2; i <= rowEvidencias.length; i++) {
-      sheet.getColumn(i).width = 25;
-    }
-    sheet.views = [{ state: 'frozen', xSplit: 1, ySplit: 2 }];
+    sheet.getColumn(1).width = 32;
+    sheet.getColumn(2).width = 16;
+    for (let i = 3; i <= 2 + N; i++) sheet.getColumn(i).width = 13;
+    sheet.getColumn(colAprob).width = 11;
+    sheet.views = [{ state: 'frozen', xSplit: 2, ySplit: 2 }];
+    sheet.autoFilter = { from: { row: 2, column: 1 }, to: { row: 2, column: colAprob } };
+
+    const firstEvLetter = sheet.getColumn(3).letter;
+    const lastEvLetter  = sheet.getColumn(2 + N).letter;
 
     // Filas de Aprendices
     ficha.aprendices.forEach(a => {
-      const rowData = [a.nombre];
-      
       const entregasMap = new Map();
       a.entregas.forEach(ent => entregasMap.set(ent.evidenciaId, ent));
 
-      const row = sheet.addRow(rowData);
+      const row = sheet.addRow([a.nombre, a.documento || ""]);
       row.alignment = { vertical: 'middle' };
-      row.getCell(1).border = { left: { style: 'thin' }, right: { style: 'thin' }, bottom: { style: 'thin' } };
+      row.font = { size: 9 };
+      row.getCell(1).border = borde;
+      row.getCell(2).border = borde;
+      row.getCell(2).alignment = { horizontal: 'center', vertical: 'middle' };
 
       ficha.evidencias.forEach((ev, idx) => {
-        const colIndex = idx + 2;
-        const cell = row.getCell(colIndex);
+        const cell = row.getCell(idx + 3);
         const entrega = entregasMap.get(ev.id);
-
-        cell.border = { left: { style: 'thin' }, right: { style: 'thin' }, bottom: { style: 'thin' } };
+        cell.border = borde;
         cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
 
+        const cual = entrega && entrega.notaCualitativa ? String(entrega.notaCualitativa).toUpperCase() : null;
+        const num  = entrega && typeof entrega.notaActual === "number" ? entrega.notaActual : null;
+        const tieneNota = cual !== null || num !== null;
+        const estadoPend = entrega && (entrega.estado.toLowerCase().includes("calificar") || entrega.estado.toLowerCase().includes("borrador"));
+
         if (!entrega) {
-          cell.value = "Sin entregar";
-          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE5E7EB' } }; // Gris claro
-          cell.font = { color: { argb: 'FF6B7280' } };
-        } else if (entrega.estado.toLowerCase().includes("calificar") || entrega.estado.toLowerCase().includes("borrador") || entrega.notaActual === null) {
-          cell.value = "Por calificar (P)";
-          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF08A' } }; // Amarillo claro
-          cell.font = { color: { argb: 'FF854D0E' }, bold: true };
-          
-          // Crear link al grader
-          let cmid = null;
-          if (ev.href) {
-            const match = ev.href.match(/id=(\d+)/);
-            if (match) cmid = match[1];
-          }
-          if (cmid && a.moodleId && ev.tipo === "assign") {
-            const gradeUrl = `https://zajuna.sena.edu.co/zajuna/mod/assign/view.php?id=${cmid}&action=grader&userid=${a.moodleId}`;
-            cell.value = { text: "Por calificar (Ir)", hyperlink: gradeUrl, tooltip: "Clic para calificar en Zajuna" };
-            cell.font = { color: { argb: 'FF2563EB' }, underline: true, bold: true };
-          }
-        } else {
-          // Ya está calificado. Usar la nota A/D o numérica.
-          const notaLetra = entrega.notaCualitativa || entrega.notaActual;
-          cell.value = `Calificado: ${notaLetra}`;
-          
-          if (String(notaLetra).toUpperCase() === "A" || (typeof notaLetra === "number" && notaLetra >= 70)) {
-            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFBBF7D0' } }; // Verde claro
-            cell.font = { color: { argb: 'FF166534' } };
+          cell.value = "SE";                                   // Sin entregar
+          cell.fill = fill(C.seBg); cell.font = { color: { argb: C.seTx }, size: 9 };
+        } else if (!tieneNota || (estadoPend && !cual)) {
+          const url = urlCalificar(ev, a.moodleId);            // Por calificar + link
+          if (url) {
+            cell.value = { text: "PC ▸", hyperlink: url, tooltip: "Ir a calificar en Zajuna" };
+            cell.font = { color: { argb: C.pendLink }, underline: true, bold: true, size: 9 };
           } else {
-            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFECACA' } }; // Rojo claro
-            cell.font = { color: { argb: 'FF991B1B' } };
+            cell.value = "PC"; cell.font = { color: { argb: C.pendTx }, bold: true, size: 9 };
           }
+          cell.fill = fill(C.pendBg);
+        } else {
+          const aprob = cual === "A" || (num !== null && num >= 70);   // Calificado
+          cell.value = cual !== null ? cual : num;            // número como NÚMERO (para COUNTIF)
+          cell.fill = fill(aprob ? C.okBg : C.malBg);
+          cell.font = { color: { argb: aprob ? C.okTx : C.malTx }, bold: true, size: 9 };
         }
       });
+
+      // Columna "Aprobadas": fórmula viva (cuenta "A" + numéricas ≥70).
+      const r = row.number;
+      const rango = `${firstEvLetter}${r}:${lastEvLetter}${r}`;
+      const cAprob = row.getCell(colAprob);
+      cAprob.value = { formula: `COUNTIF(${rango},"A")+COUNTIF(${rango},">=70")` };
+      cAprob.border = borde;
+      cAprob.alignment = { horizontal: 'center', vertical: 'middle' };
+      cAprob.font = { bold: true, size: 9, color: { argb: C.okTx } };
     });
+
+    // ── Hoja "Leyenda" (algo que la Extensión Z NO tiene) ─────────────────────
+    const leg = workbook.addWorksheet("Leyenda");
+    leg.getColumn(1).width = 14; leg.getColumn(2).width = 48;
+    leg.addRow(["Código", "Significado"]).eachCell(c => { c.font = { bold: true, color:{argb:'FFFFFFFF'} }; c.fill = fill(C.rap); c.border = borde; });
+    [
+      ["A",    "Aprobado (cualitativa A o nota ≥ 70/100 — umbral SENA)", C.okBg, C.okTx],
+      ["D",    "Deficiente / no aprobado (cualitativa D o nota < 70)",    C.malBg, C.malTx],
+      ["0-100","Nota numérica (verde si ≥70, rojo si <70)",              C.okBg, C.okTx],
+      ["PC ▸", "Por calificar — clic para ir directo al grader de Moodle", C.pendBg, C.pendLink],
+      ["SE",   "Sin entregar",                                            C.seBg, C.seTx],
+    ].forEach(([cod, sig, bg, tx]) => {
+      const lr = leg.addRow([cod, sig]);
+      lr.getCell(1).fill = fill(bg); lr.getCell(1).font = { bold: true, color:{argb:tx} };
+      lr.getCell(1).alignment = { horizontal:'center' };
+      lr.eachCell(c => c.border = borde);
+    });
+    leg.addRow([]);
+    leg.addRow(["", "Encabezados por tipo: azul = tarea · rosa = cuestionario · verde = foro"]);
+    leg.addRow(["", `Generado por Zajuna App — ${new Date().toLocaleDateString("es-CO")}`]);
 
     const buffer = await workbook.xlsx.writeBuffer();
     const filename = `Reporte_Avanzado_${ficha.codigo}_${new Date().toISOString().slice(0,10)}.xlsx`;

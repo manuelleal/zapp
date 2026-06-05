@@ -134,7 +134,15 @@ export default function Fichas() {
 
   async function descargarReporte(fichaId: string, codigo: string) {
     try {
-      const res = await fetch(`/api/fichas/${fichaId}/reporte-excel`, {
+      // Selección opcional de guías. Vacío = todas. El backend ordena por GA/AA/EV.
+      const sel = window.prompt(
+        "¿Qué guías incluir? Números separados por coma (ej: 1,2,3).\nDéjalo vacío para incluir TODAS.",
+        ""
+      )
+      if (sel === null) return // canceló
+      const gas = sel.trim().replace(/[^0-9,]/g, "")
+      const qs = gas ? `?gas=${gas}` : ""
+      const res = await fetch(`/api/fichas/${fichaId}/reporte-excel${qs}`, {
         headers: { Authorization: `Bearer ${jwt}` }
       })
       if (!res.ok) throw new Error("No se pudo generar el reporte Excel.")
