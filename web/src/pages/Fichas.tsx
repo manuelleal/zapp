@@ -214,10 +214,13 @@ export default function Fichas() {
 
   // Modal para elegir qué guías incluir en el Excel (muestra sus evidencias).
   function ExcelModal({ target, onClose }: { target: { id: string; codigo: string }; onClose: () => void }) {
-    const { data, isLoading } = useQuery<{ evidencias: { id: string; nombre: string; tipo: string }[] }>({
+    const { data, isLoading } = useQuery<{ evidencias: { id: string; nombre: string; tipo: string; ultimoScan: string | null }[] }>({
       queryKey: ["ficha-evidencias", target.id],
       queryFn:  () => apiFetch(`/api/fichas/${encodeURIComponent(target.id)}/evidencias`),
     })
+    // Última actualización = scan más reciente entre las evidencias.
+    const ultimaAct = (data?.evidencias ?? []).reduce<string | null>((max, e) => (e.ultimoScan && (!max || e.ultimoScan > max) ? e.ultimoScan : max), null)
+    const fmtFecha = (s: string | null) => s ? new Date(s).toLocaleString("es-CO", { dateStyle: "medium", timeStyle: "short" }) : "sin escanear"
     const gaDe   = (n: string) => parseInt((n.match(/GA\s*(\d+)/i) || [])[1] || "0", 10)
     const aaDe   = (n: string) => parseInt((n.match(/AA\s*(\d+)/i) || [])[1] || "99", 10)
     const evDe   = (n: string) => parseInt((n.match(/EV\s*(\d+)/i) || [])[1] || "99", 10)
@@ -275,7 +278,10 @@ export default function Fichas() {
     return (
       <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
         <DialogContent className="max-w-lg">
-          <DialogHeader><DialogTitle>Descargar Excel — Ficha {target.codigo}</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>Descargar Excel — Ficha {target.codigo}</DialogTitle>
+            <p className="text-xs text-gray-500 mt-0.5">Última actualización de los datos: <span className="font-medium text-gray-700">{fmtFecha(ultimaAct)}</span></p>
+          </DialogHeader>
           {isLoading ? (
             <div className="py-8 text-center text-sm text-gray-500"><Loader2 className="w-5 h-5 animate-spin inline" /> Cargando evidencias…</div>
           ) : grupos.length === 0 ? (

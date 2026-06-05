@@ -350,7 +350,15 @@ async function fichasRoutes(fastify) {
       lr.getCell(1).alignment = { horizontal:'center' };
       lr.eachCell(c => c.border = borde);
     });
+    // Última actualización de datos = el scan más reciente de las entregas de la ficha.
+    let maxScan = null;
+    for (const ap of ficha.aprendices) for (const e of ap.entregas) {
+      if (e.fechaScan && (!maxScan || e.fechaScan > maxScan)) maxScan = e.fechaScan;
+    }
+    const fmt = (d) => d ? new Date(d).toLocaleString("es-CO", { dateStyle: "long", timeStyle: "short" }) : "sin escanear";
     leg.addRow([]);
+    const rAct = leg.addRow(["", `Última actualización de los datos: ${fmt(maxScan)}`]);
+    rAct.getCell(2).font = { bold: true, color: { argb: C.rap } };
     leg.addRow(["", "Encabezados por tipo: azul = tarea · rosa = cuestionario · verde = foro"]);
     leg.addRow(["", `Generado por Zajuna App — ${new Date().toLocaleDateString("es-CO")}`]);
 
