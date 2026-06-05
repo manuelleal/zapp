@@ -88,6 +88,46 @@ C:\zajuna\
 
 ---
 
+## 5.1 Cómo escribir y comentar el código (OBLIGATORIO para todos los agentes)
+
+> Objetivo: que cualquiera que entre nuevo NO se pierda. Antes de dar por
+> terminado un archivo, pregúntate: *"si alguien lo abre por primera vez, ¿entiende
+> qué hace y por qué, sin leer otros archivos?"*. Si no, faltan comentarios.
+
+**Estilo de código**
+- Sigue el estilo del archivo que tocas (indentación, comillas, nombres). No
+  reformatees código que no estás cambiando.
+- Nombres descriptivos en el dominio del SENA/Moodle (`evidencia`, `ficha`, `rap`,
+  `actId`/`cmid`, `entrega`). No abrevies de más.
+- Funciones cortas y con una responsabilidad. La lógica de negocio compartida vive
+  en UN solo lugar y se importa (ej. `FIELD_MAPS`/`extraerFecha` en
+  `scraper/configEvidencias.js`); no la dupliques.
+- Multi-tenant SIEMPRE: todo query filtra por `userId` (ver regla #1).
+
+**Comentarios — el QUÉ se ve en el código, comenta el POR QUÉ**
+- **Cabecera (docstring) en CADA archivo nuevo o tocado a fondo**: qué hace, qué
+  cola/ruta atiende, su `job.data`/params, y los gotchas. Mira como referencia
+  `scraper/configEvidenciasFetch.js`, `api/src/workers/fichasWorker.js` y la
+  cabecera con índice de rutas de `api/src/routes/actas.js`.
+- Comenta lo **no obvio**: decisiones, workarounds de Moodle, reglas SENA, trampas
+  (ej. el `disabledIf` por JS de Moodle, el TLS de cadena incompleta de Zajuna).
+- NO comentes lo trivial (`i++ // incrementa i`). Explica intención, no mecánica.
+- Marca lo incierto con `// TODO(doc): confirmar` en vez de inventar. **No alucines**:
+  si afirmas que existe un archivo/función/script, verifícalo con `grep`/`glob`/`git`.
+- Divide archivos largos con divisores de sección
+  (`// ─── Nombre de sección ───`).
+- Comentarios y docstrings en español (como el resto del repo).
+
+**Antes de cerrar una tarea**
+- `node --check` a todo archivo `.js` tocado.
+- Si cambiaste arquitectura o agregaste deps, actualízalo en este `CLAUDE.md` y en
+  `DEVELOPER_ONBOARDING.md`.
+- Working tree compartido: verifica `git branch --show-current`; no hagas
+  `checkout`/`reset --hard`/`stash`/`clean` que pisen a otra sesión activa.
+- Commits descriptivos con prefijo (`feat:`/`fix:`/`perf:`/`docs:`/`refactor:`).
+
+---
+
 ## 6. Variables de Entorno (`.env`)
 ```env
 DATABASE_URL=postgresql://zajuna:zajuna@localhost:5432/zajuna
