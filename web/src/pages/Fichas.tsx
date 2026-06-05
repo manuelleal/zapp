@@ -238,10 +238,12 @@ export default function Fichas() {
       }
       const arr = [...m.values()];
       arr.forEach(g => g.evs.sort((a, b) => aaDe(a.nombre) - aaDe(b.nombre) || evDe(a.nombre) - evDe(b.nombre)));
-      // mi competencia primero, luego por código y nº de guía
+      // Agrupar por CÓDIGO de competencia (la tuya primero), y dentro de cada
+      // código las guías en orden 1 → N.
       return arr.sort((a, b) =>
-        (a.comp === miComp ? -1 : 0) - (b.comp === miComp ? -1 : 0) ||
-        a.comp.localeCompare(b.comp) || a.ga - b.ga);
+        ((a.comp === miComp ? 0 : 1) - (b.comp === miComp ? 0 : 1)) ||
+        a.comp.localeCompare(b.comp) ||
+        a.ga - b.ga);
     }, [data])
 
     const [sel, setSel] = useState<Set<string>>(new Set())   // evidenciaIds
@@ -284,12 +286,19 @@ export default function Fichas() {
                 {allSel ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />} Seleccionar todas
               </button>
               <p className="text-xs text-gray-400 mb-1">Marca las evidencias que quieras incluir (las de tu competencia vienen premarcadas).</p>
-              {grupos.map((g) => (
-                <div key={`${g.comp}-${g.ga}`} className="border border-gray-200 rounded-md overflow-hidden">
+              {grupos.map((g, i) => (
+                <div key={`${g.comp}-${g.ga}`}>
+                  {/* Encabezado de competencia cuando cambia el código */}
+                  {(i === 0 || grupos[i - 1].comp !== g.comp) && (
+                    <div className="mt-3 mb-1 px-1 text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                      Competencia {g.comp}{g.comp === miComp ? " · tuya" : ""}
+                    </div>
+                  )}
+                  <div className="border border-gray-200 rounded-md overflow-hidden">
                   <button onClick={() => toggleGrupo(g)} className={`w-full px-3 py-2 flex items-center gap-2 text-sm font-medium ${grupoAll(g) ? "bg-green-50" : grupoSome(g) ? "bg-green-50/40" : ""}`}>
                     {grupoAll(g) ? <CheckSquare className="w-4 h-4 text-sena-green" /> : <Square className={`w-4 h-4 ${grupoSome(g) ? "text-sena-green/60" : "text-gray-300"}`} />}
                     {g.ga > 0 ? `Guía ${g.ga}` : "Sin guía"}
-                    <span className="text-gray-400 font-normal">· comp. {g.comp}{g.comp === miComp ? " (tuya)" : ""} · {g.evs.length}</span>
+                    <span className="text-gray-400 font-normal">· {g.evs.length} evid.</span>
                   </button>
                   <ul className="pb-1">
                     {g.evs.map(ev => (
@@ -301,6 +310,7 @@ export default function Fichas() {
                       </li>
                     ))}
                   </ul>
+                  </div>
                 </div>
               ))}
             </div>
