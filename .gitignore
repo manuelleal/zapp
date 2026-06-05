@@ -41,3 +41,4 @@ web/playwright-report/
 # Chunks de build de Vite volcados por error en la raíz (pertenecen a web/dist/assets/)
 /vendor.*.js
 /root.*.js
+backups/

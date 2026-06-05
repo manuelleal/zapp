@@ -165,6 +165,16 @@ const worker = new Worker("evidencias", async (job) => {
       select: { id: true, nombre: true, moodleId: true, documento: true },
     });
     const aprendizPorNombre = new Map(aprendicesDb.map(a => [a.nombre, a]));
+    // Índice por moodleId = identidad REAL del aprendiz. Emparejar por aquí (no
+    // solo por nombre) evita recrear filas cuando Moodle devuelve variantes del
+    // nombre ("DH", "DHDANIEL...", "DANIEL ... ") en distintos scans. Ese era el
+    // origen de los aprendices duplicados (limpiados con scripts/dedup-aprendices.js).
+    const aprendizPorMoodle = new Map(aprendicesDb.filter(a => a.moodleId).map(a => [String(a.moodleId), a]));
+    const resolverAprendiz = (entrega) => {
+      const mid = entrega.aprendizMoodleId != null ? String(entrega.aprendizMoodleId) : null;
+      if (mid && aprendizPorMoodle.has(mid)) return aprendizPorMoodle.get(mid);
+      return aprendizPorNombre.get(entrega.nombre) || null;
+    };
 
     // Notas del libro (número o A/D) por itemid → moodleUserId, leídas UNA vez
     // del grader report (como la Extensión Z). Fuente determinista de la nota;
@@ -293,23 +303,28 @@ const worker = new Worker("evidencias", async (job) => {
       const nuevosAprendices = [];
       const encolados = new Set(); // evita encolar 2 veces el mismo nombre
       for (const entrega of entregas) {
-        if (aprendizPorNombre.has(entrega.nombre) || encolados.has(entrega.nombre)) continue;
-        encolados.add(entrega.nombre);
-        nuevosAprendices.push({
-          fichaId,
-          nombre:   entrega.nombre,
-          moodleId: entrega.aprendizMoodleId || null,
-        });
+        const mid = entrega.aprendizMoodleId != null ? String(entrega.aprendizMoodleId) : null;
+        // Ya existe por identidad (moodleId) → NO crear otra fila aunque el
+        // nombre venga distinto. Esto es lo que corta los duplicados de raíz.
+        if (mid && aprendizPorMoodle.has(mid)) continue;
+        const nombreLimpio = (entrega.nombre || "").replace(/\s+/g, " ").trim();
+        if (!nombreLimpio) continue;
+        if (aprendizPorNombre.has(nombreLimpio) || encolados.has(nombreLimpio)) continue;
+        encolados.add(nombreLimpio);
+        nuevosAprendices.push({ fichaId, nombre: nombreLimpio, moodleId: mid });
       }
       if (nuevosAprendices.length > 0) {
         await prisma.aprendiz.createMany({ data: nuevosAprendices, skipDuplicates: true });
         // createMany NO devuelve los registros: recargamos solo los recién creados
-        // para conocer sus IDs y meterlos al Map en memoria.
+        // para conocer sus IDs y meterlos a los dos Maps en memoria.
         const recargados = await prisma.aprendiz.findMany({
           where:  { fichaId, nombre: { in: nuevosAprendices.map(a => a.nombre) } },
           select: { id: true, nombre: true, moodleId: true, documento: true },
         });
-        for (const a of recargados) aprendizPorNombre.set(a.nombre, a);
+        for (const a of recargados) {
+          aprendizPorNombre.set(a.nombre, a);
+          if (a.moodleId) aprendizPorMoodle.set(String(a.moodleId), a);
+        }
       }
 
       // --- Paso B: entregas previas de esta evidencia (1 query) ---
@@ -328,7 +343,7 @@ const worker = new Worker("evidencias", async (job) => {
       let sinEntregar = 0;
 
       for (const entrega of entregas) {
-        const aprendizDb = aprendizPorNombre.get(entrega.nombre);
+        const aprendizDb = resolverAprendiz(entrega); // moodleId primero, luego nombre
         if (!aprendizDb) continue; // tras el Paso A no debería faltar ninguno
 
         // Refrescar moodleId si el scraper lo trae y en DB faltaba o cambió.
@@ -336,7 +351,8 @@ const worker = new Worker("evidencias", async (job) => {
           aprendizUpdates.push(
             prisma.aprendiz.update({ where: { id: aprendizDb.id }, data: { moodleId: entrega.aprendizMoodleId } })
           );
-          aprendizDb.moodleId = entrega.aprendizMoodleId; // mantener el Map al día
+          aprendizDb.moodleId = entrega.aprendizMoodleId;       // mantener los Maps al día
+          aprendizPorMoodle.set(String(entrega.aprendizMoodleId), aprendizDb);
         }
 
         // --- APLICAR CORRECCIÓN FAST-SYNC CSV (la nota del libro manda) ---
