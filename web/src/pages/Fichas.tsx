@@ -219,42 +219,53 @@ export default function Fichas() {
       queryFn:  () => apiFetch(`/api/fichas/${encodeURIComponent(target.id)}/evidencias`),
     })
     const gaDe   = (n: string) => parseInt((n.match(/GA\s*(\d+)/i) || [])[1] || "0", 10)
+    const aaDe   = (n: string) => parseInt((n.match(/AA\s*(\d+)/i) || [])[1] || "99", 10)
+    const evDe   = (n: string) => parseInt((n.match(/EV\s*(\d+)/i) || [])[1] || "99", 10)
     const compDe = (n: string) => (n.match(/GA\s*\d+\s*-\s*(\d{6,9})/i) || [])[1] || ""
     const miComp = user?.competenciaCodigo || ""
-    const [verTodas, setVerTodas] = useState(false) // mostrar también otras competencias
+    const todas  = data?.evidencias ?? []
 
-    // Evidencias visibles: por defecto SOLO las de MI competencia (no las de otros
-    // instructores). Si no tengo competencia o no hay match, se muestran todas.
-    const todas = data?.evidencias ?? []
-    const hayMias = miComp && todas.some(e => compDe(e.nombre) === miComp)
-    const visibles = (verTodas || !hayMias) ? todas : todas.filter(e => compDe(e.nombre) === miComp)
-
-    // Agrupar por guía (dentro de la competencia ya filtrada).
+    // Agrupar por "competencia · Guía N". La selección es por EVIDENCIA (id), así
+    // puedes marcar cualquiera, sea de tu competencia o no.
     const grupos = useMemo(() => {
-      const m = new Map<number, { id: string; nombre: string; tipo: string }[]>()
-      for (const ev of visibles) {
-        const g = gaDe(ev.nombre)
-        if (!m.has(g)) m.set(g, [])
-        m.get(g)!.push(ev)
+      const m = new Map<string, { comp: string; ga: number; evs: { id: string; nombre: string; tipo: string }[] }>()
+      for (const ev of todas) {
+        const comp = compDe(ev.nombre) || "—";
+        const ga = gaDe(ev.nombre);
+        const key = `${comp}|${ga}`;
+        if (!m.has(key)) m.set(key, { comp, ga, evs: [] });
+        m.get(key)!.evs.push(ev);
       }
-      return [...m.entries()].sort((a, b) => a[0] - b[0])
-    }, [data, verTodas])
+      const arr = [...m.values()];
+      arr.forEach(g => g.evs.sort((a, b) => aaDe(a.nombre) - aaDe(b.nombre) || evDe(a.nombre) - evDe(b.nombre)));
+      // mi competencia primero, luego por código y nº de guía
+      return arr.sort((a, b) =>
+        (a.comp === miComp ? -1 : 0) - (b.comp === miComp ? -1 : 0) ||
+        a.comp.localeCompare(b.comp) || a.ga - b.ga);
+    }, [data])
 
-    const [sel, setSel] = useState<Set<number>>(new Set())
+    const [sel, setSel] = useState<Set<string>>(new Set())   // evidenciaIds
     const [downloading, setDownloading] = useState(false)
-    useEffect(() => { setSel(new Set(grupos.map(g => g[0]))) }, [grupos.length, verTodas])
+    // Por defecto pre-marca TU competencia (si la hay); si no, todas.
+    useEffect(() => {
+      const mias = miComp ? todas.filter(e => compDe(e.nombre) === miComp) : [];
+      setSel(new Set((mias.length ? mias : todas).map(e => e.id)));
+    }, [data])
 
-    const allSel = grupos.length > 0 && sel.size === grupos.length
-    const toggle = (g: number) => setSel(p => { const n = new Set(p); n.has(g) ? n.delete(g) : n.add(g); return n })
-    const toggleAll = () => setSel(allSel ? new Set() : new Set(grupos.map(g => g[0])))
-
-    // IDs exactos de las evidencias de las guías seleccionadas (evita el choque de
-    // nº de GA entre competencias y arregla el "no deja descargar").
-    const idsSeleccionados = grupos.filter(([g]) => sel.has(g)).flatMap(([, evs]) => evs.map(e => e.id))
+    const toggleEv = (id: string) => setSel(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n })
+    const grupoAll = (g: typeof grupos[number]) => g.evs.every(e => sel.has(e.id))
+    const grupoSome = (g: typeof grupos[number]) => g.evs.some(e => sel.has(e.id))
+    const toggleGrupo = (g: typeof grupos[number]) => setSel(p => {
+      const n = new Set(p); const all = g.evs.every(e => n.has(e.id));
+      g.evs.forEach(e => all ? n.delete(e.id) : n.add(e.id)); return n;
+    })
+    const allIds = todas.map(e => e.id)
+    const allSel = allIds.length > 0 && sel.size === allIds.length
+    const toggleAll = () => setSel(allSel ? new Set() : new Set(allIds))
 
     async function descargar() {
       setDownloading(true)
-      await descargarReporte(target.id, target.codigo, idsSeleccionados)
+      await descargarReporte(target.id, target.codigo, [...sel])
       setDownloading(false)
       onClose()
     }
@@ -264,33 +275,31 @@ export default function Fichas() {
         <DialogContent className="max-w-lg">
           <DialogHeader><DialogTitle>Descargar Excel — Ficha {target.codigo}</DialogTitle></DialogHeader>
           {isLoading ? (
-            <div className="py-8 text-center text-sm text-gray-500"><Loader2 className="w-5 h-5 animate-spin inline" /> Cargando guías…</div>
+            <div className="py-8 text-center text-sm text-gray-500"><Loader2 className="w-5 h-5 animate-spin inline" /> Cargando evidencias…</div>
           ) : grupos.length === 0 ? (
             <div className="py-8 text-center text-sm text-gray-500">Esta ficha no tiene evidencias escaneadas todavía.</div>
           ) : (
             <div className="max-h-[55vh] overflow-y-auto space-y-2 pr-1">
-              <div className="flex items-center justify-between mb-1">
-                <button onClick={toggleAll} className="flex items-center gap-2 text-sm font-medium text-sena-green">
-                  {allSel ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />} Seleccionar todas
-                </button>
-                {miComp && hayMias && (
-                  <label className="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer">
-                    <input type="checkbox" checked={verTodas} onChange={e => setVerTodas(e.target.checked)} />
-                    Ver otras competencias
-                  </label>
-                )}
-              </div>
-              {!verTodas && miComp && hayMias && (
-                <p className="text-xs text-gray-400 mb-1">Mostrando solo tu competencia ({miComp}).</p>
-              )}
-              {grupos.map(([g, evs]) => (
-                <div key={g} className="border border-gray-200 rounded-md overflow-hidden">
-                  <button onClick={() => toggle(g)} className={`w-full px-3 py-2 flex items-center gap-2 text-sm font-medium ${sel.has(g) ? "bg-green-50" : ""}`}>
-                    {sel.has(g) ? <CheckSquare className="w-4 h-4 text-sena-green" /> : <Square className="w-4 h-4 text-gray-300" />}
-                    {g > 0 ? `Guía ${g}` : "Sin guía"} <span className="text-gray-400 font-normal">({evs.length} evidencia{evs.length !== 1 ? "s" : ""})</span>
+              <button onClick={toggleAll} className="flex items-center gap-2 text-sm font-medium text-sena-green mb-1">
+                {allSel ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />} Seleccionar todas
+              </button>
+              <p className="text-xs text-gray-400 mb-1">Marca las evidencias que quieras incluir (las de tu competencia vienen premarcadas).</p>
+              {grupos.map((g) => (
+                <div key={`${g.comp}-${g.ga}`} className="border border-gray-200 rounded-md overflow-hidden">
+                  <button onClick={() => toggleGrupo(g)} className={`w-full px-3 py-2 flex items-center gap-2 text-sm font-medium ${grupoAll(g) ? "bg-green-50" : grupoSome(g) ? "bg-green-50/40" : ""}`}>
+                    {grupoAll(g) ? <CheckSquare className="w-4 h-4 text-sena-green" /> : <Square className={`w-4 h-4 ${grupoSome(g) ? "text-sena-green/60" : "text-gray-300"}`} />}
+                    {g.ga > 0 ? `Guía ${g.ga}` : "Sin guía"}
+                    <span className="text-gray-400 font-normal">· comp. {g.comp}{g.comp === miComp ? " (tuya)" : ""} · {g.evs.length}</span>
                   </button>
-                  <ul className="px-9 pb-2 space-y-0.5">
-                    {evs.map(ev => <li key={ev.id} className="text-xs text-gray-500 truncate" title={ev.nombre}>• {ev.nombre}</li>)}
+                  <ul className="pb-1">
+                    {g.evs.map(ev => (
+                      <li key={ev.id}>
+                        <button onClick={() => toggleEv(ev.id)} className="w-full px-3 pl-9 py-1 flex items-center gap-2 text-xs text-left hover:bg-gray-50">
+                          {sel.has(ev.id) ? <CheckSquare className="w-3.5 h-3.5 text-sena-green shrink-0" /> : <Square className="w-3.5 h-3.5 text-gray-300 shrink-0" />}
+                          <span className="truncate" title={ev.nombre}>{ev.nombre}</span>
+                        </button>
+                      </li>
+                    ))}
                   </ul>
                 </div>
               ))}
@@ -298,9 +307,9 @@ export default function Fichas() {
           )}
           <DialogFooter>
             <Button variant="outline" onClick={onClose}>Cancelar</Button>
-            <Button className="bg-sena-green hover:bg-sena-green/90 gap-2" disabled={downloading || idsSeleccionados.length === 0} onClick={descargar}>
+            <Button className="bg-sena-green hover:bg-sena-green/90 gap-2" disabled={downloading || sel.size === 0} onClick={descargar}>
               {downloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
-              Descargar ({idsSeleccionados.length} evid.)
+              Descargar ({sel.size} evid.)
             </Button>
           </DialogFooter>
         </DialogContent>
