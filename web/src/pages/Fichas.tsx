@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Plus, Search, Pencil, Archive, ArchiveRestore, Trash2, ChevronDown, ChevronRight, Download, FileSpreadsheet } from "lucide-react"
+import { Plus, Search, Pencil, Archive, ArchiveRestore, Trash2, ChevronDown, ChevronRight, Download, FileSpreadsheet, CheckSquare, Square, Loader2 } from "lucide-react"
 import Layout from "@/components/Layout"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label"
 import { apiFetch, ApiError } from "@/api/client"
 import { useAuthStore } from "@/store/auth"
 import { useNavigate } from "react-router-dom"
-import { useEffect } from "react"
+import { useEffect, useMemo } from "react"
 import { toast } from "sonner"
 
 interface Ficha {
@@ -40,6 +40,7 @@ export default function Fichas() {
   const [scanStatus, setScanStatus] = useState("")
   const [scanLoading, setScanLoading] = useState(false)
   const [error, setError] = useState("")
+  const [excelTarget, setExcelTarget] = useState<{ id: string; codigo: string } | null>(null) // ficha cuyo Excel se está configurando
 
   useEffect(() => {
     const storedJwt = localStorage.getItem("zajuna_jwt")
@@ -132,16 +133,10 @@ export default function Fichas() {
     }
   }
 
-  async function descargarReporte(fichaId: string, codigo: string) {
+  // Descarga el Excel. gas = lista de números de guía (vacío = todas).
+  async function descargarReporte(fichaId: string, codigo: string, gas: number[] = []) {
     try {
-      // Selección opcional de guías. Vacío = todas. El backend ordena por GA/AA/EV.
-      const sel = window.prompt(
-        "¿Qué guías incluir? Números separados por coma (ej: 1,2,3).\nDéjalo vacío para incluir TODAS.",
-        ""
-      )
-      if (sel === null) return // canceló
-      const gas = sel.trim().replace(/[^0-9,]/g, "")
-      const qs = gas ? `?gas=${gas}` : ""
+      const qs = gas.length ? `?gas=${gas.join(",")}` : ""
       const res = await fetch(`/api/fichas/${fichaId}/reporte-excel${qs}`, {
         headers: { Authorization: `Bearer ${jwt}` }
       })
@@ -174,7 +169,7 @@ export default function Fichas() {
         <td className="px-5 py-3 text-gray-700 max-w-xs truncate" title={f.nombre}>{f.nombre || <span className="text-gray-400">Sin nombre</span>}</td>
         <td className="px-5 py-3">
           <div className="flex items-center gap-1">
-            <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => descargarReporte(f.id, f.codigo)} title="Descargar Excel Mágico">
+            <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => setExcelTarget({ id: f.id, codigo: f.codigo })} title="Descargar Excel (elegir guías)">
               <FileSpreadsheet className="w-3.5 h-3.5 text-green-600" />
             </Button>
             <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => openEditar(f)} title="Editar">
@@ -215,8 +210,78 @@ export default function Fichas() {
     )
   }
 
+  // Modal para elegir qué guías incluir en el Excel (muestra sus evidencias).
+  function ExcelModal({ target, onClose }: { target: { id: string; codigo: string }; onClose: () => void }) {
+    const { data, isLoading } = useQuery<{ evidencias: { id: string; nombre: string; tipo: string }[] }>({
+      queryKey: ["ficha-evidencias", target.id],
+      queryFn:  () => apiFetch(`/api/fichas/${encodeURIComponent(target.id)}/evidencias`),
+    })
+    const gaDe = (n: string) => parseInt((n.match(/GA\s*(\d+)/i) || [])[1] || "0", 10)
+    const grupos = useMemo(() => {
+      const m = new Map<number, { id: string; nombre: string; tipo: string }[]>()
+      for (const ev of data?.evidencias ?? []) {
+        const g = gaDe(ev.nombre)
+        if (!m.has(g)) m.set(g, [])
+        m.get(g)!.push(ev)
+      }
+      return [...m.entries()].sort((a, b) => a[0] - b[0])
+    }, [data])
+    const [sel, setSel] = useState<Set<number>>(new Set())
+    const [downloading, setDownloading] = useState(false)
+    useEffect(() => { setSel(new Set(grupos.map(g => g[0]))) }, [grupos.length])
+
+    const allSel = grupos.length > 0 && sel.size === grupos.length
+    const toggle = (g: number) => setSel(p => { const n = new Set(p); n.has(g) ? n.delete(g) : n.add(g); return n })
+    const toggleAll = () => setSel(allSel ? new Set() : new Set(grupos.map(g => g[0])))
+
+    async function descargar() {
+      setDownloading(true)
+      await descargarReporte(target.id, target.codigo, allSel ? [] : [...sel]) // todas → vacío (= todas)
+      setDownloading(false)
+      onClose()
+    }
+
+    return (
+      <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader><DialogTitle>Descargar Excel — Ficha {target.codigo}</DialogTitle></DialogHeader>
+          {isLoading ? (
+            <div className="py-8 text-center text-sm text-gray-500"><Loader2 className="w-5 h-5 animate-spin inline" /> Cargando guías…</div>
+          ) : grupos.length === 0 ? (
+            <div className="py-8 text-center text-sm text-gray-500">Esta ficha no tiene evidencias escaneadas todavía.</div>
+          ) : (
+            <div className="max-h-[55vh] overflow-y-auto space-y-2 pr-1">
+              <button onClick={toggleAll} className="flex items-center gap-2 text-sm font-medium text-sena-green mb-1">
+                {allSel ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />} Seleccionar todas
+              </button>
+              {grupos.map(([g, evs]) => (
+                <div key={g} className="border border-gray-200 rounded-md overflow-hidden">
+                  <button onClick={() => toggle(g)} className={`w-full px-3 py-2 flex items-center gap-2 text-sm font-medium ${sel.has(g) ? "bg-green-50" : ""}`}>
+                    {sel.has(g) ? <CheckSquare className="w-4 h-4 text-sena-green" /> : <Square className="w-4 h-4 text-gray-300" />}
+                    {g > 0 ? `Guía ${g}` : "Sin guía"} <span className="text-gray-400 font-normal">({evs.length} evidencia{evs.length !== 1 ? "s" : ""})</span>
+                  </button>
+                  <ul className="px-9 pb-2 space-y-0.5">
+                    {evs.map(ev => <li key={ev.id} className="text-xs text-gray-500 truncate" title={ev.nombre}>• {ev.nombre}</li>)}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={onClose}>Cancelar</Button>
+            <Button className="bg-sena-green hover:bg-sena-green/90 gap-2" disabled={downloading || sel.size === 0} onClick={descargar}>
+              {downloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
+              Descargar ({sel.size})
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    )
+  }
+
   return (
     <Layout>
+      {excelTarget && <ExcelModal target={excelTarget} onClose={() => setExcelTarget(null)} />}
       <div className="space-y-4">
         {/* Actions */}
         <div className="bg-white rounded-lg border border-gray-200 p-4 flex flex-wrap items-center gap-3">
