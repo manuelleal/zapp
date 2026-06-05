@@ -7,10 +7,12 @@ const { decrypt } = require("../lib/crypto");
 const { saveSession, loadSession } = require("../lib/sessionStore");
 const prisma = require("../db/client");
 const { login, cerrarModal, BASE_URL, log } = require("../../../scraper/auth");
-const { leerConfigEvidencia, guardarConfigEvidencia, enableEditMode } = require("../../../scraper/configEvidencias");
+const { enableEditMode } = require("../../../scraper/configEvidencias");
+const { cookieHeaderFromState, leerConfigEvidenciaFetch, guardarConfigEvidenciaFetch } = require("../../../scraper/configEvidenciasFetch");
 
 // Worker genérico para cambio masivo de configuración de evidencias.
 // Acepta cualquier combinación de: abrirFecha/Hora, entregaFecha/Hora, limiteFecha/Hora, intentos.
+// Playwright SOLO para login + modo edición; leer/guardar van por fetch+cheerio.
 // Concurrency 1: Zajuna invalida sesiones paralelas del mismo usuario.
 const worker = new Worker("cambiarConfig", async (job) => {
   const {
@@ -54,12 +56,13 @@ const worker = new Worker("cambiarConfig", async (job) => {
       const state = await ctx.storageState();
       await saveSession(userId, state).catch((e) => log(`[cambiarConfigWorker] no se pudo guardar sesión: ${e.message}`));
     }
-    return { ctx, page };
+    const cookieStr = cookieHeaderFromState(await ctx.storageState());
+    return { ctx, page, cookieStr };
   }
 
-  let ctx, page;
+  let ctx, page, cookieStr;
   try {
-    ({ ctx, page } = await getPaginaAutenticada());
+    ({ ctx, page, cookieStr } = await getPaginaAutenticada());
   } catch (err) {
     const msg = `Login fallido: ${err.message}`;
     await prisma.configChangeJob.update({ where: { id: configChangeJobId }, data: { status: "error", errorMsg: msg, detalle: [] } });
@@ -89,13 +92,13 @@ const worker = new Worker("cambiarConfig", async (job) => {
         // Leer config actual para valorAntes
         let valorAntes = null;
         try {
-          valorAntes = await leerConfigEvidencia(page, actId);
+          valorAntes = await leerConfigEvidenciaFetch(cookieStr, actId);
         } catch (e) {
           log(`[cambiarConfigWorker] no se pudo leer config antes para ${evidenciaId}: ${e.message}`);
         }
 
         // Aplicar cambios
-        await guardarConfigEvidencia(page, actId, cambios);
+        await guardarConfigEvidenciaFetch(cookieStr, actId, cambios);
 
         // Registrar audit
         await prisma.configAudit.create({
@@ -115,7 +118,7 @@ const worker = new Worker("cambiarConfig", async (job) => {
           await releaseContext(ctx);
           try {
             await saveSession(userId, null).catch(() => {});
-            ({ ctx, page } = await getPaginaAutenticada());
+            ({ ctx, page, cookieStr } = await getPaginaAutenticada());
           } catch (reconnErr) {
             log(`[cambiarConfigWorker] No se pudo reconectar: ${reconnErr.message}`);
           }

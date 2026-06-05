@@ -36,9 +36,10 @@ Fastify :3000  (api/src/server.js)
     │  → garantiza aislamiento multi-tenant (nunca datos cruzados)
     │
     ├─ Si la tarea es pesada (Playwright, Claude API):
-    │   └─ queue.add(...)  → BullMQ encola el job
-    │       └─ Worker BullMQ (proceso separado dentro del mismo node)
-    │           ├─ Playwright scraping en Zajuna
+    │   └─ queue.add(...)  → BullMQ encola el job en Redis
+    │       └─ Worker BullMQ — corre en OTRO proceso Node (api/src/worker-entry.js),
+    │          NO en el de la API (separados desde el refactor P0, jun 2026).
+    │           ├─ Scraping en Zajuna: Playwright, o fetch+cheerio (ver nota config)
     │           └─ actualiza Job.status en DB (queued → running → done/error)
     │
     └─ Response al browser
@@ -99,11 +100,12 @@ C:\zajuna\
 │   └── db/
 │       └── client.js          Singleton PrismaClient
 │
-├── scraper/                   ← MÓDULOS PLAYWRIGHT reutilizables (importados por workers)
-│   ├── auth.js                login(), cerrarModal(), BASE_URL
+├── scraper/                   ← MÓDULOS de scraping reutilizables (importados por workers)
+│   ├── auth.js                login(), cerrarModal(), BASE_URL  (login SSO federado, NO nativo Moodle)
 │   ├── fichas.js              descubrirFichas(page, competenciaCodigo)
 │   ├── evidencias.js          obtenerEvidencias(), revisarEntregas*()
-│   ├── configEvidencias.js    leerConfigEvidencia(), guardarConfigEvidencia()
+│   ├── configEvidencias.js    [PLAYWRIGHT] leerConfigEvidencia(), guardarConfigEvidencia()
+│   ├── configEvidenciasFetch.js [FETCH+CHEERIO] gemelo liviano sin Chromium (ver nota abajo)
 │   ├── foroRating.js          calificarPostForo()
 │   └── mensajes.js            enviarMensajeInterno()
 │
@@ -121,6 +123,22 @@ C:\zajuna\
     ├── store/                 Zustand auth store (JWT en localStorage)
     └── lib/                   Utilidades (cn, fetch wrapper)
 ```
+
+### ⚠️ Nota — los DOS módulos de config (no te confundas)
+
+Leer/guardar fechas e intentos de una evidencia en Moodle tiene **dos
+implementaciones gemelas**:
+
+- `scraper/configEvidencias.js` — **Playwright**. Renderiza el form modedit en
+  Chromium. Más pesado; se usa en jobs puntuales.
+- `scraper/configEvidenciasFetch.js` — **fetch + cheerio**. Habla con Moodle por
+  HTTP con las cookies de la sesión (sin Chromium). Mucho más liviano y rápido;
+  lo usa `leerConfigLoteWorker` (carga masiva de la "Tabla de fechas").
+
+**La lógica de negocio compartida** (`FIELD_MAPS`, `extraerFecha`, `aplicarFecha`)
+vive en `configEvidencias.js` y el gemelo fetch la importa: **cambia las reglas de
+mapeo en UN solo lugar**. Detalle clave (disabledIf de Moodle) documentado en la
+cabecera de `configEvidenciasFetch.js`. Chromium queda solo para el login.
 
 ---
 
@@ -254,8 +272,10 @@ npx prisma migrate deploy
 # 4. Explorar DB
 npx prisma studio        # abre en http://localhost:5555
 
-# 5. Arrancar backend (puerto 3000, sirve web/dist en /)
-node api/src/server.js
+# 5. Arrancar backend — SON DOS PROCESOS (separados desde el refactor P0):
+node api/src/server.js        # API HTTP en :3000 (sirve web/dist), SIN workers
+node api/src/worker-entry.js  # los 15 workers BullMQ, en otra terminal/proceso
+# Producción: pm2 start ecosystem.config.js  (apps: api + workers)
 
 # 6. Dev frontend con HMR (puerto 5173, proxy → 3000)
 cd web && npm run dev
@@ -285,7 +305,12 @@ bash /c/zajuna/restart.sh
 
 ---
 
-## 8. Módulos implementados (estado al 17 mayo 2026)
+## 8. Módulos implementados (snapshot 17 mayo 2026)
+
+> ⚠️ Esta tabla es un snapshot. Para el **estado vigente** (ramas, bloqueadores,
+> qué se está tocando ahora) la fuente de verdad es `CLAUDE.md`. Bloqueador #1
+> actual: actas no se pueden poblar (`RapEvidenciaRel=0`).
+
 
 | # | Módulo | Descripción | Estado |
 |---|---|---|---|

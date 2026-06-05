@@ -1,3 +1,15 @@
+/**
+ * mensajeFormativoWorker.js — Cola "mensajes".
+ *
+ * QUÉ HACE: envía mensajes internos de Moodle a los aprendices (mensajería 1:1
+ * vía scraper/mensajes.enviarMensajeMoodle), personalizando el cuerpo con
+ * {{nombre}}/{{ficha}}/{{instructor}} por destinatario.
+ *
+ * job.data: { mensajeId, userId, destinatarios, cuerpo, zajunaUserEnc, zajunaPassEnc }
+ *   Actualiza el registro MensajeFormativo (mensajeId) con el resultado.
+ * concurrency: 1 (sesión Moodle única por usuario).
+ */
+
 require("dotenv").config({ path: require("path").resolve(__dirname, "../../../.env") });
 
 const { Worker } = require("bullmq");

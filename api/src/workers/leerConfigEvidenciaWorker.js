@@ -10,6 +10,8 @@ const { login, cerrarModal, BASE_URL, log } = require("../../../scraper/auth");
 const { leerConfigEvidencia, enableEditMode } = require("../../../scraper/configEvidencias");
 
 // Dedicated read-only config worker — saves to EvidenciaConfig table.
+// NOTA: Este worker sigue en Playwright (no migrado). El camino moderno/liviano
+// es leerConfigLoteWorker.js usando fetch+cheerio.
 // Concurrency 1: Zajuna invalidates parallel sessions from the same account.
 const worker = new Worker("leerConfig", async (job) => {
   const {

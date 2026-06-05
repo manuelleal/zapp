@@ -7,8 +7,12 @@ const { decrypt } = require("../lib/crypto");
 const { saveSession, loadSession } = require("../lib/sessionStore");
 const prisma = require("../db/client");
 const { login, cerrarModal, BASE_URL, log } = require("../../../scraper/auth");
-const { leerConfigEvidencia, guardarConfigEvidencia, enableEditMode } = require("../../../scraper/configEvidencias");
+const { enableEditMode } = require("../../../scraper/configEvidencias");
+const { cookieHeaderFromState, leerConfigEvidenciaFetch, guardarConfigEvidenciaFetch } = require("../../../scraper/configEvidenciasFetch");
 
+// Cola "config": lee o guarda la config (fechas/intentos) de UNA evidencia.
+// Playwright se usa SOLO para login + activar modo edición; la lectura y el
+// guardado van por fetch+cheerio (configEvidenciasFetch). operation = leer|guardar.
 const worker = new Worker("config", async (job) => {
   const {
     jobId,
@@ -65,10 +69,12 @@ const worker = new Worker("config", async (job) => {
     if (courseId) {
       await enableEditMode(page, courseId);
     }
+    // Cookies de la sesión ya autenticada → de aquí en más, todo por fetch.
+    const cookieStr = cookieHeaderFromState(await ctx.storageState());
     await prisma.job.update({ where: { id: jobId }, data: { progreso: 30 } });
 
     if (operation === "leer") {
-      const configActual = await leerConfigEvidencia(page, actId);
+      const configActual = await leerConfigEvidenciaFetch(cookieStr, actId);
       // Persistir cache (Sprint 2.5 FIX 2)
       await prisma.evidencia.update({
         where: { id: evidenciaId },
@@ -82,15 +88,15 @@ const worker = new Worker("config", async (job) => {
 
     } else if (operation === "guardar") {
       // Leer config antes (auditoría)
-      const antes = await leerConfigEvidencia(page, actId);
+      const antes = await leerConfigEvidenciaFetch(cookieStr, actId);
       await prisma.job.update({ where: { id: jobId }, data: { progreso: 50 } });
 
-      // Guardar cambios
-      await guardarConfigEvidencia(page, actId, config);
+      // Guardar cambios (guardarConfigEvidenciaFetch verifica el guardado internamente)
+      await guardarConfigEvidenciaFetch(cookieStr, actId, config);
       await prisma.job.update({ where: { id: jobId }, data: { progreso: 80 } });
 
       // Leer config después (verificación + auditoría)
-      const despues = await leerConfigEvidencia(page, actId);
+      const despues = await leerConfigEvidenciaFetch(cookieStr, actId);
 
       // Persistir auditoría
       await prisma.configAudit.create({

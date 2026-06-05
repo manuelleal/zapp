@@ -7,9 +7,11 @@ const { decrypt } = require("../lib/crypto");
 const { saveSession, loadSession } = require("../lib/sessionStore");
 const prisma = require("../db/client");
 const { login, cerrarModal, BASE_URL, log } = require("../../../scraper/auth");
-const { leerConfigEvidencia, guardarConfigEvidencia, enableEditMode } = require("../../../scraper/configEvidencias");
+const { enableEditMode } = require("../../../scraper/configEvidencias");
+const { cookieHeaderFromState, leerConfigEvidenciaFetch, guardarConfigEvidenciaFetch } = require("../../../scraper/configEvidenciasFetch");
 
-// Worker para cambio masivo de fecha de cierre (duedate).
+// Worker para cambio masivo de fecha de cierre (duedate) y apertura.
+// Playwright SOLO para login + modo edición; leer/guardar van por fetch+cheerio.
 // Concurrency 1: Zajuna invalida sesiones paralelas del mismo usuario.
 const worker = new Worker("cambiarFecha", async (job) => {
   const {
@@ -60,12 +62,13 @@ const worker = new Worker("cambiarFecha", async (job) => {
       const state = await ctx.storageState();
       await saveSession(userId, state).catch((e) => log(`[cambiarFechaWorker] no se pudo guardar sesión: ${e.message}`));
     }
-    return { ctx, page };
+    const cookieStr = cookieHeaderFromState(await ctx.storageState());
+    return { ctx, page, cookieStr };
   }
 
-  let ctx, page;
+  let ctx, page, cookieStr;
   try {
-    ({ ctx, page } = await getPaginaAutenticada());
+    ({ ctx, page, cookieStr } = await getPaginaAutenticada());
   } catch (err) {
     const msg = `Login fallido: ${err.message}`;
     log(`[cambiarFechaWorker] ${msg}`);
@@ -116,7 +119,7 @@ const worker = new Worker("cambiarFecha", async (job) => {
         let antesEntrega  = null;
         let antesApertura = null;
         try {
-          const configActual = await leerConfigEvidencia(page, actId);
+          const configActual = await leerConfigEvidenciaFetch(cookieStr, actId);
           antesEntrega = configActual.entregaFecha
             ? `${configActual.entregaFecha}T${configActual.entregaHora || "23:55"}`
             : null;
@@ -139,7 +142,7 @@ const worker = new Worker("cambiarFecha", async (job) => {
           configUpdate.abrirFecha = aperturaFecha;
           configUpdate.abrirHora  = aperturaHora;
         }
-        await guardarConfigEvidencia(page, actId, configUpdate);
+        await guardarConfigEvidenciaFetch(cookieStr, actId, configUpdate);
 
         const despuesEntrega  = nuevaFecha    !== undefined ? `${nuevaFecha}T${nuevaHora}`         : null;
         const despuesApertura = aperturaFecha !== undefined ? `${aperturaFecha}T${aperturaHora}`   : null;
@@ -181,6 +184,7 @@ const worker = new Worker("cambiarFecha", async (job) => {
             const reconect = await getPaginaAutenticada();
             ctx  = reconect.ctx;
             page = reconect.page;
+            cookieStr = reconect.cookieStr;
           } catch (reconnErr) {
             log(`[cambiarFechaWorker] No se pudo reconectar: ${reconnErr.message}`);
           }
