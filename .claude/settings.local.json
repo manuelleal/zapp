@@ -93,7 +93,9 @@
       "Bash(git -C /c/zajuna commit -m 'feat\\(ui\\): tabla editable de fechas/intentos por ficha \\(B2\\)' -m 'Nuevo componente ConfigTabla + toggle Lista/Tabla en Mis Evidencias: *)",
       "Bash(git -C /c/zajuna log --oneline -6)",
       "Bash(git -C /c/zajuna status --short)",
-      "Bash(Select-String \"^\\\\?\\\\?\")"
+      "Bash(Select-String \"^\\\\?\\\\?\")",
+      "Bash(echo \"EXIT=$?\")",
+      "PowerShell(taskkill *)"
     ]
   }
 }
