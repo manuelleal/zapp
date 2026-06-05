@@ -1,7 +1,7 @@
 require("dotenv").config({ path: require("path").resolve(__dirname, "../../../.env") });
 
 const { Worker, UnrecoverableError } = require("bullmq");
-const { chromium } = require("playwright");
+const { acquireContext, releaseContext } = require("../lib/browserPool");
 const { connection } = require("../lib/queue");
 const { decrypt } = require("../lib/crypto");
 const { saveSession, loadSession } = require("../lib/sessionStore");
@@ -18,8 +18,7 @@ const worker = new Worker("fichas", async (job) => {
   const zajunaPass = decrypt(zajunaPassEnc);
 
   const savedSession = await loadSession(userId);
-  const browser = await chromium.launch({ headless: true });
-  const ctx = await browser.newContext({
+  const ctx = await acquireContext({
     locale: "es-CO",
     timezoneId: "America/Bogota",
     ...(savedSession ? { storageState: savedSession } : {}),
@@ -64,7 +63,7 @@ const worker = new Worker("fichas", async (job) => {
     });
 
   } finally {
-    await browser.close();
+    await releaseContext(ctx);
   }
 
 }, { connection, concurrency: 5 });

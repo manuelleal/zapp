@@ -3,7 +3,7 @@
  */
 
 const BASE_URL = "https://zajuna.sena.edu.co/zajuna";
-const TIMEOUT  = 30_000;
+const TIMEOUT  = 90_000;
 
 function log(msg) {
   console.error(`[${new Date().toISOString()}] ${msg}`);

@@ -1,19 +1,236 @@
+# 🛑 ARCHIVO HISTÓRICO 🛑
+
+> **ATENCIÓN:** Este documento ha sido congelado y es solo de referencia histórica. Para la documentación actual, el estado del proyecto, comandos, y reglas de desarrollo, **DEBES leer `CLAUDE.md`**.
+
 # HANDOFF.md — Guía operativa Zajuna App
 
-> Documento maestro para continuar el desarrollo en chats nuevos.
-> Léelo PRIMERO antes de cualquier prompt. Última actualización: mayo 2026 — Sprint 2.6 cerrado con 1 bug abierto.
+> Documento maestro histórico. Última actualización: **17 mayo 2026**
 
 ---
 
 ## 🎯 Estado actual del proyecto
 
-- **Rama activa:** `feature/config-evidencias` (branch off `feature/frontend-react`)
-- **HEAD:** commit `dab1003` — fix(scraper): resilient nav (Sprint 2.6 timeout fix)
+- **Rama activa:** `feat/frontend-resilience-e2e`
+- **HEAD:** commit `78b156e` — docs(actas): refinar plan sprint v2
 - **Stack:** Fastify 5 + Prisma 6 + Postgres + Redis + BullMQ + Playwright 1.59
-- **Frontend:** React 18 + Vite 5 + Tailwind 3 + shadcn/ui en `web/` — `web/dist` servido por Fastify sin flags
+- **Frontend:** React 18 + Vite 5 + Tailwind 3 + shadcn/ui en `web/` — `web/dist` servido por Fastify
 - **`public/` eliminado** ✅
 
-### ✅ Features implementados y probados
+---
+
+## 🗺️ PLAN MODULAR — CONFIGURADOR DE EVIDENCIAS (iniciado 16 mayo 2026)
+
+Plan de 6 módulos independientes en branches separadas. Regla: **NO empezar N+1 hasta que N pase smoke test y se haga merge a master.**
+
+| # | Branch | Estado | Smoke test |
+|---|--------|--------|------------|
+| **1** | `feature/config-evs-1-lectura` | ✅ Código completo + fixes UX | ⏳ Pendiente usuario |
+| **2** | `feature/config-evs-2-batch-duedate` | ✅ Código completo (commits `9ecb8ed`+`30ef5fd`) | ⏳ Pendiente smoke test |
+| **3** | `feature/config-evs-3-batch-config` | ✅ Código completo (commit `1513812`) | ⏳ Pendiente smoke test |
+| **4+5** | `feature/config-evs-4-raps` | ✅ Código completo (commit `df3b15b`) | ⏳ Pendiente smoke test |
+| **6** | `feature/config-evs-6-matching-ia` | ✅ Código completo (commit `84df368`) | ⏳ Pendiente smoke test |
+
+### ✅ MÓDULO 1 — Lectura de configuración actual (commit `e469cfc`)
+
+**Contexto:** La mayor parte del módulo ya existía en el codebase (Sprint 2 + 2.5 + 2.6). El trabajo fue agregar la tabla dedicada, los campos raw faltantes y separar correctamente la lectura de la escritura.
+
+**Qué había antes vs. qué se construyó:**
+
+| Componente | Estado previo | Cambio |
+|---|---|---|
+| `scraper/configEvidencias.js` → `leerConfigEvidencia` | ✅ Existía completo | ➕ Agrega campo `raw` con 7 campos Moodle nativos |
+| `configWorker.js` | ✅ Existía (leer + guardar) | Sin cambio — sigue manejando saves |
+| `GET /api/evidencias/:id/config` | ✅ Existía (solo configCache) | 🔄 Ahora verifica `EvidenciaConfig` table primero |
+| `EvidenciaConfig` tabla | ❌ No existía | ✅ Nueva — migración `20260516214733` |
+| `leerConfigEvidenciaWorker.js` | ❌ No existía | ✅ Nuevo worker dedicado en queue `leerConfig` |
+| `leerConfigQueue` en `queue.js` | ❌ No existía | ✅ Nueva cola BullMQ |
+| Botón "Ver config" por fila | Existía como "Config" (editable) | 🔄 Renombrado, abre modal `readOnly=true` |
+| `ConfigEvidenciaDialog` | ✅ Existía (editable, con Save) | ➕ Prop `readOnly` — sin Guardar, inputs disabled |
+
+**Campos raw ahora extraídos por el scraper:**
+- `duedate` (fecha de entrega Moodle)
+- `allowsubmissionsfromdate` (apertura de entregas)
+- `cutoffdate` (fecha límite/extensión)
+- `maxattempts` (intentos permitidos)
+- `attemptreopenmethod` ← **nuevo**
+- `submissiondrafts` ← **nuevo**
+- `sendnotifications` ← **nuevo**
+
+**Flujo GET /api/evidencias/:id/config (post-módulo 1):**
+```
+1. ¿EvidenciaConfig más reciente < 4h?  → 200 { config, raw, fromCache: true }
+2. ¿configCache inline < 4h (legacy)?   → 200 { config, fromCache: true }
+3. Sin cache o ?force=1                 → 202 { jobId } → leerConfigQueue → leerConfigEvidenciaWorker
+                                                           ↓
+                                            Guarda en EvidenciaConfig + actualiza configCache
+```
+
+**Archivos modificados en este módulo:**
+```
+prisma/schema.prisma                          ← +EvidenciaConfig model + relation
+api/src/workers/leerConfigEvidenciaWorker.js  ← NUEVO
+api/src/lib/queue.js                          ← +leerConfigQueue
+api/src/routes/configEvidencias.js            ← GET actualizado + encolarLeerConfigJob()
+api/src/server.js                             ← require leerConfigEvidenciaWorker
+scraper/configEvidencias.js                   ← +raw fields en retorno de leerConfigEvidencia
+web/src/components/ConfigEvidenciaDialog.tsx  ← +prop readOnly
+web/src/components/EvidenciasModal.tsx        ← botón "Ver config" → readOnly: true
+```
+
+**Fixes adicionales aplicados (commit `a5a9168` en rama feature/config-evs-1-lectura):**
+- `EvidenciasConfig.tsx`: fichas expandidas por defecto (`?? false` en lugar de `?? true`)
+- `leerConfigEvidenciaWorker.js`: retry automático con fresh login si falla "Formulario modedit no encontrado"
+  o "sesion fue expulsada". Borra sesión Redis y abre nuevo browser con credenciales frescos.
+- `restart.sh`: script bash para matar y relanzar el servidor (`bash /c/zajuna/restart.sh`)
+
+**Smoke test a realizar (usuario):**
+1. `bash /c/zajuna/restart.sh` (o `node api/src/server.js`)
+2. Ir a /evidencias-config — las fichas deben aparecer **expandidas** por defecto
+3. Click **"Ver config"** en 3 evidencias diferentes
+4. Verificar que los campos coincidan con `/course/modedit.php?update={actId}` en Zajuna manual
+5. Segunda apertura del mismo modal debe ser instantánea (cache `EvidenciaConfig`)
+6. `?force=1` debe forzar re-lectura desde Moodle
+
+**⚠️ Dudas / issues abiertos:**
+- Sesión concurrente si usuario dispara read + save simultáneamente (no es problema en M1, sí en M2+)
+- `npx prisma generate` requiere detener servidor en Windows (DLL bloqueado) — esto es conocido
+
+---
+
+### ✅ MÓDULO 2 — Cambio masivo de fecha de cierre (commit `9ecb8ed`)
+
+**Pre-requisito:** Módulo 1 smoke test ✅ + merge a master.
+
+**Arquitectura implementada:**
+
+| Componente | Archivo | Descripción |
+|---|---|---|
+| Tabla DB | `ConfigChangeJob` | Audit + progreso del job; `detalle Json` guarda resultado por evidencia |
+| Cola BullMQ | `cambiarFechaQueue` | Queue "cambiarFecha", attempts:1 (los Playwright retries son internos) |
+| Worker | `cambiarFechaWorker.js` | Secuencial (concurrency:1); retry de sesión si es expulsada entre evidencias |
+| Endpoint POST | `POST /api/evidencias/batch/duedate` | Valida IDOR, parsea datetime-local, crea Job en DB, encola |
+| Endpoint GET | `GET /api/evidencias/batch/duedate/:id` | Devuelve ConfigChangeJob para polling desde frontend |
+| Frontend | `EvidenciasConfig.tsx` | Checkbox por evidencia + select-all por ficha/guía + barra flotante + polling |
+
+**Flujo completo:**
+```
+1. Usuario selecciona N evidencias + escribe datetime-local → click "Aplicar fecha"
+2. Confirmación: "¿Cambiar fecha de N evidencias a [fecha]?"
+3. POST /api/evidencias/batch/duedate → { jobId, configChangeJobId }
+4. Frontend hace polling /api/jobs/:jobId cada 3s
+5. Worker (concurrency:1):
+   a. Login (o usa sesión Redis si sigue válida)
+   b. Por cada evidenciaId:
+      - leerConfigEvidencia (para valorAntes)
+      - guardarConfigEvidencia con solo entregaFecha/entregaHora
+      - ConfigAudit.create con antes/después
+      - Si falla: loguea error, continúa con la siguiente
+      - Si la sesión fue expulsada: reconecta (fresh login)
+   c. Actualiza progreso % en DB en cada iteración
+   d. Al terminar: status=done/done_with_errors/error + detalle completo
+6. Frontend muestra resumen: N exitosas, M con error (lista)
+```
+
+**Validaciones del endpoint:**
+- `evidenciaIds` no vacío
+- `nuevaFecha` parseable (datetime-local o ISO 8601)
+- Todas las evidencias existen y pertenecen al usuario (IDOR check)
+- Todas tienen `actId` válido en `href`
+
+**Minutos Moodle:** hora se redondea al múltiplo de 5 más cercano (ej. :58 → :55, :03 → :05).
+
+**Smoke test pendiente (usuario):**
+1. Ir a /evidencias-config → seleccionar 3 evidencias distintas (puede ser tipos distintos)
+2. En barra flotante: elegir fecha futura (ej. 2026-12-31T23:55)
+3. Confirmar → ver progreso en barra
+4. Al terminar: verificar en Zajuna `/course/modedit.php?update={actId}` que la fecha quedó correcta
+5. Revisar `ConfigChangeJob` en DB (`npx prisma studio`): detalle con `ok:true` por evidencia
+
+**Branch:** `feature/config-evs-2-batch-duedate`
+
+---
+
+### ✅ MÓDULO 3 — Cambio masivo de configuración completa (commit `1513812`)
+
+**Pre-requisito:** Módulo 2 ✅ **Branch:** `feature/config-evs-3-batch-config`
+
+| Componente | Archivo | Descripción |
+|---|---|---|
+| Worker | `cambiarConfigWorker.js` | Genérico — acepta cualquier combinación de abrirFecha/Hora, entregaFecha/Hora, limiteFecha/Hora, intentos |
+| Cola BullMQ | `cambiarConfigQueue` | Queue "cambiarConfig", attempts:1 |
+| Endpoint POST | `POST /api/evidencias/batch/config` | Body: `{ evidenciaIds, cambios }`. Valida apertura<entrega, redondea mins |
+| Endpoint GET | `GET /api/evidencias/batch/config/:id` | Polling de ConfigChangeJob |
+| Componente | `BatchConfigModal.tsx` | Modal con 3 pares fecha/hora + selector intentos + confirmación con resumen |
+| Frontend | `EvidenciasConfig.tsx` | Botón "Config avanzada" en barra flotante → abre BatchConfigModal |
+
+**Campos soportados en `cambios`:**
+- `entregaFecha` / `entregaHora` — duedate (fecha de entrega)
+- `abrirFecha` / `abrirHora` — allowsubmissionsfromdate (apertura)
+- `limiteFecha` / `limiteHora` — cutoffdate (fecha límite/extensión)
+- `intentos` — `"Ilimitado"` o número (1, 2, 3, 5, 10)
+
+**Reglas:**
+- Solo se aplican los campos no-vacíos (`undefined` o `""` se ignoran)
+- Si `abrirFecha > entregaFecha`: HTTP 422 antes de tocar Zajuna
+- Minutos se redondean al múltiplo de 5 más cercano
+
+**Smoke test pendiente:**
+1. Seleccionar 2+ evidencias → barra flotante → "Config avanzada"
+2. Poner solo fecha de apertura y fecha de entrega → Confirmar
+3. Verificar en Zajuna modedit.php que ambas fechas quedaron correctas
+4. Probar con intentos=3 → verificar campo maxattempts en Zajuna
+
+---
+
+### ✅ MÓDULO 4+5 — RAPs locales + Import/Export JSON (commit `df3b15b`)
+
+**Rama:** `feature/config-evs-4-raps` — **Pre-requisito:** Módulo 3 ✅
+
+**Spec técnica:**
+- **Tabla nueva:** `RapEvidenciaRel { rapId, evidenciaId, createdAt }` (join table)
+- **Endpoints:**
+  - `POST /api/raps` — crear RAP
+  - `GET /api/competencias/:id/raps`
+  - `POST /api/raps/:rapId/evidencias` — asociar evidencia a RAP
+  - `DELETE /api/raps/:rapId/evidencias/:evidenciaId`
+- **Frontend:** pantalla "Mis RAPs" por competencia; multiselect de evidencias; tabla evidencias muestra RAP(s)
+
+**Nota:** el modelo `RAP` ya existe en el schema con `criterios` y `feedbacks`. La tabla `RapEvidenciaRel` es nueva (actualmente `RAP` no tiene relación directa con `Evidencia`).
+
+**Branch:** `feature/config-evs-4-raps`
+
+---
+
+### ✅ MÓDULO 5 — Import/Export JSON de RAPs — incluido en commit `df3b15b`
+
+**Pre-requisito:** Módulo 4 ✅
+
+**Spec técnica:**
+- `GET /api/competencias/:id/raps/export` → JSON `{ raps: [], relaciones: [] }`
+- `POST /api/competencias/:id/raps/import` → valida y upsert
+- **Frontend:** botones "Exportar JSON" / "Importar JSON" + input file + preview antes de importar
+
+**Branch:** `feature/config-evs-5-raps-io`
+
+---
+
+### ✅ MÓDULO 6 — Matching IA Evidencias ↔ RAPs (commit `84df368`)
+
+**Rama:** `feature/config-evs-6-matching-ia` — **Pre-requisito:** Módulo 5 ✅
+
+**Spec técnica:**
+- Instalar `@anthropic-ai/sdk`
+- **Worker:** `matchingIaWorker.js` — prompt a Claude por cada evidencia: `"dado nombre+descripción evidencia, cuál RAP de esta lista evalúa? Devuelve JSON {rapId, confianza, razon}"`
+- `confianza ≥ 80` → propuesta automática; `< 80` → revisión manual
+- **Tabla nueva:** `MatchingPropuesta { evidenciaId, rapId, confianza, razon, estado: propuesto|aprobado|rechazado, decidedAt }`
+- **Frontend:** botón "Sugerir matching con IA" → vista de revisión con [Aprobar] [Rechazar] [Editar y aprobar] → aprobadas → `RapEvidenciaRel`
+- **Modelo IA a usar:** `claude-sonnet-4-6` (modelo actual del proyecto)
+
+**Branch:** `feature/config-evs-6-matching-ia`
+
+---
+
+### ✅ Features implementados y probados (acumulado a 16 mayo 2026)
 1. Auth JWT + credenciales Zajuna cifradas (AES-256-GCM)
 2. Scraping de fichas (15 fichas detectadas)
 3. Scraping de evidencias + entregas + `moodleId` del aprendiz
@@ -22,6 +239,9 @@
 6. Modal evidencias con cache + botón "Refrescar" + indicador "hace X"
 7. Cerrar/reabrir evidencias **manualmente** (worker NUNCA toca `cerradaAt`)
 8. Panel "▸ Aprendices" expandible con filtros + URL directa al grader
+9. Configurar evidencias: leer config actual desde Moodle (Módulo 1 ✅)
+10. Tabla `EvidenciaConfig` + worker dedicado `leerConfigEvidenciaWorker`
+11. Modal "Ver config" read-only por fila de evidencia
 
 ### ✅ Sprint 1.1 — React setup (commit 35b7485) COMPLETO
 - `web/` con Vite 5 + React 18 + TypeScript + Tailwind 3 + shadcn/ui
@@ -88,6 +308,15 @@
 | F | `e6fb2ba` | `obtenerEvidencias` incluye `/mod/quiz/` (antes excluía explícitamente con regex `cuestionario|quiz`). Causa de "18/24" en inglés (6 cuestionarios faltaban). Tipo `"quiz"` despachado a `revisarEntregasQuiz` (básico: lista matriculados como `sin_entregar`; scrape real de attempts queda para Sprint 2.7). |
 | G | `dab1003` | Timeout fix: `obtenerMatriculados` usa `perpage=5000` (no `0`), `domcontentloaded`, 90s. Forum view 60s. |
 | — | `ff26a3c` | `setNotFoundHandler` + `sendFile("index.html")` para SPA fallback (`/dashboard` ya no 404). |
+
+### 🔧 Problemas conocidos y sus soluciones
+
+| Problema | Causa raíz | Solución implementada |
+|---|---|---|
+| "Formulario modedit no encontrado" | Sesión Playwright expirada o expulsada por login concurrente | M1: retry automático en `leerConfigEvidenciaWorker` con fresh login. M2: reconexión automática en `cambiarFechaWorker` entre evidencias |
+| Selectores Moodle 4.x distintos | Moodle 4.x eliminó `#modeditform` — usa `form.mform` | Fix en commit `743b595`: `MODEDIT_FORM_SELECTOR` en cascada con 5 selectores alternativos |
+| `npx prisma generate` falla en Windows con servidor activo | El DLL `query_engine-windows.dll.node` está bloqueado por el proceso node | Detener servidor antes de `prisma generate`; el JS client sí se actualiza aunque el rename del DLL falle |
+| Worker no respeta concurrency tras hot-reload | El `new Worker(...)` se instancia al levantar el proceso; si el proceso no se reinicia, el worker sigue con la config vieja | Siempre reiniciar el servidor tras cambios en workers (`bash /c/zajuna/restart.sh`) |
 
 ### 🔴 Bug abierto — verificar mañana tras restart completo
 
@@ -739,6 +968,182 @@ ENTREGABLES
 
 ---
 
+### 🟢 PROMPT — MÓDULO 2: Cambio masivo de fecha de cierre
+
+> **Pre-requisito:** Módulo 1 smoke test ✅ + merge a master
+> **Modelo:** Claude Sonnet 4.6
+> **Branch:** `feature/config-evs-2-batch-duedate` (desde master)
+
+```
+c:\zajuna. Lee HANDOFF.md completo — sección "PLAN MODULAR" y "MÓDULO 2".
+Confirma que estás en master y que EvidenciaConfig table existe antes de empezar.
+
+OBJETIVO: Módulo 2 del Plan Modular — cambio masivo de fecha de cierre (duedate).
+
+BACKEND
+1. Migración Prisma: nueva tabla ConfigChangeJob
+   { id, userId, fichaId String?, evidenciaIds Json, campo String,
+     valorAntes String?, valorDespues String, status String, errorMsg String?,
+     creadoAt DateTime }
+2. Worker cambiarFechaWorker.js en queue "cambiarFecha" (concurrency: 1):
+   - Para cada evidenciaId: login → enableEditMode → navegarFormulario →
+     serializarFormulario → aplicarFecha solo en duedate[year/month/day/hour/minute]
+     → POST → verificar → guardar ConfigChangeJob con antes/después
+   - Si falla UNA evidencia: loguear error, continuar con la siguiente (NO abortar batch)
+   - Al terminar: actualizar job.resultado con { exitosas, fallidas, detalle[] }
+3. Endpoint POST /api/evidencias/batch/duedate
+   Body: { evidenciaIds: string[], nuevaFecha: "2026-06-15T23:59" }
+   - Validar que todas las evidencias pertenecen al usuario
+   - Crear ConfigChangeJob, encolar, devolver { jobId }
+
+FRONTEND
+4. En EvidenciasModal.tsx, bulk toolbar: añadir botón "Cambiar fecha (N)"
+   - Abre modal con input datetime-local
+   - Confirmación obligatoria: "¿Cambiar duedate de N evidencias a [fecha]?"
+   - Al confirmar: POST /api/evidencias/batch/duedate
+   - Polling del job + progreso "X de Y completados"
+   - Al terminar: mostrar resumen (N exitosas, M fallidas con detalle)
+
+REGLAS
+- Confirmación obligatoria antes de cualquier write a Zajuna
+- Audit log: ConfigChangeJob guarda valorAntes y valorDespues por evidencia
+- Fallo parcial OK: el batch sigue aunque fallen algunas
+
+SMOKE TEST
+- Seleccionar 3 evidencias de una ficha de prueba
+- Cambiar fecha de cierre a 2026-12-31T23:59
+- Verificar en Zajuna las 3 quedaron con la nueva fecha
+- Revisar ConfigChangeJob en DB con `npx prisma studio`
+
+Empieza confirmando la rama y que ves la tabla EvidenciaConfig en el schema.
+```
+
+---
+
+### 🟢 PROMPT — MÓDULO 3: Cambio masivo otras fechas y flags
+
+> **Pre-requisito:** Módulo 2 smoke test ✅ + merge a master
+> **Branch:** `feature/config-evs-3-batch-config`
+
+```
+c:\zajuna. Lee HANDOFF.md sección "MÓDULO 3" del Plan Modular.
+Branch nueva: feature/config-evs-3-batch-config desde master.
+
+OBJETIVO: Generalizar el worker de Módulo 2 para soportar múltiples campos.
+
+BACKEND
+1. Renombrar / extender cambiarFechaWorker.js → cambiarConfigEvidenciaWorker.js
+   - Recibe cambios: { duedate?, openDate?, cutoffDate?, notify?, drafts?, maxAttempts? }
+   - Aplica solo los campos presentes (merge parcial, igual que guardarConfigEvidencia)
+   - Reutilizar FIELD_MAPS de scraper/configEvidencias.js
+2. Endpoint POST /api/evidencias/batch/config
+   Body: { evidenciaIds: string[], cambios: { duedate?, openDate?, cutoffDate?, notify?, drafts?, maxAttempts? } }
+   - Validación: si openDate > duedate → rechazar con 400 ANTES de tocar Zajuna
+3. Mantener POST /api/evidencias/batch/duedate como alias (backward compat)
+
+FRONTEND
+4. Modal "Configurar evidencias seleccionadas" con campos opcionales
+   - Solo aplica campos con valor, los vacíos no se modifican
+   - Hint visual por campo: "Solo se aplica si tiene valor"
+   - Reutilizar lógica de ConfigEvidenciaDialog donde sea posible
+
+SMOKE TEST
+- 5 evidencias, 3 cambios simultáneos (duedate + openDate + maxAttempts)
+- Verificar en Zajuna
+```
+
+---
+
+### 🟢 PROMPT — MÓDULO 4: RAPs locales
+
+> **Pre-requisito:** Módulo 3 smoke test ✅ + merge a master
+> **Branch:** `feature/config-evs-4-raps`
+
+```
+c:\zajuna. Lee HANDOFF.md sección "MÓDULO 4" del Plan Modular.
+Lee también prisma/schema.prisma para entender el modelo RAP existente.
+Branch nueva: feature/config-evs-4-raps desde master.
+
+OBJETIVO: Módulo 4 — RAPs locales y su relación con evidencias.
+
+NOTA IMPORTANTE: el modelo RAP ya existe (tiene competenciaId, codigo, descripcion,
+criterios, feedbacks). Lo que falta es la relación muchos-a-muchos con Evidencia.
+
+BACKEND
+1. Migración Prisma: tabla RapEvidenciaRel { rapId, evidenciaId, createdAt }
+   - Relaciones: RAP @relation y Evidencia @relation
+   - @@unique([rapId, evidenciaId])
+2. Endpoints:
+   POST /api/raps             body { competenciaId, codigo, descripcion }
+   GET  /api/competencias/:id/raps
+   GET  /api/raps/:rapId                    (detalle)
+   PATCH /api/raps/:rapId                   (editar)
+   DELETE /api/raps/:rapId                  (borrar si no tiene evidencias)
+   POST /api/raps/:rapId/evidencias          body { evidenciaId }
+   DELETE /api/raps/:rapId/evidencias/:evidenciaId
+
+FRONTEND
+3. Pantalla nueva "Mis RAPs" (ruta /raps o pestaña en dashboard)
+   - Lista de RAPs por competencia del usuario
+   - Crear / editar / borrar RAP
+   - Por RAP: multiselect de evidencias para asociar
+4. En tabla de evidencias: columna/badge mostrando RAP(s) asociados
+
+SMOKE TEST
+- Crear 5 RAPs para la competencia del usuario
+- Asociar evidencias
+- Refrescar: persisten
+```
+
+---
+
+### 🟢 PROMPT — MÓDULO 6: Matching IA Evidencias ↔ RAPs
+
+> **Pre-requisito:** Módulo 5 smoke test ✅ + merge a master
+> **Branch:** `feature/config-evs-6-matching-ia`
+
+```
+c:\zajuna. Lee HANDOFF.md sección "MÓDULO 6" del Plan Modular.
+Branch nueva: feature/config-evs-6-matching-ia desde master.
+
+OBJETIVO: Módulo 6 — Matching automático con Claude API.
+
+IMPORTANTE: Usa @anthropic-ai/sdk con prompt caching donde sea posible.
+Modelo recomendado: claude-sonnet-4-6 (el más reciente Sonnet disponible).
+
+BACKEND
+1. npm install @anthropic-ai/sdk
+2. Worker matchingIaWorker.js en queue "matchingIa":
+   - Para cada evidencia: construir prompt con nombre + descripción de la evidencia
+     y lista de RAPs disponibles (con codigo + descripcion)
+   - Prompt al Claude API: "Dado este nombre de evidencia: [X], ¿cuál RAP de esta lista
+     evalúa mejor? Devuelve JSON { rapId, confianza: 0-100, razon: string }"
+   - Usar system prompt con cache_control: ephemeral (lista de RAPs es estática)
+   - confianza >= 80 → crear MatchingPropuesta con estado "propuesto"
+   - confianza < 80 → estado "revision_manual"
+3. Tabla MatchingPropuesta { id, evidenciaId, rapId, confianza, razon, estado, decidedAt }
+4. Endpoints:
+   POST /api/evidencias/batch/matching-ia  body { evidenciaIds: string[] }
+   GET  /api/evidencias/matching-propuestas (las pendientes del usuario)
+   PATCH /api/matching-propuestas/:id/aprobar
+   PATCH /api/matching-propuestas/:id/rechazar
+   → Las aprobadas crean entrada en RapEvidenciaRel
+
+FRONTEND
+5. Botón "Sugerir matching con IA" en la pantalla de RAPs
+6. Vista de revisión: lista de propuestas con:
+   - Evidencia | RAP sugerido | Confianza (badge color: verde≥80, amarillo<80) | Razón
+   - Botones [Aprobar] [Rechazar] [Editar y aprobar]
+7. Aprobar → crea RapEvidenciaRel, actualiza tabla de evidencias
+
+SMOKE TEST
+- 10 evidencias reales + 5 RAPs reales
+- Las propuestas tienen sentido pedagógico
+- Aprobar/rechazar funciona y persiste
+```
+
+---
+
 ## 🔄 Cómo continuar mañana / próximos chats
 
 1. Abre chat nuevo
@@ -759,6 +1164,12 @@ ENTREGABLES
   node api/src/server.js   # sirve web/dist en puerto 3000
   # Dev frontend con HMR:
   cd web && npm run dev    # puerto 5173 con proxy a 3000
+  ```
+- **Reiniciar servidor rápido:**
+  ```bash
+  bash /c/zajuna/restart.sh
+  # Mata el proceso node actual y relanza en background
+  # Log en /c/zajuna/server.log
   ```
 - **Build producción:** `cd web && npm run build` (genera `web/dist/`)
 - **DB inspector:** `npx prisma studio`

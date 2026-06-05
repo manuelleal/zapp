@@ -38,7 +38,9 @@ const FIELD_MAPS = {
     abrir:    "timeopen",
     entrega:  "timeclose",
     limite:   null,
-    intentos: null,
+    // Quiz usa el campo `attempts` (la Extensión Z lee "attempts" para
+    // "Prueba de Conocimiento"). En quiz, 0 = intentos ilimitados.
+    intentos: { name: "attempts", unlimitedValue: "0" },
   },
 };
 
@@ -115,27 +117,36 @@ async function enableEditMode(page, courseId) {
   log(`[editmode] edit=on activado (curso ${courseId})`);
 }
 
+// Moodle 4.x usa "form.mform" — los IDs #modeditform fueron removidos en versiones recientes.
+// Selector en orden de especificidad decreciente.
+const MODEDIT_FORM_SELECTOR = [
+  "#modeditform",
+  "form[id*='modedit']",
+  "form.mform",
+  "form[method='post'][action*='modedit']",
+  "#region-main form[method='post']",
+].join(", ");
+
 /**
  * Navega al formulario modedit y verifica que cargó correctamente.
  */
 async function navegarFormulario(page, actId) {
   const url = `${BASE_URL}/course/modedit.php?update=${actId}&return=1`;
   log(`[config] GET ${url}`);
-  await page.goto(url, { waitUntil: "load", timeout: TIMEOUT });
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
   await cerrarModal(page);
 
-  // Verificar que el formulario está presente
+  // waitForSelector hace polling real — más confiable que isVisible() en Moodle 4.x
   const formOk = await page
-    .locator("#modeditform, form[id*='modedit']")
-    .isVisible({ timeout: 15_000 })
+    .waitForSelector(MODEDIT_FORM_SELECTOR, { timeout: 20_000, state: "attached" })
+    .then(() => true)
     .catch(() => false);
 
   if (!formOk) {
-    // Detectar redirect a login (sesión expulsada por concurrencia)
-    const url   = page.url();
-    const isLogin = /\/login|loginindex/i.test(url);
-    const html = await page.content();
-    log(`[config] Formulario no visible. URL=${url}. HTML snippet:\n${html.substring(0, 800)}`);
+    const finalUrl = page.url();
+    const isLogin  = /\/login|loginindex/i.test(finalUrl);
+    const html     = await page.content();
+    log(`[config] Formulario no visible. URL=${finalUrl}. HTML snippet:\n${html.substring(0, 1200)}`);
     throw new Error(
       isLogin
         ? "La sesion fue expulsada (otro login concurrente). Vuelve a intentar en unos segundos."
@@ -146,33 +157,34 @@ async function navegarFormulario(page, actId) {
 
 /**
  * Serializa TODOS los campos del formulario modedit en un objeto plano { name: value }.
- * Replica el comportamiento de un submit nativo del navegador:
- *  - Checkboxes no marcados → valor del hidden hermano (patrón Moodle) o ausencia
- *  - Selects múltiples → última opción seleccionada (simplificado; Moodle no los usa aquí)
- *  - Botones submit → excluidos (se añaden luego al POST)
+ *
+ * Usa `new FormData(form)` — la MISMA técnica que la Extensión Z (`ec()` en su
+ * bundle). FormData replica EXACTAMENTE lo que enviaría un submit nativo del
+ * navegador, lo que importa por dos razones que la iteración manual de
+ * `form.elements` hacía mal:
+ *   1. EXCLUYE campos `disabled` — en modedit, cuando una fecha está apagada
+ *      sus selects year/month/day quedan disabled. Incluirlos (con valores
+ *      vacíos/stale) hace que Moodle rechace el guardado en silencio (200 OK,
+ *      re-muestra el form, NO guarda).
+ *   2. EXCLUYE botones automáticamente (no hay submitter) — el submit lo
+ *      añadimos nosotros en el POST.
+ * Checkboxes Moodle: el hidden hermano (value="0") siempre va; el checkbox
+ * marcado sobreescribe con "1". FormData.forEach respeta ese orden.
  */
 async function serializarFormulario(page) {
   return await page.evaluate(() => {
     const form =
       document.querySelector("#modeditform") ||
-      document.querySelector("form[method='post'][action*='modedit']");
+      document.querySelector("form[method='post'][action*='modedit']") ||
+      document.querySelector("form.mform") ||
+      document.querySelector("#region-main form[method='post']");
 
     if (!form) return null;
 
     const data = {};
-    for (const el of form.elements) {
-      if (!el.name) continue;
-      // Excluir botones — se añaden manualmente en el POST
-      if (el.type === "submit" || el.type === "button" || el.type === "image") continue;
-      if (el.type === "checkbox") {
-        // Solo añadir si está marcado; el hidden hermano (value="0") ya habrá
-        // seteado la clave con "0" al pasar por el bloque else de abajo
-        if (el.checked) data[el.name] = el.value || "1";
-      } else if (el.type === "radio") {
-        if (el.checked) data[el.name] = el.value;
-      } else {
-        data[el.name] = el.value;
-      }
+    for (const [name, value] of new FormData(form).entries()) {
+      // Ignorar campos de archivo (File) — solo nos interesan strings.
+      if (typeof value === "string") data[name] = value;
     }
 
     return { data, action: form.action };
@@ -270,6 +282,17 @@ async function leerConfigEvidencia(page, actId) {
     }
   }
 
+  // Raw Moodle field values (for EvidenciaConfig storage)
+  const raw = {
+    duedate:                    d["duedate[year]"] ? `${d["duedate[year]"]}-${d["duedate[month]"]}-${d["duedate[day]"]}` : null,
+    allowsubmissionsfromdate:   d["allowsubmissionsfromdate[year]"] ? `${d["allowsubmissionsfromdate[year]"]}-${d["allowsubmissionsfromdate[month]"]}-${d["allowsubmissionsfromdate[day]"]}` : null,
+    cutoffdate:                 d["cutoffdate[year]"] ? `${d["cutoffdate[year]"]}-${d["cutoffdate[month]"]}-${d["cutoffdate[day]"]}` : null,
+    maxattempts:                d["maxattempts"] ?? null,
+    attemptreopenmethod:        d["attemptreopenmethod"] ?? null,
+    submissiondrafts:           d["submissiondrafts"] ?? null,
+    sendnotifications:          d["sendnotifications"] ?? null,
+  };
+
   const config = {
     tipo,
     nombre:       d["name"] || "",
@@ -280,6 +303,7 @@ async function leerConfigEvidencia(page, actId) {
     limiteFecha:  limite.fecha,
     limiteHora:   limite.hora,
     intentos,
+    raw,
   };
 
   log(`[config] Leido tipo=${tipo}: ${JSON.stringify(config)}`);
@@ -306,15 +330,21 @@ async function guardarConfigEvidencia(page, actId, config) {
   // Copia mutable del formulario completo (incluye sesskey y todos los campos ocultos)
   const d = { ...form.data };
 
+  // Registrar qué prefijos de fecha cambiamos, para verificar el guardado después.
+  const prefijosCambiados = [];
+
   // Aplicar solo los campos enviados, respetando el field map del tipo.
   if (config.abrirFecha !== undefined && map.abrir) {
     aplicarFecha(d, map.abrir, config.abrirFecha, config.abrirHora || "00:00");
+    if (config.abrirFecha) prefijosCambiados.push(map.abrir);
   }
   if (config.entregaFecha !== undefined && map.entrega) {
     aplicarFecha(d, map.entrega, config.entregaFecha, config.entregaHora || "23:55");
+    if (config.entregaFecha) prefijosCambiados.push(map.entrega);
   }
   if (config.limiteFecha !== undefined && map.limite) {
     aplicarFecha(d, map.limite, config.limiteFecha, config.limiteHora || "23:55");
+    if (config.limiteFecha) prefijosCambiados.push(map.limite);
   } else if (config.limiteFecha !== undefined && !map.limite) {
     log(`[config] tipo=${tipo} no soporta fecha limite; ignorando`);
   }
@@ -325,13 +355,26 @@ async function guardarConfigEvidencia(page, actId, config) {
         : String(config.intentos);
   }
 
+  // Snapshot de los valores que ESPERAMOS ver tras guardar (para verificación).
+  const esperado = {};
+  for (const p of prefijosCambiados) {
+    esperado[p] = {
+      year:   d[`${p}[year]`],
+      month:  d[`${p}[month]`],
+      day:    d[`${p}[day]`],
+      hour:   d[`${p}[hour]`],
+      minute: d[`${p}[minute]`],
+    };
+  }
+
   // POST con el formulario completo desde dentro del contexto del navegador
   // (usa las cookies/sesión ya activas — mismo mecanismo que la Extensión Z)
   const postResult = await page.evaluate(
     async ({ action, fields }) => {
       const body = new URLSearchParams(fields);
-      // Indicar a Moodle qué botón se "presionó"
-      body.set("submitbutton2", "Guardar cambios y mostrar");
+      // Indicar a Moodle qué botón se "presionó". La Extensión Z usa el campo
+      // `submitbutton` (Moodle solo verifica la PRESENCIA de la clave, no su texto).
+      body.set("submitbutton", "Guardar cambios y mostrar");
 
       const res = await fetch(action, {
         method:      "POST",
@@ -358,6 +401,13 @@ async function guardarConfigEvidencia(page, actId, config) {
     throw new Error(`POST fallido: HTTP ${postResult.status}`);
   }
 
+  // La sesión pudo expulsarse a mitad del POST → Moodle redirige a login y
+  // devuelve 200 de la página de login (sin alert-danger). Detectarlo explícito
+  // para que el worker dispare su lógica de reconexión.
+  if (/\/login|loginindex/i.test(postResult.finalUrl || "")) {
+    throw new Error("La sesion fue expulsada (otro login concurrente) durante el guardado. Reintentar.");
+  }
+
   // Detectar errores en la respuesta HTML (Moodle puede devolver 200 con error embebido)
   const errorPatterns = [
     "alert-danger", "class=\"error\"", "id=\"id_error_",
@@ -369,6 +419,35 @@ async function guardarConfigEvidencia(page, actId, config) {
     const match = postResult.snippet.match(/class="[^"]*error[^"]*"[^>]*>([^<]{1,300})</i);
     const msg   = match ? match[1].trim() : "Error desconocido en respuesta de Moodle";
     throw new Error(`Error al guardar: ${msg}`);
+  }
+
+  // ── VERIFICACIÓN DE GUARDADO ────────────────────────────────────────────────
+  // Bug observado: "dice OK pero no cambia en Moodle". Moodle puede re-renderizar
+  // el form (200, sin alert) sin persistir. La única confirmación fiable es releer
+  // el formulario y comparar las fechas que pedimos cambiar.
+  if (prefijosCambiados.length > 0) {
+    await navegarFormulario(page, actId);
+    const form2 = await serializarFormulario(page);
+    if (!form2) throw new Error("No se pudo releer el formulario para verificar el guardado");
+    const d2 = form2.data;
+
+    const norm = (v) => String(parseInt(v, 10)); // "06"/"6" → "6"
+    for (const p of prefijosCambiados) {
+      const e = esperado[p];
+      const enabledOk = d2[`${p}[enabled]`] === "1";
+      const fechaOk =
+        d2[`${p}[year]`]          === e.year   &&
+        norm(d2[`${p}[month]`])   === norm(e.month) &&
+        norm(d2[`${p}[day]`])     === norm(e.day)   &&
+        norm(d2[`${p}[hour]`])    === norm(e.hour)  &&
+        norm(d2[`${p}[minute]`])  === norm(e.minute);
+      if (!enabledOk || !fechaOk) {
+        const got = `${d2[`${p}[year]`]}-${d2[`${p}[month]`]}-${d2[`${p}[day]`]} ${d2[`${p}[hour]`]}:${d2[`${p}[minute]`]} (enabled=${d2[`${p}[enabled]`]})`;
+        const want = `${e.year}-${e.month}-${e.day} ${e.hour}:${e.minute} (enabled=1)`;
+        throw new Error(`Moodle no guardó ${p}: esperaba ${want} pero quedó ${got}`);
+      }
+    }
+    log(`[config] Verificación OK: ${prefijosCambiados.join(", ")} persistidos ✓`);
   }
 
   log("[config] Guardado exitoso ✓");

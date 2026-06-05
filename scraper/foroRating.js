@@ -45,11 +45,27 @@ async function recolectarFormsRating(page) {
       const itemid      = fields["itemid"]      || null;
       if (!rateduserid) continue;
 
-      // Opciones disponibles del select (sin contar el placeholder "-999")
       const sel = form.querySelector('select[name="rating"]');
+      // Opciones de calificación disponibles, excluyendo el placeholder "-999"
       const ratingOptions = sel
         ? Array.from(sel.options).map((o) => o.value).filter((v) => v && v !== "-999")
         : [];
+
+      // Valor actualmente seleccionado en el select. Si el select tiene
+      // selectedIndex apuntando al placeholder "-999" o no hay valor, el
+      // post NO está calificado todavía.
+      const ratingActual = sel ? (sel.value || "") : "";
+      const yaCalificado = !!ratingActual && ratingActual !== "-999" && ratingActual !== "";
+
+      // Intento de extraer el nombre del autor del post desde el contenedor
+      // padre más cercano (Moodle 4.x: article.forumpost, .forumpost,
+      // .forum-post-container — el selector usa varios fallbacks).
+      let nombreAutor = "";
+      const post = form.closest("article.forumpost, .forumpost, [data-region='post']");
+      if (post) {
+        const link = post.querySelector("a[href*='/user/view.php']");
+        if (link) nombreAutor = (link.textContent || "").trim();
+      }
 
       out.push({
         action: form.action,
@@ -57,6 +73,9 @@ async function recolectarFormsRating(page) {
         itemid: itemid ? String(itemid) : null,
         fields,
         ratingOptions,
+        ratingActual,
+        yaCalificado,
+        nombreAutor,
       });
     }
     return out;
@@ -178,4 +197,111 @@ async function calificarPostsForo(page, actId, ratings) {
   return results;
 }
 
-module.exports = { calificarPostsForo, recolectarFormsRating };
+/**
+ * Recorre TODOS los posts del foro `actId` y devuelve los autores que tienen
+ * al menos un post visible para el instructor pero aún SIN calificación
+ * asignada (select.rating sin valor numérico).
+ *
+ * Estrategia:
+ *   1. Ir a /mod/forum/view.php?id={actId}
+ *   2. Recolectar forms postratingform de esa página (blog/single forums)
+ *   3. Si el foro es "general", iterar /mod/forum/discuss.php?d={d} de cada hilo
+ *   4. Por cada user con múltiples posts, basta UNO sin calificar para marcarlo
+ *
+ * Devuelve un objeto auto-descriptivo:
+ *   {
+ *     pendientes: [{ moodleUserId, nombreAutor, postsTotales, postsSinCalificar, ratingOptions }],
+ *     calificados: [{ moodleUserId, nombreAutor, ratingActual }],
+ *     totalUsers, totalPosts, totalDiscussionsRevisadas,
+ *   }
+ *
+ * @param {import('playwright').Page} page
+ * @param {string|number} actId  — course-module id del foro
+ */
+async function descubrirCalificacionesPendientesForo(page, actId) {
+  const viewUrl = `${BASE_URL}/mod/forum/view.php?id=${actId}`;
+  log(`[foroDescubrir] View: ${viewUrl}`);
+  await page.goto(viewUrl, { waitUntil: "load", timeout: TIMEOUT });
+  await cerrarModal(page);
+
+  // Agrupador por usuario: cada user acumula sus posts (calificados o no)
+  // Map<moodleUserId, { nombreAutor, posts: Array<{ yaCalificado, ratingActual, ratingOptions }> }>
+  const usuarios = new Map();
+  let totalPosts = 0;
+
+  function ingestForms(forms) {
+    for (const f of forms) {
+      totalPosts++;
+      if (!usuarios.has(f.rateduserid)) {
+        usuarios.set(f.rateduserid, { nombreAutor: f.nombreAutor || "", posts: [] });
+      }
+      const u = usuarios.get(f.rateduserid);
+      if (!u.nombreAutor && f.nombreAutor) u.nombreAutor = f.nombreAutor;
+      u.posts.push({
+        yaCalificado:  f.yaCalificado,
+        ratingActual:  f.ratingActual,
+        ratingOptions: f.ratingOptions,
+      });
+    }
+  }
+
+  ingestForms(await recolectarFormsRating(page));
+  log(`[foroDescubrir] Posts en view.php: ${totalPosts}`);
+
+  // Iterar discussions para foros tipo "general" (posts no aparecen en view.php)
+  const discussIds = await page.evaluate(() => {
+    const ids = new Set();
+    document.querySelectorAll('a[href*="/mod/forum/discuss.php?d="]').forEach((a) => {
+      const m = a.href.match(/[?&]d=(\d+)/);
+      if (m) ids.add(m[1]);
+    });
+    return Array.from(ids);
+  });
+
+  log(`[foroDescubrir] Discussions a recorrer: ${discussIds.length}`);
+  for (const d of discussIds) {
+    await page.goto(`${BASE_URL}/mod/forum/discuss.php?d=${d}`, { waitUntil: "load", timeout: TIMEOUT });
+    await cerrarModal(page);
+    ingestForms(await recolectarFormsRating(page));
+  }
+
+  // Clasificar usuarios en pendientes / calificados
+  // Regla: si tiene AL MENOS UN post sin calificar → pendiente.
+  const pendientes  = [];
+  const calificados = [];
+
+  for (const [moodleUserId, info] of usuarios.entries()) {
+    const sinCalificar = info.posts.filter((p) => !p.yaCalificado).length;
+    if (sinCalificar > 0) {
+      // Tomamos ratingOptions del primer post (todos los del foro comparten escala)
+      const primero = info.posts[0];
+      pendientes.push({
+        moodleUserId,
+        nombreAutor:       info.nombreAutor,
+        postsTotales:      info.posts.length,
+        postsSinCalificar: sinCalificar,
+        ratingOptions:     primero.ratingOptions,
+      });
+    } else {
+      const primero = info.posts[0];
+      calificados.push({
+        moodleUserId,
+        nombreAutor:  info.nombreAutor,
+        ratingActual: primero.ratingActual,
+        postsTotales: info.posts.length,
+      });
+    }
+  }
+
+  log(`[foroDescubrir] Pendientes: ${pendientes.length} | Calificados: ${calificados.length} | Posts totales: ${totalPosts}`);
+
+  return {
+    pendientes,
+    calificados,
+    totalUsers:                 usuarios.size,
+    totalPosts,
+    totalDiscussionsRevisadas:  discussIds.length,
+  };
+}
+
+module.exports = { calificarPostsForo, recolectarFormsRating, descubrirCalificacionesPendientesForo };

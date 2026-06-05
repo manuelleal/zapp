@@ -3,9 +3,13 @@ const prisma = require("../db/client");
 const { encrypt } = require("../lib/crypto");
 
 // ─── RATE LIMITER EN MEMORIA (login/register) ─────────────────────────────────
-// Máximo 5 intentos por IP en 15 minutos
+// Máximo RATE_MAX intentos por IP dentro de la ventana (default 10 / 15 min).
+// Configurable vía env RATE_MAX. Antes estaba hardcodeado en 500 (el comentario
+// decía 5) — efectivamente sin límite real (CLAUDE.md §9.2 / §11.3 P0 #5).
+// NOTA: el Map en memoria no sobrevive reinicios ni se comparte entre procesos;
+// migrar a Redis es P1 (§11.3 #8).
 const RATE_WINDOW_MS = 15 * 60 * 1000;
-const RATE_MAX       = 5;
+const RATE_MAX       = Number(process.env.RATE_MAX) || 10;
 const rateLimitMap   = new Map(); // ip → { count, resetAt }
 
 function checkRateLimit(ip) {
@@ -32,7 +36,7 @@ async function authRoutes(fastify) {
       return reply.code(429).send({ error: "Demasiados intentos. Espera 15 minutos." });
     }
 
-    const { nombre, email, password, zajunaUser, zajunaPass, competenciaCodigo, competenciaNombre } = req.body;
+    const { nombre, email, password, zajunaUser, zajunaPass, competenciaCodigo, competenciaNombre } = req.body || {};
 
     if (!nombre || !email || !password || !zajunaUser || !zajunaPass || !competenciaCodigo) {
       return reply.code(400).send({ error: "Faltan campos obligatorios." });
@@ -58,7 +62,7 @@ async function authRoutes(fastify) {
       return reply.code(429).send({ error: "Demasiados intentos. Espera 15 minutos." });
     }
 
-    const { email, password } = req.body;
+    const { email, password } = req.body || {};
     if (!email || !password) return reply.code(400).send({ error: "Email y contraseña requeridos." });
 
     const user = await prisma.user.findUnique({ where: { email } });

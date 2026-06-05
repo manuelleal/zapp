@@ -16,13 +16,15 @@ model Competencia {
 }
 
 model RAP {
-  id            String      @id @default(cuid())
-  competenciaId String
-  codigo        String
-  descripcion   String
-  criterios     Criterio[]
-  feedbacks     AIFeedback[]
-  competencia   Competencia @relation(fields: [competenciaId], references: [id])
+  id                 String               @id @default(cuid())
+  competenciaId      String
+  codigo             String
+  descripcion        String
+  criterios          Criterio[]
+  feedbacks          AIFeedback[]
+  evidenciaRels      RapEvidenciaRel[]
+  matchingPropuestas MatchingPropuesta[]
+  competencia        Competencia          @relation(fields: [competenciaId], references: [id])
 
   @@unique([competenciaId, codigo])
 }
@@ -46,10 +48,16 @@ model User {
   competenciaNombre String
   competenciaId     String?
   createdAt         DateTime     @default(now())
-  fichas            Ficha[]
-  jobs              Job[]
-  configAudits      ConfigAudit[]
-  competencia       Competencia? @relation(fields: [competenciaId], references: [id])
+  lastAutoScanAt    DateTime?
+  fichas             Ficha[]
+  jobs               Job[]
+  configAudits       ConfigAudit[]
+  configChangeJobs   ConfigChangeJob[]
+  matchingPropuestas MatchingPropuesta[]
+  actas              ActaSeguimiento[]
+  mensajesFormativos MensajeFormativo[]
+  configCorreo       ConfigCorreo?
+  competencia        Competencia?         @relation(fields: [competenciaId], references: [id])
 }
 
 model Ficha {
@@ -63,35 +71,63 @@ model Ficha {
   updatedAt  DateTime   @updatedAt
   archivedAt DateTime?
   user       User       @relation(fields: [userId], references: [id])
-  evidencias Evidencia[]
-  aprendices Aprendiz[]
+  evidencias         Evidencia[]
+  aprendices         Aprendiz[]
+  actas              ActaSeguimiento[]
+  mensajesFormativos MensajeFormativo[]
 
   @@unique([userId, codigo])
 }
 
 model Evidencia {
-  id            String        @id @default(cuid())
-  fichaId       String
-  nombre        String
-  href          String
-  tipo          String        @default("assign")
-  cerradaAt     DateTime?
-  configCache   Json?
-  configCacheAt DateTime?
-  ficha         Ficha         @relation(fields: [fichaId], references: [id])
-  entregas      Entrega[]
-  configAudits  ConfigAudit[]
+  id             String           @id @default(cuid())
+  fichaId        String
+  nombre         String
+  href           String
+  tipo           String           @default("assign")
+  cerradaAt      DateTime?
+  configCache    Json?
+  configCacheAt  DateTime?
+  activaParaScan Boolean          @default(false)
+  calificandoAt  DateTime?
+  // CAPA 2 (perf): cache del instance id (assignid) y contextid resueltos desde
+  // el cmid. mod_assign_list_participants exige assignid, no el cmid del href.
+  // SENA tiene capadas mod_assign_get_assignments / core_course_get_contents, así
+  // que se resuelven una vez leyendo data-assignmentid del grader HTML y se cachean.
+  assignId       Int?
+  contextId      Int?
+  // itemid del libro de calificaciones (grade item). Permite casar nota↔evidencia
+  // por id determinista (como la Extensión Z) en vez de por nombre de columna.
+  itemid         Int?
+  ficha              Ficha               @relation(fields: [fichaId], references: [id])
+  entregas           Entrega[]
+  configAudits       ConfigAudit[]
+  evidenciaConfigs   EvidenciaConfig[]
+  rapRels            RapEvidenciaRel[]
+  matchingPropuestas MatchingPropuesta[]
 
   @@unique([fichaId, href])
 }
 
+model EvidenciaConfig {
+  id          String    @id @default(cuid())
+  evidenciaId String
+  raw         Json
+  scannedAt   DateTime  @default(now())
+  evidencia   Evidencia @relation(fields: [evidenciaId], references: [id])
+}
+
 model Aprendiz {
-  id        String    @id @default(cuid())
-  fichaId   String
-  nombre    String
-  moodleId  String?
-  ficha     Ficha     @relation(fields: [fichaId], references: [id])
-  entregas  Entrega[]
+  id            String    @id @default(cuid())
+  fichaId       String
+  nombre        String
+  moodleId      String?
+  documento     String?
+  email         String?
+  ultimoAcceso  DateTime?
+  ficha           Ficha              @relation(fields: [fichaId], references: [id])
+  entregas        Entrega[]
+  participaciones ActaParticipante[]
 
   @@unique([fichaId, nombre])
 }
@@ -104,6 +140,9 @@ model Entrega {
   fechaScan    DateTime         @default(now())
   moodlePostId String?
   notaActual   Float?
+  // Nota cualitativa de la escala SENA (A=Aprobado / D=Deficiente). Muchos cursos
+  // califican con letra, no con número; antes se perdía (parseFloat("A")=NaN).
+  notaCualitativa String?
   evidencia    Evidencia        @relation(fields: [evidenciaId], references: [id])
   aprendiz     Aprendiz         @relation(fields: [aprendizId], references: [id])
   historial    HistorialEstado[]
@@ -156,4 +195,126 @@ model ConfigAudit {
   fecha       DateTime  @default(now())
   user        User      @relation(fields: [userId], references: [id])
   evidencia   Evidencia @relation(fields: [evidenciaId], references: [id])
+}
+
+model ConfigChangeJob {
+  id           String   @id @default(cuid())
+  userId       String
+  fichaId      String?
+  evidenciaIds Json
+  campo        String
+  valorDespues String
+  status       String   @default("queued")
+  errorMsg     String?
+  progreso     Int      @default(0)
+  detalle      Json?
+  creadoAt     DateTime @default(now())
+  user         User     @relation(fields: [userId], references: [id])
+}
+
+// ─── Módulo 4+5: RAPs ↔ Evidencias ──────────────────────────────────────────
+// Para migrar: npx prisma migrate dev --name rap_evidencia_rel
+
+model RapEvidenciaRel {
+  id          String    @id @default(cuid())
+  rapId       String
+  evidenciaId String
+  createdAt   DateTime  @default(now())
+  rap         RAP       @relation(fields: [rapId], references: [id])
+  evidencia   Evidencia @relation(fields: [evidenciaId], references: [id])
+
+  @@unique([rapId, evidenciaId])
+}
+
+// ─── Módulo 6: Matching IA Evidencias ↔ RAPs ─────────────────────────────────
+// Para migrar: npx prisma migrate dev --name matching_propuesta
+
+model MatchingPropuesta {
+  id          String    @id @default(cuid())
+  userId      String
+  evidenciaId String
+  rapId       String
+  confianza   Int
+  razon       String
+  estado      String    @default("propuesto")
+  decidedAt   DateTime?
+  creadoAt    DateTime  @default(now())
+  user        User      @relation(fields: [userId], references: [id])
+  evidencia   Evidencia @relation(fields: [evidenciaId], references: [id])
+  rap         RAP       @relation(fields: [rapId], references: [id])
+
+  @@unique([userId, evidenciaId, rapId])
+}
+
+// ─── Módulo 7: Actas de Seguimiento + Mensajes Formales ─────────────────────
+// Para migrar: npx prisma migrate dev --name actas_mensajes_formativos
+
+model ActaSeguimiento {
+  id           String   @id @default(cuid())
+  userId       String
+  fichaId      String
+  numero       String
+  fecha        DateTime
+  hora         String
+  lugar        String   @default("Videoconferencia / Plataforma Zajuna")
+  objetivo     String
+  conclusiones String?
+  compromisos  Json?
+  rapIds       Json
+  estado       String   @default("borrador")
+  notas        String?
+  archivadaAt  DateTime?
+  creadoAt     DateTime @default(now())
+  user          User               @relation(fields: [userId],  references: [id])
+  ficha         Ficha              @relation(fields: [fichaId], references: [id])
+  participantes ActaParticipante[]
+  mensajes      MensajeFormativo[]
+}
+
+model ActaParticipante {
+  id          String  @id @default(cuid())
+  actaId      String
+  aprendizId  String
+  juicio      String
+  rapStatus   Json?
+  hasUngraded Boolean @default(false)
+  acta     ActaSeguimiento @relation(fields: [actaId],     references: [id])
+  aprendiz Aprendiz        @relation(fields: [aprendizId], references: [id])
+
+  @@unique([actaId, aprendizId])
+}
+
+// ─── Módulo 8: Configuración SMTP por instructor (mensajería masiva) ─────────
+// Para migrar: npx prisma migrate dev --name mensajes_email_smtp
+
+model ConfigCorreo {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  smtpHost      String
+  smtpPort      Int      @default(587)
+  smtpUser      String
+  smtpPassEnc   String
+  fromNombre    String?
+  user          User     @relation(fields: [userId], references: [id])
+  creadaAt      DateTime @default(now())
+  actualizadaAt DateTime @updatedAt
+}
+
+model MensajeFormativo {
+  id            String    @id @default(cuid())
+  userId        String
+  actaId        String?
+  fichaId       String
+  canal         String
+  asunto        String
+  cuerpo        String
+  destinatarios Json
+  enviadoAt     DateTime?
+  estado        String    @default("pendiente")
+  errorMsg      String?
+  templateTipo  String?
+  creadoAt      DateTime  @default(now())
+  user  User              @relation(fields: [userId],  references: [id])
+  acta  ActaSeguimiento?  @relation(fields: [actaId],  references: [id])
+  ficha Ficha             @relation(fields: [fichaId], references: [id])
 }

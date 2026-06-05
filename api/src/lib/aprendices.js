@@ -1,0 +1,99 @@
+/**
+ * Heurísticas para identificar nombres "sucios" / de sistema en la lista de
+ * aprendices que viene del scraper de Zajuna.
+ *
+ * Casos reales observados:
+ *  - "AA", "AG", "AB"            → siglas / códigos de sistema
+ *  - "ABALEJANDRO"               → 2 mayúsculas pegadas + nombre real, sin espacio
+ *  - ""                          → vacío
+ *  - "JUAN PEREZ", "MARÍA JOSÉ"  → válidos
+ *
+ * Regla central: un nombre real de persona casi siempre tiene al menos un
+ * espacio (nombre + apellido) y suele tener ≥ 5 caracteres significativos.
+ *
+ * Mantenemos un patrón estricto y conservador para no descartar nombres
+ * legítimos por error.
+ */
+
+// Patrón legacy (≤4 chars o 1-3 mayúsculas sueltas). Se mantiene exportado por
+// retrocompatibilidad con el código que aún hace `regex.test(nombre)`.
+const NOMBRE_INVALIDO = /^[A-Z]{1,3}$|^.{1,4}$/;
+
+/**
+ * @param {string|null|undefined} nombreRaw
+ * @returns {boolean} true si el nombre parece válido (de persona real).
+ */
+function esNombreValido(nombreRaw) {
+  if (!nombreRaw) return false;
+  const nombre = String(nombreRaw).trim();
+
+  // 1. Vacío o muy corto → inválido
+  if (nombre.length <= 4) return false;
+
+  // 2. Patrón legacy: 1-3 mayúsculas sueltas ("AA", "AG", "ABC") → inválido
+  if (/^[A-Z]{1,3}$/.test(nombre)) return false;
+
+  // 3. Perfil incompleto de Moodle: "Aprendiz " seguido de dígitos (ej. "Aprendiz 1104287")
+  if (/^Aprendiz\s+\d+$/.test(nombre)) return false;
+
+  // 4. Sin espacios + > 6 chars → sospechoso, requiere análisis adicional
+  if (!/\s/.test(nombre) && nombre.length > 6) {
+    // 4a. "ABALEJANDRO" → empieza con 2+ mayúsculas seguidas pegadas a más letras.
+    //     Si después de las primeras 2-3 mayúsculas sigue una cadena con
+    //     mayúscula(s) más minúscula(s) o más mayúsculas, es probablemente
+    //     un código + nombre concatenado.
+    if (/^[A-Z]{2,3}[A-Z]/.test(nombre)) return false;
+
+    // 4b. Todo mayúsculas pegado, sin espacio, > 8 chars → sospechoso pero
+    //     ambiguo (puede ser apellido compuesto). Ser conservadores: aceptar.
+  }
+
+  // 5. Nombre con espacios pero el primer token tiene prefijo de iniciales pegadas.
+  //    Casos reales: "MMMAURICIO FABIAN MONCAYO" → prefijo "MM" (repetido)
+  //                  "AAALIRIO ANTONIO ABADIA"   → prefijo "AA" (repetido)
+  //                  "JBJESSICA JANETH BARRIOS"  → prefijo "JB"; "JB" = J(esica) + J(aneth?) no
+  //                                                pero primera letra del resto "J" coincide con "J"
+  //                                                del prefijo → prefijo[0] == resto[0]
+  //                  "PCPAOLA ANDREA CANO"       → prefijo "PC"; "P"=resto[0]="P"
+  //                  "DMDEYLER ANTONIO MOSQUERA" → prefijo "DM"; "D"=resto[0]="D"
+  //                  "WAWILSON ELIECER AGUDELO"  → prefijo "WA"; "W"=resto[0]="W"
+  //                  "SLSTEVEN NICOLAS LADINO"   → prefijo "SL"; "S"=resto[0]="S"
+  //                  "DJDANIEL STEVEN JIMENEZ"   → prefijo "DJ"; "D"=resto[0]="D"
+  //                  "VRVANESSA KATHERINE RUBIANO"→ prefijo "VR"; "V"=resto[0]="V"
+  //                  "ARANDRES FELIPE RUIZ"      → prefijo "AR"; "A"=resto[0]="A"
+  //                  "ACADRIAN MAURICIO CALDERON"→ prefijo "AC"; "A"=resto[0]="A"
+  //
+  //    Regla clave conservadora: el primer char del prefijo == primer char del resto.
+  //    Esto evita falsos positivos en CARLOS (CA→RLOS: C≠R), JORGE (JO→RGE: J≠R), etc.
+  //    Además el resto debe tener ≥4 chars para descartar fragmentos muy cortos.
+  if (/\s/.test(nombre)) {
+    const tokens = nombre.trim().split(/\s+/);
+    const primerToken = tokens[0];
+    if (primerToken.length >= 5) {
+      for (let prefLen = 2; prefLen <= 3; prefLen++) {
+        const prefijo = primerToken.slice(0, prefLen);
+        const resto   = primerToken.slice(prefLen);
+        if (resto.length < 4) continue;
+        // Condición A: letras repetidas en prefijo de 2 chars (AA, MM, JJ…)
+        if (prefLen === 2 && prefijo[0] === prefijo[1]) return false;
+        // Condición B: el primer char del prefijo coincide con el primer char del resto
+        // (el prefijo "imita" la inicial del nombre real dentro del token)
+        if (prefijo[0] === resto[0]) return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Filtra una lista de aprendices retornando solo aquellos con nombre válido.
+ * @template T
+ * @param {Array<T & { nombre: string|null }>} aprendices
+ * @returns {Array<T>}
+ */
+function filtrarAprendicesValidos(aprendices) {
+  return aprendices.filter(a => esNombreValido(a?.nombre));
+}
+
+module.exports = { NOMBRE_INVALIDO, esNombreValido, filtrarAprendicesValidos };

@@ -1,72 +1,71 @@
 const { BASE_URL, TIMEOUT, log, cerrarModal } = require("./auth");
 
-async function obtenerEvidencias(page, competenciaCodigo) {
-  log(`Buscando actividades con código ${competenciaCodigo}...`);
-
-  // Expandir secciones colapsadas que contengan el código
-  const cabeceras = page.locator("a, span").filter({ hasText: "Actividad de aprendizaje" });
-  const nCab = await cabeceras.count();
-  for (let i = 0; i < nCab; i++) {
-    const cab = cabeceras.nth(i);
-    const texto = (await cab.textContent().catch(() => "")).trim();
-    if (!texto.includes(competenciaCodigo)) continue;
-    const expandida = await cab.evaluate(el => {
-      const li = el.closest("li");
-      return li ? !li.classList.contains("collapsed") : true;
-    }).catch(() => true);
-    if (!expandida) {
-      await cab.click().catch(() => {});
-      await page.waitForTimeout(1000);
-    }
+async function obtenerEvidencias(page, courseId) {
+  if (!courseId) {
+    throw new Error("obtenerEvidencias requiere courseId.");
   }
 
-  // Sprint 2.6 FIX F: incluir /mod/quiz/ (cuestionarios) que antes se excluian.
-  // El curso de ingles tiene 6 quizzes adicionales => 24 evidencias totales.
-  const links = await page.$$eval(
-    "a",
-    (as, codigo) =>
-      as
-        .filter(a => {
-          const href = a.href || "";
-          const txt  = (a.textContent || "").trim();
-          const esActividad =
-            href.includes("/mod/assign/") ||
-            href.includes("/mod/forum/")  ||
-            href.includes("/mod/quiz/");
-          return esActividad && txt.includes(codigo);
-        })
-        .map(a => {
-          const m  = a.href.match(/[?&]id=(\d+)/);
-          let tipo = "assign";
-          if (a.href.includes("/mod/forum/")) tipo = "forum";
-          else if (a.href.includes("/mod/quiz/")) tipo = "quiz";
-          return {
-            texto: (a.textContent || "").replace(/\s+/g, " ").trim(),
-            href:  a.href,
-            actId: m ? m[1] : null,
-            tipo,
-          };
-        })
-        .filter(l => l.actId !== null),
-    competenciaCodigo
-  );
+  const url = `${BASE_URL}/grade/edit/tree/index.php?id=${courseId}`;
+  log(`[gradebook-tree] Navegando a ${url}`);
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+  await cerrarModal(page);
 
-  // Deduplicar por href
-  const vistos = new Set();
-  const unicos = links.filter(l => {
-    if (vistos.has(l.href)) return false;
-    vistos.add(l.href);
-    return true;
-  });
+  // Guardia de redirección (sesión expirada → vuelve al login)
+  if (!page.url().includes("/grade/edit/tree/")) {
+    log(`⚠️ Redirigido a ${page.url()} — sesión expirada o sin permiso de instructor.`);
+    return [];
+  }
 
-  log(`Evidencias encontradas: ${unicos.length}`);
-  return unicos;
+  // tr[data-grademax].item contiene TODOS los ítems calificables del curso,
+  // incluidas las actividades ocultas a los aprendices. El link a.gradeitemheader
+  // apunta directamente al mod (assign/forum/quiz), pero en el Gradebook Tree
+  // puede venir como grade.php?id=X o report.php?id=X en vez de view.php?id=X.
+  // Normalizamos a view.php afuera del $$eval para que el upsert sea estable.
+  const itemsRaw = await page.$$eval("tr[data-grademax].item", (rows) => {
+    return rows.map(row => {
+      const a = row.querySelector("a.gradeitemheader");
+      if (!a) return null;
+      const texto = (a.textContent || "").replace(/\s+/g, " ").trim();
+      const href  = a.href || "";
+      const m     = href.match(/[?&]id=(\d+)/);
+      if (!m || !texto) return null;
+
+      let tipo = "assign"; // default
+      if (href.includes("/mod/forum/"))  tipo = "forum";
+      else if (href.includes("/mod/quiz/")) tipo = "quiz";
+      else if (!href.includes("/mod/assign/")) return null; // categorías u otros ítems
+
+      // itemid del grade item (para casar la nota del grader report por id).
+      // Defensivo: distintos temas/versiones lo exponen distinto; si no aparece
+      // queda null y el worker cae al match por CSV.
+      const idAttr = row.getAttribute("data-itemid")
+        || row.querySelector("[data-itemid]")?.getAttribute("data-itemid")
+        || (row.id && (row.id.match(/(\d+)/) || [])[1])
+        || null;
+      const itemid = idAttr ? parseInt(idAttr, 10) : null;
+
+      return { texto, hrefOriginal: href, actId: m[1], tipo, itemid };
+    }).filter(Boolean);
+  }).catch(() => []);
+
+  // Reescribir cada href a la forma canónica view.php para evitar duplicados
+  // (grade.php vs view.php apuntan al mismo cmid pero rompen @@unique([fichaId, href])).
+  const items = itemsRaw.map(it => ({
+    texto: it.texto,
+    href:  `${BASE_URL}/mod/${it.tipo}/view.php?id=${it.actId}`,
+    actId: it.actId,
+    tipo:  it.tipo,
+    itemid: it.itemid ?? null,
+  }));
+
+  log(`[gradebook-tree] Evidencias encontradas: ${items.length}`);
+  return items;
 }
 
 async function revisarEntregas(page, actId) {
   const url = `${BASE_URL}/mod/assign/view.php?id=${actId}&action=grading`;
   log(`Revisando entregas: ${url}`);
-  await page.goto(url, { waitUntil: "load", timeout: TIMEOUT });
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
   await cerrarModal(page);
 
   // Mostrar todos si hay paginación
@@ -178,6 +177,9 @@ async function extraerPostsForo(page) {
         if (a) nombre = (a.textContent || "").replace(/\s+/g, " ").trim();
       }
 
+      // Si el autor del comentario (rateduserid) es igual al instructor, ignorar.
+      // Pero no tenemos el id del instructor aqui. 
+      // Por suerte, el instructor generalment no está en el reporte de notas (matriculados).
       out.push({ moodleUserId: rateduserid, nombre, ratingVal, ratingText, postId: itemid });
     }
 
@@ -211,28 +213,53 @@ async function extraerPostsForo(page) {
  *
  * @param {import('playwright').Page} page
  * @param {string|number} courseId
- * @returns {Promise<Array<{ moodleUserId: string, nombre: string }>>}
+ * @returns {Promise<Array<{ moodleUserId: string, nombre: string, email: string, documento: string }>>}
  */
 async function obtenerMatriculados(page, courseId) {
   // perpage=5000 evita el render "all" (perpage=0) que en cursos grandes
   // tarda >30s. 5000 cubre cualquier ficha del SENA con margen.
   const url = `${BASE_URL}/grade/report/grader/index.php?id=${courseId}&perpage=5000`;
   log(`[matriculados] GET ${url}`);
-  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 90_000 });
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
   await cerrarModal(page);
   return await page.evaluate(() => {
+    const txt = (el) => (el?.textContent ?? "").replace(/\s+/g, " ").trim();
+
+    // Primary: tr[data-uid].userrow — stable data-* selector (REUSE.md §Student Email Source)
+    const userRows = Array.from(document.querySelectorAll("tr[data-uid].userrow"));
+    if (userRows.length > 0) {
+      return userRows.map(row => {
+        if (row.querySelector('th.usersuspended')) return null;
+        const uid = row.getAttribute("data-uid");
+        if (!uid) return null;
+        const profileLink = row.querySelector(
+          'a[href*="/user/view.php?id="], a[href*="/user/profile.php?id="]'
+        );
+        const m = profileLink?.href.match(/[?&]id=(\d+)/);
+        const moodleUserId = m?.[1] ?? uid;
+        const nombre    = txt(profileLink) || txt(row.querySelector("a.username")) || "";
+        const email     = txt(row.querySelector('td[data-col="email"]'));
+        const documento = txt(row.querySelector('td[data-col="username"]'));
+        if (nombre.length < 3) return null;
+        return { moodleUserId, nombre, email, documento };
+      }).filter(Boolean);
+    }
+
+    // Fallback: th[scope="row"] profile links (older layout without data-uid rows)
     const links = Array.from(document.querySelectorAll(
       'th[scope="row"] a[href*="/user/view.php?id="], th.userfield a[href*="/user/view.php?id="], th[scope="row"] a[href*="/user/profile.php?id="]'
     ));
     const map = new Map();
     for (const a of links) {
+      const tr = a.closest('tr');
+      if (tr?.querySelector('th.usersuspended')) continue;
       const m = a.href.match(/[?&]id=(\d+)/);
       if (!m) continue;
       const id = m[1];
       if (map.has(id)) continue;
       const nombre = (a.textContent || "").replace(/\s+/g, " ").trim();
       if (nombre.length < 3) continue;
-      map.set(id, { moodleUserId: id, nombre });
+      map.set(id, { moodleUserId: id, nombre, email: "", documento: "" });
     }
     return Array.from(map.values());
   });
@@ -241,7 +268,7 @@ async function obtenerMatriculados(page, courseId) {
 async function revisarEntregasForo(page, actId, courseId, matriculadosCache) {
   const viewUrl = `${BASE_URL}/mod/forum/view.php?id=${actId}`;
   log(`[foro] View: ${viewUrl}`);
-  await page.goto(viewUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
+  await page.goto(viewUrl, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
   await cerrarModal(page);
 
   // Recolectar posts de la vista (foros tipo blog/single los muestran aquí)
@@ -262,7 +289,7 @@ async function revisarEntregasForo(page, actId, courseId, matriculadosCache) {
 
     const vistos = new Set();
     for (const d of discussIds) {
-      await page.goto(`${BASE_URL}/mod/forum/discuss.php?d=${d}`, { waitUntil: "load", timeout: TIMEOUT });
+      await page.goto(`${BASE_URL}/mod/forum/discuss.php?d=${d}`, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
       await cerrarModal(page);
       const local = await extraerPostsForo(page);
       for (const p of local) {
@@ -298,6 +325,14 @@ async function revisarEntregasForo(page, actId, courseId, matriculadosCache) {
     const v = p.ratingVal;
     const calificado = v != null && v !== "" && v !== "-999" && v !== "-1";
     const notaActual = calificado ? parseFloat(v) : null;
+    
+    // Solo agregar si el moodleUserId está en la lista de matriculados
+    // Esto evita que las respuestas del propio instructor se cuenten como entregas pendientes!
+    if (Array.isArray(matriculadosCache) && matriculadosCache.length > 0) {
+       const esMatriculado = matriculadosCache.some(m => m.moodleUserId === p.moodleUserId);
+       if (!esMatriculado) continue;
+    }
+
     result.push({
       nombre:          p.nombre || `Aprendiz ${p.moodleUserId}`,
       aprendizMoodleId: p.moodleUserId,
@@ -338,7 +373,7 @@ async function revisarEntregasForo(page, actId, courseId, matriculadosCache) {
 async function revisarEntregasQuiz(page, actId, courseId, matriculadosCache) {
   const reportUrl = `${BASE_URL}/mod/quiz/report.php?id=${actId}&mode=overview`;
   log(`[quiz] Report: ${reportUrl}`);
-  await page.goto(reportUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
+  await page.goto(reportUrl, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
   await cerrarModal(page);
 
   const filas = await page.evaluate(() => {
@@ -408,4 +443,233 @@ async function revisarEntregasQuiz(page, actId, courseId, matriculadosCache) {
   return result;
 }
 
-module.exports = { obtenerEvidencias, revisarEntregas, revisarEntregasForo, revisarEntregasQuiz, extraerPostsForo, obtenerMatriculados };
+/**
+ * Navega a la vista de exportación del libro de calificaciones y descarga el CSV en texto plano.
+ * Retorna el contenido del archivo como string.
+ */
+async function descargarGradebookCSV(page, courseId) {
+  const url = `${BASE_URL}/grade/export/txt/index.php?id=${courseId}`;
+  log(`[gradebook] Navegando a exportación CSV: ${url}`);
+  
+  try {
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+    
+    // Moodle requiere hacer click en el botón de submit para generar la descarga
+    const btnLocator = page.locator('button[type="submit"], input[type="submit"]');
+    
+    if (!(await btnLocator.count())) {
+      log("[gradebook] No se encontró el botón de descarga en el exportador.");
+      return null;
+    }
+
+    const [download] = await Promise.all([
+      page.waitForEvent('download', { timeout: 20000 }),
+      btnLocator.first().click()
+    ]);
+
+    const stream = await download.createReadStream();
+    let csvText = "";
+    for await (const chunk of stream) {
+      csvText += chunk.toString("utf8");
+    }
+    
+    log(`[gradebook] CSV descargado correctamente (${csvText.length} bytes).`);
+    return csvText;
+  } catch (err) {
+    log(`[gradebook] Error descargando CSV: ${err.message}`);
+    return null;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CAPA 2 (perf) — Leer entregas de `assign` vía el AJAX interno de Moodle
+// (mod_assign_list_participants sobre /lib/ajax/service.php con el sesskey de la
+// sesión), en vez de navegar y raspar el DOM de view.php?action=grading.
+//
+// Por qué así (decidido tras probar contra SENA el 31-may, ver CLAUDE.md):
+//   • mod_assign_list_participants  → ✅ habilitado sobre la sesión (sesskey).
+//   • mod_assign_get_assignments / core_course_get_contents → ❌ capadas en SENA,
+//     así que el cmid→assignid se resuelve leyendo data-assignmentid del grader
+//     HTML una sola vez y se cachea en Evidencia.assignId (igual que la Extensión Z).
+//   • El token WS (/login/token.php) NO sirve: el login de SENA es SSO, lo rechaza.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Extrae el sesskey de la sesión Moodle desde la página actual.
+ * window.M.cfg.sesskey está presente en cualquier página post-login de Moodle.
+ */
+async function obtenerSesskey(page) {
+  return await page.evaluate(() => (window.M && window.M.cfg && window.M.cfg.sesskey) || null);
+}
+
+/**
+ * Resuelve cmid → { assignId, contextId } leyendo el grader HTML.
+ * mod_assign_list_participants exige el assignid (instance id), que NO viene en
+ * el Gradebook Tree (solo tenemos el cmid). El grader expone ambos en atributos
+ * data-*. Es una lectura única por evidencia: el worker cachea el resultado.
+ */
+async function resolverAssignInfo(page, cmid) {
+  const url = `${BASE_URL}/mod/assign/view.php?id=${cmid}&action=grader`;
+  const html = await page.evaluate(async (u) => {
+    try {
+      const res = await fetch(u, { credentials: "include" });
+      return await res.text();
+    } catch { return ""; }
+  }, url);
+  const mA = html.match(/data-assignmentid="?(\d+)"?/);
+  const mC = html.match(/data-contextid="?(\d+)"?/);
+  return {
+    assignId:  mA ? parseInt(mA[1], 10) : null,
+    contextId: mC ? parseInt(mC[1], 10) : null,
+  };
+}
+
+/**
+ * Traduce un participante de mod_assign_list_participants al estado interno.
+ * Alinea con la semántica del scraper DOM (revisarEntregas), donde "calificado"
+ * gana SOBRE el estado de la entrega (borrador/reabierto).
+ *
+ * OJO: en el AJAX de SENA NO vienen `grade` ni `gradingstatus` (verificado en
+ * vivo). Los campos reales son `submitted`, `requiregrading` y
+ * `submissionstatus`. `requiregrading` es la señal AUTORITATIVA de Moodle:
+ *   false = NO falta calificar (ya calificado, o nada que calificar).
+ *
+ * Bug que esto corrige: un alumno calificado y luego REABIERTO
+ * (submissionstatus="reopened", requiregrading=false) caía en la regla
+ * "draft/reopened → pendiente" ANTES de mirar requiregrading, y quedaba pegado
+ * como "pendiente" scan tras scan aunque ya estuviera calificado.
+ * La NOTA numérica la sigue poniendo el CSV.
+ */
+function estadoDesdeParticipante(p) {
+  const ss = (p.submissionstatus || "").toLowerCase();
+  // Participó = entregó, o tiene un intento enviado/reabierto (un intento
+  // reabierto implica que hubo una entrega previa).
+  const participo = p.submitted || ss === "reopened" || ss === "submitted";
+  if (p.requiregrading) return "pendiente";   // Moodle: falta calificar
+  if (participo)        return "calificado";   // participó y NO requiere calificación → calificado
+  if (ss === "draft")   return "pendiente";    // borrador sin enviar → atención del instructor
+  return "sin_entregar";                       // "new"/vacío → nunca participó
+}
+
+/**
+ * Llama mod_assign_list_participants para VARIOS assigns en UN solo POST batch
+ * (el AJAX de Moodle acepta un array de métodos y los resuelve del lado servidor;
+ * la Extensión Z hace exactamente esto en vez de Promise.all).
+ *
+ * @param {import('playwright').Page} page
+ * @param {string} sesskey
+ * @param {Array<{cmid:string, assignId:number}>} assigns
+ * @returns {Promise<Map<string, {participantes?:Array, error?:string}>>} keyed por cmid
+ */
+async function listarParticipantesBatch(page, sesskey, assigns) {
+  const out = new Map();
+  if (!sesskey || assigns.length === 0) return out;
+
+  const body = assigns.map((a, i) => ({
+    index: i,
+    methodname: "mod_assign_list_participants",
+    args: {
+      assignid: a.assignId,
+      groupid: 0,
+      filter: "",
+      skip: 0,
+      limit: 0,
+      onlyids: false,         // queremos los campos de estado, no solo ids
+      includeenrolments: true,
+      tablesort: false,
+    },
+  }));
+
+  const resp = await page.evaluate(async ({ base, sesskey, body }) => {
+    const url = `${base}/lib/ajax/service.php?sesskey=${encodeURIComponent(sesskey)}&info=mod_assign_list_participants`;
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(body),
+      });
+      const text = await res.text();
+      try { return { status: res.status, json: JSON.parse(text) }; }
+      catch { return { status: res.status, raw: text.slice(0, 300) }; }
+    } catch (e) { return { error: String(e && e.message || e) }; }
+  }, { base: BASE_URL, sesskey, body });
+
+  const arr = Array.isArray(resp.json) ? resp.json : [];
+  if (arr.length === 0) {
+    log(`[ajax-participants] sin respuesta usable (status=${resp.status || "?"} ${resp.error || resp.raw || ""})`);
+    return out;
+  }
+
+  arr.forEach((item, i) => {
+    const a = assigns[(item && item.index != null) ? item.index : i];
+    if (!a) return;
+    if (item.error) {
+      out.set(a.cmid, { error: (item.exception && item.exception.errorcode) || "error" });
+    } else {
+      out.set(a.cmid, { participantes: Array.isArray(item.data) ? item.data : [] });
+    }
+  });
+  return out;
+}
+
+/**
+ * Lee las notas del libro de calificaciones (grader report) indexadas por el
+ * itemid del grade item, igual que la Extensión Z. Captura número O letra A/D
+ * (la escala cualitativa SENA), tomando SOLO el input editable o el
+ * span.gradevalue de cada celda (NO el textContent, que trae el menú "Acciones
+ * de la celda" y ensuciaría el regex).
+ *
+ * @returns {Promise<Object>} { [itemid]: { [moodleUserId]: { numero:Number|null, letra:'A'|'D'|null } } }
+ */
+async function obtenerNotasGrader(page, courseId) {
+  const url = `${BASE_URL}/grade/report/grader/index.php?id=${courseId}&perpage=5000`;
+  log(`[notas] GET ${url}`);
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+  await cerrarModal(page);
+
+  const data = await page.evaluate(() => {
+    const out = {};
+    const rows = Array.from(document.querySelectorAll("tr[data-uid].userrow"));
+    for (const row of rows) {
+      if (row.querySelector("th.usersuspended")) continue;
+      const profileLink = row.querySelector(
+        'a[href*="/user/view.php?id="], a[href*="/user/profile.php?id="]'
+      );
+      const m = profileLink?.href.match(/[?&]id=(\d+)/);
+      const uid = m?.[1] ?? row.getAttribute("data-uid");
+      if (!uid) continue;
+
+      for (const td of row.querySelectorAll("td[data-itemid]")) {
+        const itemid = td.getAttribute("data-itemid");
+        if (!itemid) continue;
+        const input = td.querySelector("input");
+        const span = td.querySelector('span[class*="gradevalue"], .gradevalue');
+        const raw = (input ? input.value : (span ? span.textContent : "")) || "";
+        const mm = raw.match(/(\d+(?:[.,]\d+)?|A|D)/i);
+        if (!mm) continue;
+        const tok = mm[1].toUpperCase();
+        let numero = null, letra = null;
+        if (tok === "A" || tok === "D") {
+          letra = tok;
+        } else {
+          const n = parseFloat(tok.replace(",", "."));
+          if (!isNaN(n)) numero = n;
+        }
+        if (numero === null && letra === null) continue;
+        (out[itemid] || (out[itemid] = {}))[uid] = { numero, letra };
+      }
+    }
+    return out;
+  });
+
+  const nItems = Object.keys(data).length;
+  log(`[notas] ${nItems} grade items con notas leídas del grader report`);
+  return data;
+}
+
+module.exports = {
+  obtenerEvidencias, revisarEntregas, revisarEntregasForo, revisarEntregasQuiz,
+  extraerPostsForo, obtenerMatriculados, descargarGradebookCSV, obtenerNotasGrader,
+  obtenerSesskey, resolverAssignInfo, estadoDesdeParticipante, listarParticipantesBatch,
+};

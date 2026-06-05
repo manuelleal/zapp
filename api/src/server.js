@@ -54,6 +54,25 @@ fastify.decorate("authenticate", async (req, reply) => {
   }
 });
 
+// ─── HEALTH ──────────────────────────────────────────────────────────────────
+// Ping rápido a Postgres y Redis. 200 si ambos responden, 503 si alguno falla.
+// Útil para Docker healthcheck / k8s readiness / monitoreo externo.
+const prisma = require("./db/client");
+const { connection: redis } = require("./lib/queue");
+
+fastify.get("/api/health", async (req, reply) => {
+  const checks = { db: false, redis: false };
+  try { await prisma.$queryRaw`SELECT 1`; checks.db = true; } catch { /* db down */ }
+  try { checks.redis = (await redis.ping()) === "PONG"; } catch { /* redis down */ }
+
+  const ok = checks.db && checks.redis;
+  return reply.code(ok ? 200 : 503).send({
+    status: ok ? "ok" : "degraded",
+    ...checks,
+    uptime: Math.round(process.uptime()),
+  });
+});
+
 // ─── RUTAS ───────────────────────────────────────────────────────────────────
 
 fastify.register(require("./routes/auth"));
@@ -62,14 +81,20 @@ fastify.register(require("./routes/jobs"));
 fastify.register(require("./routes/evidencias"));
 fastify.register(require("./routes/archivar"));
 fastify.register(require("./routes/configEvidencias"));
+fastify.register(require("./routes/batchConfig"));
 fastify.register(require("./routes/foroRating"));
+fastify.register(require("./routes/scan"));
+fastify.register(require("./routes/raps"));
+fastify.register(require("./routes/matchingIa"));
+fastify.register(require("./routes/actas"));
+fastify.register(require("./routes/actasImport"));
+fastify.register(require("./routes/mensajes"));
+fastify.register(require("./routes/ajustes"));
 
-// ─── WORKER ──────────────────────────────────────────────────────────────────
-
-require("./workers/fichasWorker");
-require("./workers/evidenciasWorker");
-require("./workers/configWorker");
-require("./workers/foroRatingWorker");
+// ─── WORKERS ─────────────────────────────────────────────────────────────────
+// Los workers BullMQ ya NO viven aquí. Corren en un proceso separado
+// (api/src/worker-entry.js, app "workers" en ecosystem.config.js) para que un
+// OOM de scraper no tumbe la API. Ver CLAUDE.md §11.1 / §11.3 P0 #1.
 
 // ─── START ───────────────────────────────────────────────────────────────────
 
