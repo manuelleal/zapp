@@ -129,7 +129,10 @@ async function obtenerFormFetch(cookieStr, actId) {
     $("form[method='post'][action*='modedit']").get(0) ||
     $("form.mform").get(0);
   if (!formEl) throw new Error("Formulario modedit no encontrado (fetch).");
-  const action = $(formEl).attr("action") || url;
+  // El action del HTML crudo puede ser relativo ("modedit.php"); el fetch de Node
+  // NO resuelve relativos (a diferencia del navegador). Lo absolutizamos contra
+  // la URL de la página del form.
+  const action = new URL($(formEl).attr("action") || url, url).toString();
   const tipo = detectarTipoFromHtml($);
   const data = aplicarDisabledIfFechas(serializeForm($, formEl));
   return { data, action, tipo };
@@ -207,9 +210,13 @@ async function guardarConfigEvidenciaFetch(cookieStr, actId, config) {
     throw new Error("La sesion fue expulsada durante el guardado (fetch). Reintentar.");
   }
   if (!post.ok) throw new Error(`POST fallido: HTTP ${post.status}`);
-  if (/alert-danger|id="id_error_|form-errors/i.test(post.text)) {
-    const m = post.text.match(/class="[^"]*error[^"]*"[^>]*>([^<]{1,300})</i);
-    throw new Error(`Error al guardar: ${m ? m[1].trim() : "desconocido"}`);
+  // Señal de éxito robusta: al guardar, Moodle REDIRIGE fuera de modedit (a
+  // mod/.../view.php). Si la URL final sigue en modedit.php, re-renderizó el form
+  // = la validación falló. (NO usar regex de "id_error_": Moodle emite esos
+  // placeholders OCULTOS para cada campo siempre → falso positivo.)
+  if (/modedit\.php/i.test(post.finalUrl || "")) {
+    const m = post.text.match(/alert-danger[^>]*>\s*([^<]{3,300})/i);
+    throw new Error(`Error al guardar: ${m ? m[1].trim() : "Moodle re-renderizó el formulario (validación rechazada)"}`);
   }
 
   // Verificación: releer y comparar lo que pedimos cambiar.
