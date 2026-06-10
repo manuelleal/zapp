@@ -29,32 +29,48 @@ function escapeHtml(str) {
 }
 
 /**
+ * Normaliza dest.evidencias a nombres (strings). Mismo criterio que en
+ * mensajeFormativoWorker.js: acepta array de strings O de objetos { nombre }
+ * (defensivo — sin esto, un objeto produciría "[object Object]" en el correo).
+ */
+function nombresDeEvidencias(evidencias) {
+  if (!Array.isArray(evidencias)) return [];
+  return evidencias
+    .map(e => (typeof e === "string" ? e : e?.nombre ?? ""))
+    .map(s => String(s).trim())
+    .filter(Boolean);
+}
+
+/**
  * Reemplaza variables {{nombre}}, {{ficha}}, {{instructor}}, {{evidencias}}
  * en texto plano (sin envolver en HTML). Usar para campos como subject.
  *
- * Para {{evidencias}} en texto plano se concatena con saltos de línea (no <li>),
+ * Para {{evidencias}} en texto plano (subject) se concatena con comas (no <li>),
  * a diferencia de personalizarMensaje() que va en HTML.
  */
 function aplicarVariables(texto, dest) {
-  const evidenciasTxt = Array.isArray(dest.evidencias)
-    ? dest.evidencias.join(", ")
-    : (dest.evidencias ?? "");
+  const evidenciasTxt = nombresDeEvidencias(dest.evidencias).join(", ");
 
   return String(texto ?? "")
     .replace(/\{\{nombre\}\}/gi,     dest.nombre ?? "")
-    .replace(/\{\{evidencias\}\}/gi, evidenciasTxt)
+    .replace(/\{\{evidencias\}\}/gi, () => evidenciasTxt)
     .replace(/\{\{ficha\}\}/gi,      dest.ficha ?? "")
     .replace(/\{\{instructor\}\}/gi, dest.instructor ?? "");
 }
 
 function personalizarMensaje(cuerpo, dest) {
-  const evidenciasHtml = Array.isArray(dest.evidencias)
-    ? dest.evidencias.map(e => `<li>${escapeHtml(e)}</li>`).join("")
-    : escapeHtml(dest.evidencias ?? "");
+  // {{evidencias}} en HTML: encabezado "Tienes N..." + <ol> numerado, misma
+  // semántica que el texto plano de mensajeFormativoWorker (paridad de canales).
+  // Si no hay evidencias → "" (no queda el token crudo en el correo).
+  const nombresEv = nombresDeEvidencias(dest.evidencias);
+  const evidenciasHtml = nombresEv.length
+    ? `Tienes ${nombresEv.length} evidencia(s) pendiente(s):<ol>${nombresEv.map(e => `<li>${escapeHtml(e)}</li>`).join("")}</ol>`
+    : "";
 
   const texto = String(cuerpo ?? "")
     .replace(/\{\{nombre\}\}/gi,     escapeHtml(dest.nombre ?? ""))
-    .replace(/\{\{evidencias\}\}/gi, evidenciasHtml)
+    // función como replacement: evita interpretar "$&"/"$1" del contenido
+    .replace(/\{\{evidencias\}\}/gi, () => evidenciasHtml)
     .replace(/\{\{ficha\}\}/gi,      escapeHtml(dest.ficha ?? ""))
     .replace(/\{\{instructor\}\}/gi, escapeHtml(dest.instructor ?? ""));
 

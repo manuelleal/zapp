@@ -3,7 +3,16 @@
  *
  * QUÉ HACE: envía mensajes internos de Moodle a los aprendices (mensajería 1:1
  * vía scraper/mensajes.enviarMensajeMoodle), personalizando el cuerpo con
- * {{nombre}}/{{ficha}}/{{instructor}} por destinatario.
+ * {{nombre}}/{{ficha}}/{{instructor}}/{{evidencias}} por destinatario.
+ *
+ * TOKEN {{evidencias}}: se expande a la lista de evidencias pendientes/
+ * desaprobadas de CADA aprendiz (dest.evidencias, poblado por la ruta
+ * /api/mensajes/enviar-masivo). Formato texto plano (mismo espíritu que
+ * construirMensaje() en scraper/mensajes.js — no se importa para no acoplar
+ * el worker al scraper por un formateo de strings):
+ *   "Tienes N evidencia(s) pendiente(s):\n  1. <nombre>\n  2. ..."
+ * Si el aprendiz no tiene evidencias, el token se reemplaza por cadena vacía
+ * (nunca queda el "{{evidencias}}" crudo en el mensaje enviado).
  *
  * job.data: { mensajeId, userId, destinatarios, cuerpo, zajunaUserEnc, zajunaPassEnc }
  *   Actualiza el registro MensajeFormativo (mensajeId) con el resultado.
@@ -23,11 +32,41 @@ const { enviarMensajeMoodle } = require("../../../scraper/mensajes");
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+/**
+ * Normaliza dest.evidencias a un array de nombres (strings).
+ * Defensivo: acepta array de strings ("Evidencia GA1...") O de objetos
+ * ({ nombre: "..." }) — el front hoy no manda evidencias (la ruta default-ea
+ * a []), así que cubrimos ambos shapes para no romper cuando se cablee.
+ */
+function nombresDeEvidencias(evidencias) {
+  if (!Array.isArray(evidencias)) return [];
+  return evidencias
+    .map(e => (typeof e === "string" ? e : e?.nombre ?? ""))
+    .map(s => String(s).trim())
+    .filter(Boolean);
+}
+
+/**
+ * Texto plano para el token {{evidencias}} (ver cabecera del archivo).
+ * Devuelve "" si no hay items — el token desaparece del mensaje.
+ */
+function formatearEvidencias(evidencias) {
+  const nombres = nombresDeEvidencias(evidencias);
+  if (nombres.length === 0) return "";
+  return [
+    `Tienes ${nombres.length} evidencia(s) pendiente(s):`,
+    ...nombres.map((n, i) => `  ${i + 1}. ${n}`),
+  ].join("\n");
+}
+
 function personalizarCuerpo(cuerpo, dest, ficha, instructor) {
   return String(cuerpo ?? "")
     .replace(/\{\{nombre\}\}/gi,     dest.nombre ?? "")
     .replace(/\{\{ficha\}\}/gi,      ficha)
-    .replace(/\{\{instructor\}\}/gi, instructor);
+    .replace(/\{\{instructor\}\}/gi, instructor)
+    // función como replacement: evita que un "$&"/"$1" en el nombre de una
+    // evidencia se interprete como patrón especial de String.replace
+    .replace(/\{\{evidencias\}\}/gi, () => formatearEvidencias(dest.evidencias));
 }
 
 // ─── Worker ───────────────────────────────────────────────────────────────────
