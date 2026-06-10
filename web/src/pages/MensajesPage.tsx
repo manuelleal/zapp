@@ -3,12 +3,14 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   Mail, Send, Loader2, RefreshCw, AlertCircle, CheckCircle2, Clock,
   Users, History, FileText, ChevronRight, ChevronDown, CheckSquare, Square,
+  Pause, Play, Trash2,
 } from "lucide-react"
 import Layout from "@/components/Layout"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { apiFetch, ApiError } from "@/api/client"
 import { toast } from "sonner"
 import { useAuthStore } from "@/store/auth"
@@ -33,6 +35,33 @@ interface Aprendiz {
   entregas:     EntregaResumen[]
 }
 interface EvidenciaFicha { id: string; nombre: string; tipo: string }
+interface MensajeProgramado {
+  id:                  string
+  canal:               string
+  asunto:              string
+  filtroDestinatarios: string
+  alcanceEvidencias:   string
+  incluirDesaprobadas: boolean
+  intervaloDias:       number
+  hora:                string
+  proximaEjecucion:    string
+  lastRunAt:           string | null
+  pausadoAt:           string | null
+  ficha:               { codigo: string; nombre: string } | null
+}
+
+const FILTRO_LABELS: Record<string, string> = {
+  todos:            "Todos",
+  con_pendientes:   "Con pendientes",
+  con_desaprobadas: "Con desaprobadas",
+  inactivos:        "Inactivos >7d",
+  nunca:            "Nunca entraron",
+}
+const ALCANCE_LABELS: Record<string, string> = {
+  competencia: "Mi competencia",
+  todas:       "Toda la ficha",
+  ids:         "Selección manual",
+}
 interface MensajeHistorial {
   id:                 string
   canal:              string
@@ -127,12 +156,18 @@ export default function MensajesPage() {
   const { jwt, user, clearAuth, setAuth } = useAuthStore()
   const [searchParams] = useSearchParams()
 
-  const [tab, setTab]               = useState<"compositor" | "historial">("compositor")
+  const [tab, setTab]               = useState<"compositor" | "historial" | "programados">("compositor")
   const [fichaId, setFichaId]       = useState("")
   const [seleccionados, setSeleccionados] = useState<Set<string>>(new Set())
   const [selEvidencias, setSelEvidencias] = useState<Set<string>>(new Set())
   const [incluirDesaprobadas, setIncluirDesaprobadas] = useState(false)
   const [canal, setCanal]           = useState<"email" | "zajuna">("email")
+  // Modal "Programar envío recurrente"
+  const [showProgramar, setShowProgramar] = useState(false)
+  const [progFiltro, setProgFiltro]       = useState("con_pendientes")
+  const [progAlcance, setProgAlcance]     = useState<"competencia" | "todas" | "ids">("competencia")
+  const [progIntervalo, setProgIntervalo] = useState("7")
+  const [progHora, setProgHora]           = useState("07:00")
   const [asunto, setAsunto]         = useState("")
   const [cuerpo, setCuerpo]         = useState("")
   const [templateKey, setTemplateKey] = useState<TemplateKey | "">("")
@@ -231,6 +266,56 @@ export default function MensajesPage() {
     queryFn:  () => apiFetch<MensajeHistorial[]>("/api/mensajes/historial"),
     enabled:  !!jwt && tab === "historial",
   })
+
+  // ── Mensajes programados ─────────────────────────────────────────────────────
+  const { data: programados = [] } = useQuery<MensajeProgramado[]>({
+    queryKey: ["mensajes-programados"],
+    queryFn:  () => apiFetch<MensajeProgramado[]>("/api/mensajes/programados"),
+    enabled:  !!jwt && (tab === "programados" || showProgramar),
+  })
+
+  const crearProgramadoMutation = useMutation({
+    mutationFn: (body: object) => apiFetch("/api/mensajes/programados", {
+      method: "POST", body: JSON.stringify(body),
+    }),
+    onSuccess: () => {
+      toast.success("Mensaje programado. Revísalo en la pestaña Programados.")
+      setShowProgramar(false)
+      queryClient.invalidateQueries({ queryKey: ["mensajes-programados"] })
+      setTab("programados")
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Error al programar."),
+  })
+
+  const pausarProgramadoMutation = useMutation({
+    mutationFn: ({ id, pausado }: { id: string; pausado: boolean }) =>
+      apiFetch(`/api/mensajes/programados/${id}`, { method: "PATCH", body: JSON.stringify({ pausado }) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["mensajes-programados"] }),
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Error al actualizar."),
+  })
+
+  const eliminarProgramadoMutation = useMutation({
+    mutationFn: (id: string) => apiFetch(`/api/mensajes/programados/${id}`, { method: "DELETE" }),
+    onSuccess: () => { toast.success("Programado eliminado."); queryClient.invalidateQueries({ queryKey: ["mensajes-programados"] }) },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Error al eliminar."),
+  })
+
+  function handleCrearProgramado() {
+    if (!fichaId) { toast.error("Selecciona una ficha."); return }
+    if (!asunto.trim() || !cuerpo.trim()) { toast.error("Asunto y cuerpo son obligatorios."); return }
+    if (canal === "email" && !configCorreo) { toast.error("Configura el SMTP en Ajustes antes de programar correos."); return }
+    if (progAlcance === "ids" && selEvidencias.size === 0) { toast.error("Con alcance 'Selección manual' marca al menos una evidencia."); return }
+    crearProgramadoMutation.mutate({
+      fichaId, canal, asunto, cuerpo,
+      templateTipo:        templateKey || null,
+      filtroDestinatarios: progFiltro,
+      alcanceEvidencias:   progAlcance,
+      evidenciaIds:        progAlcance === "ids" ? [...selEvidencias] : undefined,
+      incluirDesaprobadas,
+      intervaloDias:       parseInt(progIntervalo, 10) || 7,
+      hora:                progHora,
+    })
+  }
 
   // ── Aplicar pre-filtro al cargar aprendices ──────────────────────────────────
   useEffect(() => {
@@ -419,6 +504,13 @@ export default function MensajesPage() {
             <button onClick={() => { setTab("historial"); refetchHistorial() }}
               className={`flex items-center gap-1.5 text-xs px-3 py-1 rounded ${tab === "historial" ? "bg-sena-green/10 text-sena-green" : "text-gray-600 hover:text-gray-900"}`}>
               <History className="w-3 h-3" /> Historial
+            </button>
+            <button onClick={() => setTab("programados")}
+              className={`flex items-center gap-1.5 text-xs px-3 py-1 rounded ${tab === "programados" ? "bg-sena-green/10 text-sena-green" : "text-gray-600 hover:text-gray-900"}`}>
+              <Clock className="w-3 h-3" /> Programados
+              {programados.filter(p => !p.pausadoAt).length > 0 && (
+                <Badge variant="green" className="text-[10px] px-1">{programados.filter(p => !p.pausadoAt).length}</Badge>
+              )}
             </button>
           </div>
         </div>
@@ -672,13 +764,17 @@ export default function MensajesPage() {
                   {(enviarMutation.isPending || enviarJobId) ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
                   Enviar a {seleccionadosArr.length}
                 </Button>
+                <Button size="sm" variant="outline" className="gap-1.5 text-xs"
+                  onClick={() => setShowProgramar(true)} disabled={!fichaId}>
+                  <Clock className="w-3 h-3" /> Programar...
+                </Button>
                 {enviarJobId && enviarStatus && (
                   <span className="text-xs text-gray-500">Estado: {enviarStatus.state}</span>
                 )}
               </div>
             </div>
           </div>
-        ) : (
+        ) : tab === "historial" ? (
           // ── Tab: Historial ─────────────────────────────────────────────────
           <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
             {historial.length === 0 ? (
@@ -713,7 +809,133 @@ export default function MensajesPage() {
               </table>
             )}
           </div>
+        ) : (
+          // ── Tab: Programados ───────────────────────────────────────────────
+          <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+            {programados.length === 0 ? (
+              <div className="p-8 text-center text-sm text-gray-500 space-y-1">
+                <p>Sin mensajes programados.</p>
+                <p className="text-xs text-gray-400">Arma el mensaje en el Compositor y usa el botón "Programar..." — los destinatarios se recalculan en cada envío.</p>
+              </div>
+            ) : (
+              <table className="w-full text-xs">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="text-left px-3 py-2 font-semibold text-gray-500">Ficha</th>
+                    <th className="text-left px-3 py-2 font-semibold text-gray-500">Canal</th>
+                    <th className="text-left px-3 py-2 font-semibold text-gray-500">Asunto</th>
+                    <th className="text-left px-3 py-2 font-semibold text-gray-500">Destinatarios</th>
+                    <th className="text-left px-3 py-2 font-semibold text-gray-500">Evidencias</th>
+                    <th className="text-left px-3 py-2 font-semibold text-gray-500">Frecuencia</th>
+                    <th className="text-left px-3 py-2 font-semibold text-gray-500">Próximo envío</th>
+                    <th className="text-left px-3 py-2 font-semibold text-gray-500">Último</th>
+                    <th className="text-center px-3 py-2 font-semibold text-gray-500">Estado</th>
+                    <th className="text-center px-3 py-2 font-semibold text-gray-500">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {programados.map(p => (
+                    <tr key={p.id} className={p.pausadoAt ? "opacity-60" : ""}>
+                      <td className="px-3 py-2 text-gray-700 font-mono">{p.ficha?.codigo ?? "—"}</td>
+                      <td className="px-3 py-2 text-gray-600">{p.canal}</td>
+                      <td className="px-3 py-2 text-gray-700 max-w-[200px] truncate" title={p.asunto}>{p.asunto}</td>
+                      <td className="px-3 py-2 text-gray-600">{FILTRO_LABELS[p.filtroDestinatarios] ?? p.filtroDestinatarios}</td>
+                      <td className="px-3 py-2 text-gray-600">
+                        {ALCANCE_LABELS[p.alcanceEvidencias] ?? p.alcanceEvidencias}
+                        {p.incluirDesaprobadas && <span className="text-red-500 ml-1" title="Incluye desaprobadas">+D</span>}
+                      </td>
+                      <td className="px-3 py-2 text-gray-600 whitespace-nowrap">cada {p.intervaloDias}d · {p.hora}</td>
+                      <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{p.pausadoAt ? "—" : formatFecha(p.proximaEjecucion)}</td>
+                      <td className="px-3 py-2 text-gray-600 whitespace-nowrap">{formatFecha(p.lastRunAt)}</td>
+                      <td className="px-3 py-2 text-center">
+                        <Badge variant={p.pausadoAt ? "gray" : "green" as any} className="text-xs">
+                          {p.pausadoAt ? "pausado" : "activo"}
+                        </Badge>
+                      </td>
+                      <td className="px-3 py-2">
+                        <div className="flex items-center justify-center gap-1">
+                          <Button variant="ghost" size="sm" className="h-6 w-6 p-0"
+                            title={p.pausadoAt ? "Reanudar" : "Pausar"}
+                            onClick={() => pausarProgramadoMutation.mutate({ id: p.id, pausado: !p.pausadoAt })}>
+                            {p.pausadoAt ? <Play className="w-3 h-3 text-sena-green" /> : <Pause className="w-3 h-3" />}
+                          </Button>
+                          <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-red-500 hover:text-red-700"
+                            title="Eliminar"
+                            onClick={() => { if (confirm(`¿Eliminar el envío programado "${p.asunto}"?`)) eliminarProgramadoMutation.mutate(p.id) }}>
+                            <Trash2 className="w-3 h-3" />
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
         )}
+
+        {/* ── Modal: Programar envío recurrente ──────────────────────────────── */}
+        <Dialog open={showProgramar} onOpenChange={(o) => { if (!o) setShowProgramar(false) }}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Programar envío recurrente</DialogTitle>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Los destinatarios se recalculan <strong>en cada envío</strong> con el filtro elegido
+                (los pendientes de ese día, no los de hoy).
+              </p>
+            </DialogHeader>
+            <div className="space-y-3">
+              <div className="rounded-md bg-gray-50 border border-gray-200 p-2 text-xs text-gray-600 space-y-0.5">
+                <p><span className="font-semibold">Ficha:</span> {fichas.find(f => f.id === fichaId)?.codigo ?? "—"}</p>
+                <p><span className="font-semibold">Canal:</span> {canal === "email" ? "Correo electrónico" : "Mensaje interno Zajuna"}</p>
+                <p className="truncate"><span className="font-semibold">Asunto:</span> {asunto || <em className="text-gray-400">sin asunto</em>}</p>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Destinatarios (filtro automático)</Label>
+                <select value={progFiltro} onChange={e => setProgFiltro(e.target.value)}
+                  className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring">
+                  {Object.entries(FILTRO_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                </select>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Evidencias para {"{{evidencias}}"} y filtros</Label>
+                <select value={progAlcance} onChange={e => setProgAlcance(e.target.value as typeof progAlcance)}
+                  className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring">
+                  <option value="competencia">Mi competencia ({user?.competenciaCodigo || "sin asignar"})</option>
+                  <option value="todas">Todas las de la ficha (instructor líder)</option>
+                  <option value="ids">Las {selEvidencias.size} seleccionadas en el compositor</option>
+                </select>
+                <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+                  <input type="checkbox" checked={incluirDesaprobadas} onChange={e => setIncluirDesaprobadas(e.target.checked)}
+                    className="h-3.5 w-3.5 rounded border-gray-300 text-sena-green" />
+                  Incluir también las desaprobadas (nota &lt;70 o D)
+                </label>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="prog-dias">Cada cuántos días</Label>
+                  <Input id="prog-dias" type="number" min={1} max={60} value={progIntervalo}
+                    onChange={e => setProgIntervalo(e.target.value)} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="prog-hora">Hora del envío</Label>
+                  <Input id="prog-hora" type="time" value={progHora} onChange={e => setProgHora(e.target.value)} />
+                </div>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowProgramar(false)}>Cancelar</Button>
+              <Button className="bg-sena-green hover:bg-sena-green/90 gap-1.5"
+                onClick={handleCrearProgramado} disabled={crearProgramadoMutation.isPending}>
+                {crearProgramadoMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Clock className="w-4 h-4" />}
+                Programar
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </Layout>
   )

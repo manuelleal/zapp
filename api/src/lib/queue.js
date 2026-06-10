@@ -27,6 +27,9 @@ const mensajesQueue     = new Queue("mensajes",    { connection, defaultJobOptio
 const syncParticipantesQueue = new Queue("syncParticipantes", { connection, defaultJobOptions: { attempts: 1, removeOnComplete: 20, removeOnFail: 10 } });
 const emailMasivoQueue            = new Queue("emailMasivo",            { connection, defaultJobOptions: { attempts: 1, removeOnComplete: 50, removeOnFail: 20 } });
 const descubrirCompetenciasQueue  = new Queue("descubrirCompetencias",  { connection, defaultJobOptions: { attempts: 1, removeOnComplete: 20, removeOnFail: 10 } });
+// Tick de mensajes programados: attempts:1 — si una corrida falla, el siguiente
+// tick (10 min) la retoma; un retry inmediato podría duplicar envíos.
+const mensajesProgramadosQueue    = new Queue("mensajesProgramados",    { connection, defaultJobOptions: { attempts: 1, removeOnComplete: 20, removeOnFail: 10 } });
 
 // Repeatable global cada 3 horas. Idempotente: BullMQ deduplica por nombre+pattern.
 autoScanQueue.add("auto-scan-all", {}, {
@@ -34,4 +37,12 @@ autoScanQueue.add("auto-scan-all", {}, {
 }).then(() => console.log("[autoScan] repeatable job registered (cada 3h)"))
   .catch(e => console.error("[autoScan] no se pudo registrar repeatable job:", e.message));
 
-module.exports = { fichasQueue, evidenciasQueue, configQueue, leerConfigQueue, leerConfigLoteQueue, cambiarFechaQueue, cambiarConfigQueue, foroRatingQueue, foroDescubrirQueue, autoScanQueue, matchingIaQueue, mensajesQueue, syncParticipantesQueue, emailMasivoQueue, descubrirCompetenciasQueue, connection };
+// Tick cada 10 min: el worker busca MensajeProgramado vencidos y los dispara.
+// Un solo repeatable para TODOS los programados (no un repeatable por fila —
+// así no hay que sincronizar claves de BullMQ con cada create/update/delete).
+mensajesProgramadosQueue.add("tick", {}, {
+  repeat: { pattern: "*/10 * * * *" },
+}).then(() => console.log("[mensajesProgramados] repeatable tick registered (cada 10 min)"))
+  .catch(e => console.error("[mensajesProgramados] no se pudo registrar repeatable tick:", e.message));
+
+module.exports = { fichasQueue, evidenciasQueue, configQueue, leerConfigQueue, leerConfigLoteQueue, cambiarFechaQueue, cambiarConfigQueue, foroRatingQueue, foroDescubrirQueue, autoScanQueue, matchingIaQueue, mensajesQueue, syncParticipantesQueue, emailMasivoQueue, descubrirCompetenciasQueue, mensajesProgramadosQueue, connection };

@@ -678,7 +678,17 @@ Para integrar: Kimi usa API compatible con OpenAI (`https://api.moonshot.cn/v1`)
 - **Scripts de prueba/temporales creados** (no commiteados, varios en root `scripts/`): `test-multitenant.js`, `test-flujo-completo.js`, `setup-instructor-real.js`, `driver-*.js`, `importarMapeoRaps.js`, `matchearCompetenciaIA.js`, `raps.md`. Borrar usuarios/datos de prueba antes de producción.
 - **Pendientes inmediatos heredados:** ~~JWT_SECRET real~~ (rotado 9-jun noche), ~~dedup de evidencias~~ (descartado: medido 0 duplicados por ficha), extraer guías de las ~20 competencias faltantes, ~~los fixes de 14.4~~ (aplicados y commiteados 9-jun noche: nota+estado en calificar `9f7956a`, config fechas `d6d64a4`, mensajes `dc1f6bc`+`57b5f39`, perf grader+índices `5f585fa`).
 
-### 14.6 — 🔴 TAREA PARA MAÑANA (10-jun): selector de evidencias en Mensajes
+### 14.6 — ✅ IMPLEMENTADO (10-jun): selector de evidencias en Mensajes + filtros + programados
+
+> **Estado 10-jun:** TODO lo de esta sección quedó implementado y validado (commits `928444e` + el de mensajes programados). Resumen de lo construido:
+> - **Selector de evidencias** en MensajesPage (estilo ExcelModal, competencia del instructor premarcada) → `POST /enviar-masivo` recibe `evidenciaIds` e `incluirDesaprobadas` (desaprobadas = <70 o D, etiquetadas). Fallback sin selección: la competencia del usuario (ya NO todas las activas).
+> - **Filtros rápidos de destinatarios** (1 click): todos / con pendientes / con desaprobadas / inactivos >7d / nunca entraron, con contadores; columnas Pend./Desap. por aprendiz. `GET /mensajes/aprendices` ahora incluye resumen de entregas por aprendiz.
+> - **Mensajes programados**: modelo `MensajeProgramado` (filtro + alcance, NO destinatarios; `pausadoAt` soft-state), cola `mensajesProgramados` con tick repetible cada 10 min, worker `mensajesProgramadosWorker` (claim idempotente vía updateMany condicionado; recalcula destinatarios EN cada corrida; cada corrida genera un MensajeFormativo → historial; 0 destinatarios = no envía). CRUD `/api/mensajes/programados` + pestaña "Programados" con pausar/reanudar/eliminar. Tope anti-spam: intervalo 1-60 días, máx 1 corrida/día.
+> - **Caso instructor LÍDER**: el alcance de evidencias es elegible — `competencia` (default) / `todas` (líder que envía sobre toda la ficha) / `ids` (selección manual). En envío inmediato el líder usa "Seleccionar todas" en el selector.
+> - **Lógica compartida** en `api/src/lib/mensajesMasivos.js` (la usan la ruta y el worker — no duplicar).
+> - E2E validado: 17/17 (validaciones, 403 multi-tenant, CRUD, tick re-agenda respetando hora, 0 destinatarios no crea mensaje).
+
+Texto original del plan (referencia):
 
 **Problema (detectado por el usuario):** el auto-poblado de `{{evidencias}}` (`api/src/routes/mensajes.js`, bloque "Auto-poblar {{evidencias}} desde DB") toma TODAS las evidencias `activaParaScan` de la ficha. Pero en una ficha (grupo) dan clase VARIOS instructores — el instructor solo conoce/gestiona las evidencias de SU competencia y no debe mandarle al aprendiz pendientes de competencias ajenas.
 

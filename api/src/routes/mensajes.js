@@ -1,18 +1,28 @@
 const prisma = require("../db/client");
 const { mensajesQueue, syncParticipantesQueue, emailMasivoQueue } = require("../lib/queue");
 const { filtrarAprendicesValidos } = require("../lib/aprendices");
+// Lógica compartida con mensajesProgramadosWorker (regla §5.1: no duplicar).
+const {
+  esEntregaDesaprobada, resumenEvidenciasPorAprendiz,
+  aplanarEvidenciasToken, crearYEncolarEnvio,
+} = require("../lib/mensajesMasivos");
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+const FILTROS_PROGRAMADO  = ["todos", "con_pendientes", "con_desaprobadas", "inactivos", "nunca"];
+const ALCANCES_PROGRAMADO = ["competencia", "todas", "ids"];
+
 /**
- * Una entrega cuenta como DESAPROBADA si ya fue calificada y la nota no aprueba
- * (regla SENA universal: <70/100 o cualitativa D). Las "sin_entregar" NO cuentan
- * aquí — esas son pendientes, otra categoría en los filtros y en {{evidencias}}.
+ * Próxima ocurrencia de `hora` ("HH:mm", hora local del servidor) a partir de
+ * `desde`. Si la hora de hoy ya pasó, cae a mañana — el intervaloDias aplica
+ * ENTRE corridas, no a la primera.
  */
-function esEntregaDesaprobada(e) {
-  if (e.estado === "sin_entregar") return false;
-  if (/^d/i.test(String(e.notaCualitativa ?? "").trim())) return true;
-  return e.notaActual != null && Number(e.notaActual) < 70;
+function calcularProximaEjecucion(hora, desde = new Date()) {
+  const [h, m] = hora.split(":").map(Number);
+  const prox = new Date(desde);
+  prox.setHours(h, m, 0, 0);
+  if (prox <= desde) prox.setDate(prox.getDate() + 1);
+  return prox;
 }
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
@@ -277,40 +287,21 @@ async function mensajesRoutes(fastify) {
     // pendientes Y desaprobadas.
     const usaTokenEvidencias = /\{\{evidencias\}\}/i.test(cuerpo) || /\{\{evidencias\}\}/i.test(asunto);
     if (usaTokenEvidencias && destinatariosEnriquecidos.some(d => d.evidencias.length === 0)) {
-      const whereEvidencia = { fichaId, cerradaAt: null };
-      if (Array.isArray(evidenciaIds) && evidenciaIds.length > 0) {
-        whereEvidencia.id = { in: evidenciaIds.map(String) };
-      } else {
-        whereEvidencia.activaParaScan = true;
+      let competenciaCodigo = null;
+      if (!Array.isArray(evidenciaIds) || evidenciaIds.length === 0) {
         const yo = await prisma.user.findUnique({
           where:  { id: req.user.id },
           select: { competenciaCodigo: true },
         });
-        if (yo?.competenciaCodigo) whereEvidencia.nombre = { contains: yo.competenciaCodigo };
+        competenciaCodigo = yo?.competenciaCodigo || null;
       }
-
-      const entregasToken = await prisma.entrega.findMany({
-        where: {
-          aprendizId: { in: aprendizIds },
-          evidencia:  whereEvidencia,
-        },
-        select: {
-          aprendizId: true, estado: true, notaActual: true, notaCualitativa: true,
-          evidencia: { select: { nombre: true } },
-        },
-        orderBy: { evidencia: { nombre: "asc" } },
+      const resumen = await resumenEvidenciasPorAprendiz({
+        fichaId, aprendizIds, evidenciaIds, competenciaCodigo,
       });
-      const evidenciasPorAprendiz = new Map();
-      for (const e of entregasToken) {
-        let etiqueta = null;
-        if (e.estado === "sin_entregar")                          etiqueta = e.evidencia.nombre;
-        else if (incluirDesaprobadas && esEntregaDesaprobada(e))  etiqueta = `${e.evidencia.nombre} (desaprobada — corregir y reenviar)`;
-        if (!etiqueta) continue;
-        if (!evidenciasPorAprendiz.has(e.aprendizId)) evidenciasPorAprendiz.set(e.aprendizId, []);
-        evidenciasPorAprendiz.get(e.aprendizId).push(etiqueta);
-      }
       for (const d of destinatariosEnriquecidos) {
-        if (d.evidencias.length === 0) d.evidencias = evidenciasPorAprendiz.get(d.aprendizId) ?? [];
+        if (d.evidencias.length === 0) {
+          d.evidencias = aplanarEvidenciasToken(resumen.get(d.aprendizId), !!incluirDesaprobadas);
+        }
       }
     }
 
@@ -335,45 +326,117 @@ async function mensajesRoutes(fastify) {
       }
     }
 
-    const mensaje = await prisma.mensajeFormativo.create({
-      data: {
-        userId:        req.user.id,
-        actaId:        actaId || null,
-        fichaId,
-        canal,
-        asunto,
-        cuerpo,
-        destinatarios: destinatariosEnriquecidos,
-        templateTipo:  templateTipo || null,
-        estado:        "pendiente",
-      },
+    const { mensaje, jobId } = await crearYEncolarEnvio({
+      userId:        req.user.id,
+      fichaId, canal, asunto, cuerpo,
+      destinatarios: destinatariosEnriquecidos,
+      templateTipo, actaId,
     });
 
-    let jobId = null;
-    if (canal === "email") {
-      const job = await emailMasivoQueue.add("enviar", {
-        mensajeFormativoId: mensaje.id,
-        userId: req.user.id,
-      });
-      jobId = job.id;
-    } else {
-      // canal=zajuna → usa el worker existente de mensajes (chat interno Moodle)
-      const user = await prisma.user.findUnique({
-        where:  { id: req.user.id },
-        select: { zajunaUserEnc: true, zajunaPassEnc: true },
-      });
-      const job = await mensajesQueue.add("enviar", {
-        mensajeId:     mensaje.id,
-        userId:        req.user.id,
-        destinatarios: destinatariosEnriquecidos,
-        cuerpo,
-        zajunaUserEnc: user.zajunaUserEnc,
-        zajunaPassEnc: user.zajunaPassEnc,
-      });
-      jobId = job.id;
+    return reply.code(202).send({ jobId, mensajeFormativoId: mensaje.id });
+  });
+
+  // ══ MENSAJES PROGRAMADOS ══════════════════════════════════════════════════════
+  // Envíos recurrentes (cada N días a una hora). Se guarda el FILTRO, no la lista
+  // de destinatarios: mensajesProgramadosWorker la recalcula EN CADA corrida.
+
+  // ── POST /api/mensajes/programados ───────────────────────────────────────────
+  fastify.post("/api/mensajes/programados", { preHandler: fastify.authenticate }, async (req, reply) => {
+    const { fichaId, canal, asunto, cuerpo, templateTipo, filtroDestinatarios,
+            alcanceEvidencias, evidenciaIds, incluirDesaprobadas, intervaloDias, hora } = req.body || {};
+
+    if (!fichaId || !canal || !asunto || !cuerpo || !filtroDestinatarios || !intervaloDias || !hora) {
+      return reply.code(400).send({ error: "fichaId, canal, asunto, cuerpo, filtroDestinatarios, intervaloDias y hora son requeridos." });
+    }
+    if (!["email", "zajuna"].includes(canal)) {
+      return reply.code(400).send({ error: "Canal inválido. Valores: email, zajuna." });
+    }
+    if (!FILTROS_PROGRAMADO.includes(filtroDestinatarios)) {
+      return reply.code(400).send({ error: `Filtro inválido. Valores: ${FILTROS_PROGRAMADO.join(", ")}.` });
+    }
+    const alcance = alcanceEvidencias || "competencia";
+    if (!ALCANCES_PROGRAMADO.includes(alcance)) {
+      return reply.code(400).send({ error: `Alcance inválido. Valores: ${ALCANCES_PROGRAMADO.join(", ")}.` });
+    }
+    if (alcance === "ids" && (!Array.isArray(evidenciaIds) || evidenciaIds.length === 0)) {
+      return reply.code(400).send({ error: "Con alcance 'ids' debes enviar evidenciaIds." });
+    }
+    // Tope anti-spam: máximo 1 corrida por día, mínimo razonable de 1 día.
+    const dias = parseInt(intervaloDias, 10);
+    if (!Number.isFinite(dias) || dias < 1 || dias > 60) {
+      return reply.code(400).send({ error: "intervaloDias debe estar entre 1 y 60." });
+    }
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(hora)) {
+      return reply.code(400).send({ error: "hora debe tener formato HH:mm (24h)." });
     }
 
-    return reply.code(202).send({ jobId, mensajeFormativoId: mensaje.id });
+    const ficha = await prisma.ficha.findUnique({ where: { id: fichaId } });
+    if (!ficha)                       return reply.code(404).send({ error: "Ficha no encontrada." });
+    if (ficha.userId !== req.user.id) return reply.code(403).send({ error: "Sin acceso a esta ficha." });
+
+    if (canal === "email") {
+      const config = await prisma.configCorreo.findUnique({ where: { userId: req.user.id } });
+      if (!config) return reply.code(422).send({ error: "No hay configuración SMTP. Ve a Ajustes para configurarla." });
+    }
+
+    const programado = await prisma.mensajeProgramado.create({
+      data: {
+        userId:              req.user.id,
+        fichaId, canal, asunto, cuerpo,
+        templateTipo:        templateTipo || null,
+        filtroDestinatarios,
+        alcanceEvidencias:   alcance,
+        evidenciaIds:        alcance === "ids" ? evidenciaIds.map(String) : null,
+        incluirDesaprobadas: !!incluirDesaprobadas,
+        intervaloDias:       dias,
+        hora,
+        proximaEjecucion:    calcularProximaEjecucion(hora),
+      },
+    });
+    return reply.code(201).send(programado);
+  });
+
+  // ── GET /api/mensajes/programados ────────────────────────────────────────────
+  fastify.get("/api/mensajes/programados", { preHandler: fastify.authenticate }, async (req) => {
+    return prisma.mensajeProgramado.findMany({
+      where:   { userId: req.user.id },
+      orderBy: { creadoAt: "desc" },
+      include: { ficha: { select: { codigo: true, nombre: true } } },
+    });
+  });
+
+  // ── PATCH /api/mensajes/programados/:id ──────────────────────────────────────
+  // Pausar/reanudar (pausado: bool) y/o cambiar intervaloDias/hora.
+  fastify.patch("/api/mensajes/programados/:id", { preHandler: fastify.authenticate }, async (req, reply) => {
+    const prog = await prisma.mensajeProgramado.findUnique({ where: { id: req.params.id } });
+    if (!prog)                       return reply.code(404).send({ error: "Programado no encontrado." });
+    if (prog.userId !== req.user.id) return reply.code(403).send({ error: "Sin acceso." });
+
+    const { pausado, intervaloDias, hora } = req.body || {};
+    const data = {};
+    if (typeof pausado === "boolean") data.pausadoAt = pausado ? new Date() : null;
+    if (intervaloDias != null) {
+      const dias = parseInt(intervaloDias, 10);
+      if (!Number.isFinite(dias) || dias < 1 || dias > 60) return reply.code(400).send({ error: "intervaloDias debe estar entre 1 y 60." });
+      data.intervaloDias = dias;
+    }
+    if (hora != null) {
+      if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(hora)) return reply.code(400).send({ error: "hora debe tener formato HH:mm (24h)." });
+      data.hora = hora;
+      data.proximaEjecucion = calcularProximaEjecucion(hora);
+    }
+    if (Object.keys(data).length === 0) return reply.code(400).send({ error: "Nada que actualizar." });
+
+    return prisma.mensajeProgramado.update({ where: { id: prog.id }, data });
+  });
+
+  // ── DELETE /api/mensajes/programados/:id ─────────────────────────────────────
+  fastify.delete("/api/mensajes/programados/:id", { preHandler: fastify.authenticate }, async (req, reply) => {
+    const prog = await prisma.mensajeProgramado.findUnique({ where: { id: req.params.id } });
+    if (!prog)                       return reply.code(404).send({ error: "Programado no encontrado." });
+    if (prog.userId !== req.user.id) return reply.code(403).send({ error: "Sin acceso." });
+    await prisma.mensajeProgramado.delete({ where: { id: prog.id } });
+    return { ok: true };
   });
 
   // ── GET /api/mensajes/enviar-masivo/:jobId ───────────────────────────────────

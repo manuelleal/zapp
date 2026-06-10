@@ -56,6 +56,7 @@ model User {
   matchingPropuestas MatchingPropuesta[]
   actas              ActaSeguimiento[]
   mensajesFormativos MensajeFormativo[]
+  mensajesProgramados MensajeProgramado[]
   configCorreo       ConfigCorreo?
   competencia        Competencia?         @relation(fields: [competenciaId], references: [id])
 }
@@ -75,6 +76,7 @@ model Ficha {
   aprendices         Aprendiz[]
   actas              ActaSeguimiento[]
   mensajesFormativos MensajeFormativo[]
+  mensajesProgramados MensajeProgramado[]
 
   @@unique([userId, codigo])
   // Listados de fichas del instructor (toda la app filtra por userId, regla #1).
@@ -343,4 +345,35 @@ model MensajeFormativo {
   user  User              @relation(fields: [userId],  references: [id])
   acta  ActaSeguimiento?  @relation(fields: [actaId],  references: [id])
   ficha Ficha             @relation(fields: [fichaId], references: [id])
+}
+
+// Envío masivo recurrente: guarda el FILTRO, no los destinatarios — el worker
+// los recalcula EN CADA corrida (los pendientes de hoy, no los de cuando se
+// programó). Cada corrida genera un MensajeFormativo normal (queda en historial).
+model MensajeProgramado {
+  id                  String    @id @default(cuid())
+  userId              String
+  fichaId             String
+  canal               String    // email | zajuna
+  asunto              String
+  cuerpo              String
+  templateTipo        String?
+  // todos | con_pendientes | con_desaprobadas | inactivos | nunca
+  filtroDestinatarios String
+  // competencia (la del instructor) | todas (líder de ficha) | ids (selección manual)
+  alcanceEvidencias   String    @default("competencia")
+  evidenciaIds        Json?     // string[] cuando alcanceEvidencias = "ids"
+  incluirDesaprobadas Boolean   @default(false)
+  intervaloDias       Int       // cada N días (mínimo 1 — tope anti-spam)
+  hora                String    // "HH:mm" hora local del servidor
+  proximaEjecucion    DateTime  // el tick dispara cuando <= now (y la re-agenda)
+  lastRunAt           DateTime?
+  pausadoAt           DateTime? // soft-state (regla #4): null = activo
+  creadoAt            DateTime  @default(now())
+  user  User  @relation(fields: [userId],  references: [id])
+  ficha Ficha @relation(fields: [fichaId], references: [id])
+
+  // El tick busca vencidos: pausadoAt null + proximaEjecucion <= now.
+  @@index([proximaEjecucion])
+  @@index([userId])
 }
