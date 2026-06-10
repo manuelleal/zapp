@@ -20,6 +20,9 @@ interface Entrega {
   fechaScan: string
   moodlePostId: string | null
   notaActual: number | null
+  // Nota cualitativa SENA (A=Aprobado / D=Deficiente) — muchos cursos califican
+  // con letra y notaActual queda null (ver Entrega.notaCualitativa en schema.prisma).
+  notaCualitativa: string | null
   aprendiz: Aprendiz
 }
 
@@ -43,6 +46,29 @@ function estadoVariant(estado: string): "yellow" | "green" | "gray" {
   if (estado === "pendiente") return "yellow"
   if (estado === "calificado") return "green"
   return "gray"
+}
+
+// Nota a mostrar junto al estado ("Calificado · 100"): manda la numérica;
+// si es null se usa la cualitativa (A/D). Devuelve null si no hay ninguna.
+function notaVisible(e: Entrega): string | null {
+  if (e.notaActual != null) {
+    // Redondeo a 1 decimal para floats tipo 66.66667; enteros sin decimales.
+    return Number.isInteger(e.notaActual)
+      ? String(e.notaActual)
+      : String(Math.round(e.notaActual * 10) / 10)
+  }
+  return e.notaCualitativa || null
+}
+
+// Reprobada = numérica < 70 (umbral SENA universal, regla #10 de CLAUDE.md) o
+// cualitativa sin señal explícita de aprobación (A / "aprobad", regla #11).
+function esNotaReprobada(e: Entrega): boolean {
+  if (e.notaActual != null) return e.notaActual < 70
+  if (e.notaCualitativa) {
+    const c = e.notaCualitativa.trim()
+    return !(/^a$/i.test(c) || /aprobad/i.test(c))
+  }
+  return false
 }
 
 export default function AprendicesPanel({ evidenciaId }: { evidenciaId: string }) {
@@ -386,7 +412,14 @@ export default function AprendicesPanel({ evidenciaId }: { evidenciaId: string }
               )}
               <Badge variant={estadoVariant(e.estado)} className="text-xs shrink-0">
                 {estadoLabel(e.estado)}
-                {e.notaActual != null && ` · ${e.notaActual}`}
+                {/* Nota junto al estado ("Calificado · 100" / "Calificado · A").
+                    En rojo si reprobada (<70 o cualitativa ≠ A) para que el
+                    instructor vea los reprobados de un vistazo. */}
+                {notaVisible(e) !== null && (
+                  <span className={esNotaReprobada(e) ? "text-red-600 font-bold" : ""}>
+                    {` · ${notaVisible(e)}`}
+                  </span>
+                )}
               </Badge>
               {esForo && pendientesMoodle && e.aprendiz.moodleId && pendientesMoodle.has(e.aprendiz.moodleId) && (
                 <Badge variant="yellow" className="text-[10px] shrink-0" title="Moodle no tiene rating para este aprendiz">

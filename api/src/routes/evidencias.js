@@ -252,6 +252,10 @@ async function evidenciasRoutes(fastify) {
         fechaScan:    e.fechaScan,
         moodlePostId: e.moodlePostId || null,
         notaActual:   e.notaActual ?? null,
+        // Nota cualitativa de la escala SENA (A=Aprobado / D=Deficiente). Muchos
+        // cursos califican con letra y notaActual queda null; la UI la muestra
+        // junto al estado ("Calificado · A") cuando no hay nota numérica.
+        notaCualitativa: e.notaCualitativa ?? null,
         aprendiz: {
           id:       e.aprendiz.id,
           nombre:   e.aprendiz.nombre,
