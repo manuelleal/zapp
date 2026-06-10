@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   Mail, Send, Loader2, RefreshCw, AlertCircle, CheckCircle2, Clock,
-  Users, History, FileText, ChevronRight, ChevronDown,
+  Users, History, FileText, ChevronRight, ChevronDown, CheckSquare, Square,
 } from "lucide-react"
 import Layout from "@/components/Layout"
 import { Button } from "@/components/ui/button"
@@ -17,13 +17,22 @@ import { useNavigate, useSearchParams } from "react-router-dom"
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface Ficha { id: string; codigo: string; nombre: string }
+// Resumen de una entrega del aprendiz (lo manda GET /api/mensajes/aprendices)
+// para calcular los filtros rápidos contra la selección de evidencias.
+interface EntregaResumen {
+  evidenciaId: string
+  estado:      string   // sin_entregar | pendiente | calificado | ...
+  desaprobada: boolean  // calificada que no aprueba (<70 o cualitativa D)
+}
 interface Aprendiz {
   id:           string
   nombre:       string
   email:        string | null
   moodleId:     string | null
   ultimoAcceso: string | null
+  entregas:     EntregaResumen[]
 }
+interface EvidenciaFicha { id: string; nombre: string; tipo: string }
 interface MensajeHistorial {
   id:                 string
   canal:              string
@@ -102,6 +111,14 @@ function estadoBadge(estado: string): "green" | "yellow" | "gray" | "red" {
   return "gray"
 }
 
+// ─── Agrupación de evidencias (mismo criterio que el ExcelModal de Fichas) ────
+// El nombre canónico es GA{n}-{competencia}-AA{m}-EV{nn}; de ahí salen guía,
+// competencia y el orden natural dentro de cada grupo.
+const gaDe   = (n: string) => parseInt((n.match(/GA\s*(\d+)/i) || [])[1] || "0", 10)
+const aaDe   = (n: string) => parseInt((n.match(/AA\s*(\d+)/i) || [])[1] || "99", 10)
+const evDe   = (n: string) => parseInt((n.match(/EV\s*(\d+)/i) || [])[1] || "99", 10)
+const compDe = (n: string) => (n.match(/GA\s*\d+\s*-\s*(\d{6,9})/i) || [])[1] || ""
+
 // ─── Componente principal ─────────────────────────────────────────────────────
 
 export default function MensajesPage() {
@@ -113,6 +130,8 @@ export default function MensajesPage() {
   const [tab, setTab]               = useState<"compositor" | "historial">("compositor")
   const [fichaId, setFichaId]       = useState("")
   const [seleccionados, setSeleccionados] = useState<Set<string>>(new Set())
+  const [selEvidencias, setSelEvidencias] = useState<Set<string>>(new Set())
+  const [incluirDesaprobadas, setIncluirDesaprobadas] = useState(false)
   const [canal, setCanal]           = useState<"email" | "zajuna">("email")
   const [asunto, setAsunto]         = useState("")
   const [cuerpo, setCuerpo]         = useState("")
@@ -164,6 +183,42 @@ export default function MensajesPage() {
       queryFn:  () => apiFetch<Aprendiz[]>(`/api/mensajes/aprendices?fichaId=${fichaId}`),
       enabled:  !!jwt && !!fichaId,
     })
+
+  // Evidencias de la ficha — alimentan el selector para {{evidencias}}.
+  // Reutiliza el endpoint del ExcelModal de Fichas.
+  const { data: evidenciasResp } = useQuery<{ evidencias: EvidenciaFicha[] }>({
+    queryKey: ["mensajes-evidencias", fichaId],
+    queryFn:  () => apiFetch(`/api/fichas/${encodeURIComponent(fichaId)}/evidencias`),
+    enabled:  !!jwt && !!fichaId,
+  })
+  const evidencias = evidenciasResp?.evidencias ?? []
+  const miComp = user?.competenciaCodigo || ""
+
+  // Pre-marcar TU competencia al cargar (en una ficha dan clase varios
+  // instructores; por defecto solo se reportan pendientes de la tuya).
+  useEffect(() => {
+    if (!evidencias.length) { setSelEvidencias(new Set()); return }
+    const mias = miComp ? evidencias.filter(e => compDe(e.nombre) === miComp) : []
+    setSelEvidencias(new Set((mias.length ? mias : evidencias).map(e => e.id)))
+  }, [evidenciasResp])
+
+  // Agrupar por "competencia · Guía N" (la tuya primero), igual que el ExcelModal.
+  const gruposEvidencias = useMemo(() => {
+    const m = new Map<string, { comp: string; ga: number; evs: EvidenciaFicha[] }>()
+    for (const ev of evidencias) {
+      const comp = compDe(ev.nombre) || "—"
+      const ga = gaDe(ev.nombre)
+      const key = `${comp}|${ga}`
+      if (!m.has(key)) m.set(key, { comp, ga, evs: [] })
+      m.get(key)!.evs.push(ev)
+    }
+    const arr = [...m.values()]
+    arr.forEach(g => g.evs.sort((a, b) => aaDe(a.nombre) - aaDe(b.nombre) || evDe(a.nombre) - evDe(b.nombre)))
+    return arr.sort((a, b) =>
+      ((a.comp === miComp ? 0 : 1) - (b.comp === miComp ? 0 : 1)) ||
+      a.comp.localeCompare(b.comp) ||
+      a.ga - b.ga)
+  }, [evidenciasResp, miComp])
 
   const { data: configCorreo } = useQuery<{ id: string } | null>({
     queryKey: ["ajustes-correo"],
@@ -250,6 +305,10 @@ export default function MensajesPage() {
           destinatarios: dest,
           templateTipo:  templateKey || null,
           actaId:        searchParams.get("actaId") || null,
+          // Alcance de {{evidencias}}: solo las seleccionadas. Vacío → el
+          // backend cae a las de la competencia del instructor.
+          evidenciaIds:  [...selEvidencias],
+          incluirDesaprobadas,
         }),
       })
     },
@@ -294,12 +353,22 @@ export default function MensajesPage() {
     else setSeleccionados(new Set(aprendices.map(a => a.id)))
   }
 
-  function seleccionarInactivos() {
-    const ids = aprendices.filter(a => {
-      const d = diasSinAcceso(a.ultimoAcceso); return d === null || d > 7
-    }).map(a => a.id)
-    setSeleccionados(new Set(ids))
+  // Contadores por aprendiz RELATIVOS a las evidencias seleccionadas (si no hay
+  // selección, contra todas las abiertas). Alimentan columnas y filtros rápidos.
+  const enAlcance = (evidenciaId: string) => selEvidencias.size === 0 || selEvidencias.has(evidenciaId)
+  const pendientesDe   = (a: Aprendiz) => (a.entregas ?? []).filter(e => enAlcance(e.evidenciaId) && e.estado === "sin_entregar").length
+  const desaprobadasDe = (a: Aprendiz) => (a.entregas ?? []).filter(e => enAlcance(e.evidenciaId) && e.desaprobada).length
+
+  // Filtros rápidos: un click marca los destinatarios que cumplen el criterio.
+  function seleccionarFiltro(pred: (a: Aprendiz) => boolean) {
+    setSeleccionados(new Set(aprendices.filter(pred).map(a => a.id)))
   }
+  const filtroInactivo = (a: Aprendiz) => { const d = diasSinAcceso(a.ultimoAcceso); return d === null || d > 7 }
+  const filtroNunca    = (a: Aprendiz) => a.ultimoAcceso === null
+  const nConPendientes   = aprendices.filter(a => pendientesDe(a) > 0).length
+  const nConDesaprobadas = aprendices.filter(a => desaprobadasDe(a) > 0).length
+  const nInactivos       = aprendices.filter(filtroInactivo).length
+  const nNunca           = aprendices.filter(filtroNunca).length
 
   const seleccionadosArr = useMemo(
     () => aprendices.filter(a => seleccionados.has(a.id)),
@@ -385,6 +454,68 @@ export default function MensajesPage() {
 
               {fichaId && (
                 <>
+                  {/* Selector de evidencias para {{evidencias}} (estilo ExcelModal) */}
+                  <details className="rounded-md border border-gray-200">
+                    <summary className="cursor-pointer px-3 py-2 text-xs font-semibold text-gray-700 flex items-center gap-2 select-none">
+                      <ChevronRight className="w-3 h-3 shrink-0" />
+                      Evidencias para {"{{evidencias}}"}
+                      <Badge variant="green" className="text-[10px]">{selEvidencias.size} seleccionadas</Badge>
+                      <span className="font-normal text-gray-400">(las de tu competencia vienen premarcadas)</span>
+                    </summary>
+                    <div className="px-3 pb-3 max-h-72 overflow-y-auto space-y-2 border-t border-gray-100 pt-2">
+                      <button
+                        onClick={() => setSelEvidencias(selEvidencias.size === evidencias.length ? new Set() : new Set(evidencias.map(e => e.id)))}
+                        className="flex items-center gap-2 text-xs font-medium text-sena-green">
+                        {selEvidencias.size === evidencias.length && evidencias.length > 0
+                          ? <CheckSquare className="w-3.5 h-3.5" /> : <Square className="w-3.5 h-3.5" />}
+                        Seleccionar todas
+                      </button>
+                      {gruposEvidencias.map((g, i) => {
+                        const grupoAll  = g.evs.every(e => selEvidencias.has(e.id))
+                        const grupoSome = g.evs.some(e => selEvidencias.has(e.id))
+                        return (
+                          <div key={`${g.comp}-${g.ga}`}>
+                            {(i === 0 || gruposEvidencias[i - 1].comp !== g.comp) && (
+                              <div className="mt-2 mb-1 text-[10px] font-semibold text-gray-500 uppercase tracking-wide">
+                                Competencia {g.comp}{g.comp === miComp ? " · tuya" : ""}
+                              </div>
+                            )}
+                            <div className="border border-gray-200 rounded-md overflow-hidden">
+                              <button
+                                onClick={() => setSelEvidencias(prev => {
+                                  const n = new Set(prev); const all = g.evs.every(e => n.has(e.id))
+                                  g.evs.forEach(e => all ? n.delete(e.id) : n.add(e.id)); return n
+                                })}
+                                className={`w-full px-2 py-1.5 flex items-center gap-2 text-xs font-medium ${grupoAll ? "bg-green-50" : grupoSome ? "bg-green-50/40" : ""}`}>
+                                {grupoAll ? <CheckSquare className="w-3.5 h-3.5 text-sena-green" /> : <Square className={`w-3.5 h-3.5 ${grupoSome ? "text-sena-green/60" : "text-gray-300"}`} />}
+                                {g.ga > 0 ? `Guía ${g.ga}` : "Sin guía"}
+                                <span className="text-gray-400 font-normal">· {g.evs.length} evid.</span>
+                              </button>
+                              <ul className="pb-1">
+                                {g.evs.map(ev => (
+                                  <li key={ev.id}>
+                                    <button
+                                      onClick={() => setSelEvidencias(prev => { const n = new Set(prev); n.has(ev.id) ? n.delete(ev.id) : n.add(ev.id); return n })}
+                                      className="w-full px-2 pl-8 py-0.5 flex items-center gap-2 text-[11px] text-left hover:bg-gray-50">
+                                      {selEvidencias.has(ev.id) ? <CheckSquare className="w-3 h-3 text-sena-green shrink-0" /> : <Square className="w-3 h-3 text-gray-300 shrink-0" />}
+                                      <span className="truncate" title={ev.nombre}>{ev.nombre}</span>
+                                    </button>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          </div>
+                        )
+                      })}
+                      <label className="flex items-center gap-1.5 text-xs cursor-pointer pt-1 border-t border-gray-100">
+                        <input type="checkbox" checked={incluirDesaprobadas} onChange={e => setIncluirDesaprobadas(e.target.checked)}
+                          className="h-3.5 w-3.5 rounded border-gray-300 text-sena-green" />
+                        Incluir también las <strong>desaprobadas</strong> (nota &lt;70 o D) en {"{{evidencias}}"}
+                      </label>
+                    </div>
+                  </details>
+
+                  {/* Filtros rápidos: un click marca los destinatarios que cumplen */}
                   <div className="flex flex-wrap gap-2">
                     <Button size="sm" variant="outline" className="text-xs gap-1.5"
                       onClick={() => syncMutation.mutate()} disabled={!!syncJobId || syncMutation.isPending}>
@@ -394,8 +525,21 @@ export default function MensajesPage() {
                     <Button size="sm" variant="outline" className="text-xs" onClick={toggleAll}>
                       {seleccionados.size === aprendices.length ? "Deseleccionar todos" : "Seleccionar todos"}
                     </Button>
-                    <Button size="sm" variant="outline" className="text-xs" onClick={seleccionarInactivos}>
-                      Inactivos &gt;7d
+                    <Button size="sm" variant="outline" className="text-xs"
+                      onClick={() => seleccionarFiltro(a => pendientesDe(a) > 0)} disabled={nConPendientes === 0}>
+                      Con pendientes ({nConPendientes})
+                    </Button>
+                    <Button size="sm" variant="outline" className="text-xs"
+                      onClick={() => seleccionarFiltro(a => desaprobadasDe(a) > 0)} disabled={nConDesaprobadas === 0}>
+                      Con desaprobadas ({nConDesaprobadas})
+                    </Button>
+                    <Button size="sm" variant="outline" className="text-xs"
+                      onClick={() => seleccionarFiltro(filtroInactivo)} disabled={nInactivos === 0}>
+                      Inactivos &gt;7d ({nInactivos})
+                    </Button>
+                    <Button size="sm" variant="outline" className="text-xs"
+                      onClick={() => seleccionarFiltro(filtroNunca)} disabled={nNunca === 0}>
+                      Nunca entraron ({nNunca})
                     </Button>
                   </div>
 
@@ -411,12 +555,16 @@ export default function MensajesPage() {
                             <th className="w-8 px-2 py-2"></th>
                             <th className="text-left px-2 py-2 font-semibold text-gray-500">Nombre</th>
                             <th className="text-left px-2 py-2 font-semibold text-gray-500">Email</th>
+                            <th className="text-center px-2 py-2 font-semibold text-gray-500" title="Evidencias sin entregar (de las seleccionadas)">Pend.</th>
+                            <th className="text-center px-2 py-2 font-semibold text-gray-500" title="Evidencias desaprobadas: nota <70 o D (de las seleccionadas)">Desap.</th>
                             <th className="text-center px-2 py-2 font-semibold text-gray-500">Último acceso</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
                           {aprendices.map(a => {
-                            const dias = diasSinAcceso(a.ultimoAcceso)
+                            const dias  = diasSinAcceso(a.ultimoAcceso)
+                            const pend  = pendientesDe(a)
+                            const desap = desaprobadasDe(a)
                             return (
                               <tr key={a.id} className="hover:bg-gray-50">
                                 <td className="px-2 py-1.5 text-center">
@@ -431,6 +579,16 @@ export default function MensajesPage() {
                                       <AlertCircle className="w-3 h-3" /> sin email
                                     </span>
                                   )}
+                                </td>
+                                <td className="px-2 py-1.5 text-center">
+                                  {pend > 0
+                                    ? <span className="text-amber-600 font-medium">{pend}</span>
+                                    : <span className="text-gray-300">—</span>}
+                                </td>
+                                <td className="px-2 py-1.5 text-center">
+                                  {desap > 0
+                                    ? <span className="text-red-600 font-medium">{desap}</span>
+                                    : <span className="text-gray-300">—</span>}
                                 </td>
                                 <td className="px-2 py-1.5 text-center">
                                   {dias === null ? (

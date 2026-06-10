@@ -2,6 +2,19 @@ const prisma = require("../db/client");
 const { mensajesQueue, syncParticipantesQueue, emailMasivoQueue } = require("../lib/queue");
 const { filtrarAprendicesValidos } = require("../lib/aprendices");
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * Una entrega cuenta como DESAPROBADA si ya fue calificada y la nota no aprueba
+ * (regla SENA universal: <70/100 o cualitativa D). Las "sin_entregar" NO cuentan
+ * aquí — esas son pendientes, otra categoría en los filtros y en {{evidencias}}.
+ */
+function esEntregaDesaprobada(e) {
+  if (e.estado === "sin_entregar") return false;
+  if (/^d/i.test(String(e.notaCualitativa ?? "").trim())) return true;
+  return e.notaActual != null && Number(e.notaActual) < 70;
+}
+
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 async function mensajesRoutes(fastify) {
@@ -138,7 +151,28 @@ async function mensajesRoutes(fastify) {
       select: { id: true, nombre: true, email: true, moodleId: true, ultimoAcceso: true },
       orderBy: { nombre: "asc" },
     });
-    return filtrarAprendicesValidos(aprendicesRaw);
+    const validos = filtrarAprendicesValidos(aprendicesRaw);
+
+    // Resumen de entregas por aprendiz (evidencias abiertas de la ficha) para que
+    // el front calcule los filtros rápidos de destinatarios ("con pendientes",
+    // "con desaprobadas") contra la selección de evidencias SIN otro round-trip.
+    const entregas = await prisma.entrega.findMany({
+      where: {
+        aprendizId: { in: validos.map(a => a.id) },
+        evidencia:  { fichaId, cerradaAt: null },
+      },
+      select: { aprendizId: true, evidenciaId: true, estado: true, notaActual: true, notaCualitativa: true },
+    });
+    const porAprendiz = new Map();
+    for (const e of entregas) {
+      if (!porAprendiz.has(e.aprendizId)) porAprendiz.set(e.aprendizId, []);
+      porAprendiz.get(e.aprendizId).push({
+        evidenciaId: e.evidenciaId,
+        estado:      e.estado,
+        desaprobada: esEntregaDesaprobada(e),
+      });
+    }
+    return validos.map(a => ({ ...a, entregas: porAprendiz.get(a.id) ?? [] }));
   });
 
   // ── POST /api/mensajes/sync-emails ───────────────────────────────────────────
@@ -183,7 +217,8 @@ async function mensajesRoutes(fastify) {
   // ── POST /api/mensajes/enviar-masivo ─────────────────────────────────────────
   // Crea un MensajeFormativo y encola el envío. canal: "email" | "zajuna".
   fastify.post("/api/mensajes/enviar-masivo", { preHandler: fastify.authenticate }, async (req, reply) => {
-    const { fichaId, canal, asunto, cuerpo, destinatarios, templateTipo, actaId } = req.body || {};
+    const { fichaId, canal, asunto, cuerpo, destinatarios, templateTipo, actaId,
+            evidenciaIds, incluirDesaprobadas } = req.body || {};
 
     if (!fichaId || !canal || !asunto || !cuerpo || !Array.isArray(destinatarios) || destinatarios.length === 0) {
       return reply.code(400).send({ error: "fichaId, canal, asunto, cuerpo y destinatarios son requeridos." });
@@ -227,28 +262,55 @@ async function mensajesRoutes(fastify) {
     });
 
     // ── Auto-poblar {{evidencias}} desde DB ─────────────────────────────────────
-    // Si el cuerpo/asunto usa el token y el front no mandó la lista (hoy no la
-    // manda), calculamos los pendientes REALES por aprendiz: evidencias activas
-    // de la ficha (no cerradas) cuya entrega está "sin_entregar". Así el mensaje
-    // personalizado por aprendiz sale completo sin depender de cambios en la UI.
+    // Si el cuerpo/asunto usa el token y el front no mandó la lista, calculamos
+    // los pendientes REALES por aprendiz. Alcance de las evidencias consideradas:
+    //   1. `evidenciaIds` del selector del front → SOLO esas (el `fichaId` del
+    //      where las restringe a la ficha ya verificada del usuario, así no se
+    //      cuelan evidencias de otro tenant ni de otra ficha).
+    //   2. Sin selección → fallback por la COMPETENCIA del instructor: en una
+    //      ficha dan clase varios instructores y no debemos reportar al aprendiz
+    //      pendientes de competencias ajenas (el código va en el nombre canónico
+    //      GA{n}-{comp}-AA{m}-EV{nn} de la evidencia).
+    //   3. Instructor sin competencia → todas las activas (comportamiento previo).
+    // Con `incluirDesaprobadas` se suman las calificadas que no aprueban (<70 o
+    // cualitativa D), etiquetadas — paridad con la Extensión Z, que reporta
+    // pendientes Y desaprobadas.
     const usaTokenEvidencias = /\{\{evidencias\}\}/i.test(cuerpo) || /\{\{evidencias\}\}/i.test(asunto);
     if (usaTokenEvidencias && destinatariosEnriquecidos.some(d => d.evidencias.length === 0)) {
-      const entregasSinEntregar = await prisma.entrega.findMany({
+      const whereEvidencia = { fichaId, cerradaAt: null };
+      if (Array.isArray(evidenciaIds) && evidenciaIds.length > 0) {
+        whereEvidencia.id = { in: evidenciaIds.map(String) };
+      } else {
+        whereEvidencia.activaParaScan = true;
+        const yo = await prisma.user.findUnique({
+          where:  { id: req.user.id },
+          select: { competenciaCodigo: true },
+        });
+        if (yo?.competenciaCodigo) whereEvidencia.nombre = { contains: yo.competenciaCodigo };
+      }
+
+      const entregasToken = await prisma.entrega.findMany({
         where: {
           aprendizId: { in: aprendizIds },
-          estado:     "sin_entregar",
-          evidencia:  { fichaId, cerradaAt: null, activaParaScan: true },
+          evidencia:  whereEvidencia,
         },
-        select: { aprendizId: true, evidencia: { select: { nombre: true } } },
+        select: {
+          aprendizId: true, estado: true, notaActual: true, notaCualitativa: true,
+          evidencia: { select: { nombre: true } },
+        },
         orderBy: { evidencia: { nombre: "asc" } },
       });
-      const pendientesPorAprendiz = new Map();
-      for (const e of entregasSinEntregar) {
-        if (!pendientesPorAprendiz.has(e.aprendizId)) pendientesPorAprendiz.set(e.aprendizId, []);
-        pendientesPorAprendiz.get(e.aprendizId).push(e.evidencia.nombre);
+      const evidenciasPorAprendiz = new Map();
+      for (const e of entregasToken) {
+        let etiqueta = null;
+        if (e.estado === "sin_entregar")                          etiqueta = e.evidencia.nombre;
+        else if (incluirDesaprobadas && esEntregaDesaprobada(e))  etiqueta = `${e.evidencia.nombre} (desaprobada — corregir y reenviar)`;
+        if (!etiqueta) continue;
+        if (!evidenciasPorAprendiz.has(e.aprendizId)) evidenciasPorAprendiz.set(e.aprendizId, []);
+        evidenciasPorAprendiz.get(e.aprendizId).push(etiqueta);
       }
       for (const d of destinatariosEnriquecidos) {
-        if (d.evidencias.length === 0) d.evidencias = pendientesPorAprendiz.get(d.aprendizId) ?? [];
+        if (d.evidencias.length === 0) d.evidencias = evidenciasPorAprendiz.get(d.aprendizId) ?? [];
       }
     }
 
