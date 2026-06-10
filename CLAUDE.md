@@ -1,6 +1,9 @@
 # CLAUDE.md — Zajuna App
 
-> **Última actualización:** 2 junio 2026 (refactor P0 de producción — los **5 fixes P0 de §11.3 implementados y commiteados** en rama `refactor/p0-process-split`: API/workers separados, browser Chromium compartido, bloqueo de recursos, semáforo de contexts, rate-limit real. Validado en vivo: scans reales corren por el pool nuevo. Ver §11.3 y tabla de ramas. El bloqueador de **actas `RapEvidenciaRel=0` sigue ABIERTO** — es el #1 de producto, no la infra).
+> **Última actualización:** 9 junio 2026 (tarde) — **MATCHING IA AUTOMÁTICO funcionando**: 17 competencias mapeadas en un comando, RapEvidenciaRel 477→2147. Pruebas multi-tenant y flujo real técnico OK. Ver §14.
+> _(9 jun 2026, tarde: se reemplazó el mapeo manual con Gemini por **matching IA automático** (`scripts/matchearCompetenciaIA.js` + `aiClient.js` vía OpenRouter/Kimi). Pruebas multi-tenant 36/36, flujo real técnico/tecnólogo end-to-end con creds reales, auditorías de 4 features, fix de registro (competenciaId). Ver §14.)_
+> _(9 jun 2026: sesión de demo — **RapEvidenciaRel pasó de 0 a 307** (vincularEvidenciasRAPs.js ejecutado). `competenciaId` del usuario asignado a inglés (240202501). RAPs page rediseñada. Extractor PDF fix. UX fixes aplicados. Ver §13.)_
+> _(2 jun 2026: refactor P0 de producción — los **5 fixes P0 de §11.3 implementados y commiteados** en rama `refactor/p0-process-split`: API/workers separados, browser Chromium compartido, bloqueo de recursos, semáforo de contexts, rate-limit real. Validado en vivo: scans reales corren por el pool nuevo. Ver §11.3 y tabla de ramas.)_
 > _(1 jun 2026: auditoría de producción Opus — §11: bottleneck de proceso único, causa real del OOM, fetch ya al ~70%, triaje P0/P1/P2, infra recomendada. Scan Capa 1+2 commiteado en `58d1e2a`; Fase 2 UI aún sin commitear.)_
 > Este documento es la **fuente única de verdad** para los agentes de IA. Contiene las reglas del proyecto, decisiones de arquitectura y comandos de desarrollo. 
 
@@ -390,9 +393,9 @@ Este repositorio está orquestado por **Antigravity (Arquitecto Principal)**. Si
 | **39 scripts huérfanos en root** | 🟠 Media | `test-*.js`, `debug-*.js`, `check-*.js`, `dump-*.js`, `diag-*.js`, etc. — basura de debug que no debería vivir en raíz. `.gitignore` no los cubre (están untracked manualmente). Crecieron de 36 a 39 desde el 25-may. |
 | **Boilerplate Playwright duplicado** | 🟠 Media | 15 workers repiten bloque de inicialización. Cualquier fix de auth se replica en muchos lugares. |
 | **Endpoint `/health` existente** | ✅ Resuelto | Ya existe en `server.js:63-74` haciendo `SELECT 1` y `redis.ping()`. |
-| **`docs/ARCHITECTURE.md` referenciado pero no existe** | 🟡 Baja | CLAUDE.md sección 4 dice "ver `docs/ARCHITECTURE.md`" — solo hay `docs/MOODLE_REFERENCE.md`. Documentación arquitectónica está dispersa. |
+| **`docs/ARCHITECTURE.md` referenciado pero no existe** | ✅ Resuelto | El archivo **sí existe** (`docs/ARCHITECTURE.md`). Este ítem estaba incorrecto. |
 | **`pdf-parse` con API no estándar** | 🟡 Baja | `const { PDFParse } = require("pdf-parse")` + `new PDFParse({...}).getText()` no es la API oficial del paquete. Si actualizas la versión, todo extractor de guías se rompe. Fija la versión en `package.json` o migra a la API estándar. |
-| **Rate limit in-memory + bug** | 🔴 Alta | `auth.js` usa `new Map()`. RATE_MAX es 500 pero el comentario dice 5. Bloqueante al escalar y agujero de seguridad. |
+| **Rate limit in-memory + bug** | ✅ Resuelto (P0 #5) | `RATE_MAX = process.env.RATE_MAX \|\| 10` — corregido en `refactor/p0-process-split`. |
 | **`autoScan` cron sin guard** | 🟡 Baja | Repeatable cada 3h. Si Redis está caído al arrancar, el `.then().catch()` solo loguea. No re-intenta. |
 | **AIPI ACTA... .docx + acta_03_...pdf borrados sin commit** | 🟡 Baja | `git status` muestra archivos `D` (deleted) desde hace días. Decidir si recuperar o `git rm`. |
 
@@ -531,3 +534,146 @@ Se documenta la migración de lectura de configuración de evidencias (fechas/in
 - **Beneficios:** Chromium se reduce a usarse SOLO para el login inicial. Esto disminuye drásticamente el uso de memoria (RAM) y permite mayor concurrencia en los workers (ej. `leerConfigLoteWorker.js`), ya que la lectura de formularios se hace vía `fetch` usando la cookie de sesión SSO.
 - **Nuevas Dependencias:** Se agregó `cheerio` para parsear HTML de forma ligera. También se utiliza `undici` (Agent nativo de Node) para proporcionar un dispatcher TLS relajado (`rejectUnauthorized: false`), vital para tolerar la cadena de certificados incompleta que envía Zajuna en ciertos endpoints.
 - **Gotcha (REGLA CLAVE - disabledIf):** Moodle aplica una regla JavaScript que deshabilita selects de fechas (year, month, day, etc.) cuando su correspondiente checkbox `[enabled]` está apagado. Dado que Cheerio parsea HTML sin ejecutar JavaScript, puede extraer valores obsoletos ("stale") de estos campos que el DOM original oculta. Para evitar que Moodle rechace un POST silenciosamente (devolviendo HTTP 200 sin guardar), `configEvidenciasFetch.js` emula manualmente este comportamiento eliminando los sufijos de fecha si `[enabled] != "1"`. (Todo el flujo está validado con probe de paridad, ya removido).
+
+---
+
+## 12. Directorio `C:\zajuna-excel\` (9 junio 2026)
+
+`C:\zajuna-excel\` **es el mismo repositorio git** (`zajuna`), un checkout independiente en la rama `feat/excel-report`. No es un proyecto separado.
+
+**Diferencia con `C:\zajuna\`:** tiene un commit más reciente que no está mergeado a `master`:
+```
+21205cb feat(reporte): nuevo excel interactivo y con estilos (Z-Mejorado)
+```
+Ese commit contiene mejoras al reporte Excel ("Z-Mejorado") sobre los commits de Excel que sí están en `master` (`21ff1cc` y anteriores).
+
+**También tiene** `NOTAS_PARA_CLAUDE.md` con un bug reportado sobre `EvidenciasConfig.tsx` ("cargar fechas → no sale nada") — revisar antes de mergear.
+
+**Acción pendiente:** revisar el commit `21205cb`, testear el Excel nuevo, y mergear `feat/excel-report` (desde `zajuna-excel`) a `master` si está completo. No trabajar en `zajuna-excel` como si fuera un repo separado — es el mismo, solo otro checkout.
+
+> ⚠️ `docs/CLEANUP_AUDIT.md` está **OBSOLETO** (escrito antes del refactor P0, 2 jun). Dice que `api/src/worker-entry.js` "no existe" cuando en realidad ya existe. No usarlo como fuente de verdad — leer el código directamente.
+
+---
+
+## 13. Sesión de demo (9 junio 2026)
+
+### 13.1 — Lo que se hizo ✅
+
+**Bloqueador actas resuelto:**
+- `User.competenciaId` estaba `null` → asignado a `240202501` (inglés) en DB
+- Corrido `node scripts/vincularEvidenciasRAPs.js` → **307 registros en `RapEvidenciaRel`** (antes: 0)
+- `POST /api/actas/:id/auto-poblar` probado en vivo: 51 aprendices procesados, modo `per-rap` ✅
+
+**RAPs page rediseñada (`web/src/pages/RapsPage.tsx`):**
+- Eliminados botones "Exportar JSON" / "Importar JSON" (no se usaban)
+- Agregado botón "Actualizar" con toast de confirmación
+- Badge con conteo de RAPs en el header
+- Estado vacío mejorado (sin mencionar JSON)
+
+**Extractor RAPs desde PDF (`scripts/extraerTodasLasGuias.js`):**
+- Bug raíz: el PDF SENA usa `o` (letra O minúscula) como viñeta, NO `•` (bullet Unicode) — formato plantilla GFPI-F-135
+- Regex actualizado para aceptar ambos: `•` (guías inglés) y `o` al inicio de línea (guías técnicas)
+- Corte limpio en primera oración, tope 300 chars
+- Validado: 10/10 RAPs desde PDF real, 3/3 desde texto simulado
+
+**UX fixes (`ActasPage.tsx`, `RapsPage.tsx`):**
+- Modal título: "Nueva Acta de Seguimiento — Flujo Nativo" → "Nueva Acta de Seguimiento"
+- Botón "Vista Previa" duplicado en modal → eliminado del cuerpo, queda solo en footer
+- Banner amarillo cuando `noParticiparon === poblados` o `evidenciasVinculadas === 0`: "Escanea la ficha antes de generar el acta"
+- Desvincular RAP↔evidencia pide confirmación antes de ejecutar
+- Build: ✅ sin errores TypeScript
+
+### 13.2 — Estado de DB al 9 junio 2026
+
+| Tabla | Cantidad | Notas |
+|---|---|---|
+| `RapEvidenciaRel` | **307** | ✅ Desbloqueado — inglés auto, resto pendiente IA |
+| `ActaSeguimiento` | 1 (borrador) | Creada en prueba, ficha 3186683 |
+| `Evidencia` | 2164 | Sin cambio |
+| `Entrega` GA5/GA6 | 51 c/u | Escaneadas. GA1–GA4 pendientes de scan |
+| `User.competenciaId` | Asignado | ddiddimmo@gmail.com → 240202501 |
+
+### 13.3 — Pendientes inmediatos
+
+1. **Scan de fichas activas** — GA1–GA4 de inglés tienen 0 entregas en DB. El scan completo requiere workers con sesión Moodle activa. Disparar desde Dashboard → "Escanear" con sesión válida.
+2. **Matching IA para otras competencias** — `RapEvidenciaRel` solo tiene inglés (307). El resto de competencias (37 en DB) necesitan matching. Integración con **Kimi API** (créditos disponibles) es el siguiente paso — reemplaza/complementa el módulo de Matching IA existente.
+3. **Simular instructores multi-tenant** — crear usuarios de prueba con competencias distintas para validar aislamiento multitenant antes del demo.
+4. **Smoke test completo en browser** — correr `/verify` con sesión activa después del scan.
+5. **Merge `feat/excel-report`** — commit `21205cb` ("Z-Mejorado") en `C:\zajuna-excel\` pendiente de review y merge a `master`.
+
+### 13.4 — Integración Kimi API (pendiente)
+
+El usuario tiene acceso a créditos gratuitos de **Kimi** (Moonshot AI). Uso prioritario:
+
+| Caso de uso | Impacto | Notas |
+|---|---|---|
+| **Matching RAP↔evidencia** para competencias no-inglés | 🔴 Alto | Desbloquea actas para todos los instructores. Reemplaza el módulo IA existente (vacío) |
+| **Extracción RAPs** desde PDFs con formato irregular | 🟡 Medio | Para guías que no siguen el patrón `o CODIGO:` |
+| **Feedback automático** al calificar entregas | 🟡 Medio | Post-demo |
+
+Para integrar: Kimi usa API compatible con OpenAI (`https://api.moonshot.cn/v1`). Cambiar `baseURL` en el cliente Anthropic actual o agregar cliente paralelo. Modelo recomendado: `moonshot-v1-8k`.
+
+### 13.5 — Hallazgos de auditoría (para próxima sesión)
+
+**Seguridad (antes de mostrar a alguien):**
+- `JWT_SECRET=zajuna_jwt_secret_cambiar_en_prod` hardcodeado en `.env` — cambiar con `openssl rand -hex 32`
+- `SUPERADMIN_EMAIL=ddiddimmo@gmail.com` expuesto en `.env` y `ajustes.js`
+
+**Performance:**
+- Sin `@@index` en Prisma schema — agregar `@@index([fichaId])`, `@@index([userId])` en modelos críticos
+- N+1 en `GET /api/actas/:id` con 50+ participantes
+
+**Calificaciones reales (Extensión Z vs Zajuna):**
+- Zajuna tiene el estado (entregó/no entregó) via `mod_assign_list_participants` ✅
+- Las notas numéricas reales vienen del grader report: `GET /grade/report/grader/index.php?id={courseId}` con selector `input[name="grade[{userid}][{itemid}]"]` — pendiente de implementar en el scan
+- Por ahora: el auto-poblar muestra el banner amarillo si no hay datos recientes
+
+---
+
+## 14. Sesión 9 junio 2026 (tarde) — Matching IA automático + pruebas E2E
+
+> Sesión larga. Objetivo cumplido: **el bloqueador real del producto (mapeo RAP↔evidencia para competencias no-inglés) quedó resuelto con IA automática.** Se dejó de depender del mapeo manual con Gemini.
+
+### 14.1 — 🟢 LO GRANDE: Matching IA automático funcionando
+
+**Problema que resolvía:** las actas solo funcionaban para inglés (1 guía = 1 RAP, fórmula). Las competencias técnicas no tenían `RapEvidenciaRel` → 422 `RAP_SIN_EVIDENCIAS`. El plan inicial (Gemini leyendo PDFs guía por guía) no escalaba ("un año haciendo acta por acta").
+
+**Solución implementada:**
+- **`api/src/lib/aiClient.js`** (nuevo) — cliente IA agnóstico de proveedor. Selección por env `AI_PROVIDER` (auto → OpenRouter si hay `OPENROUTER_API_KEY`, si no Kimi/Moonshot, si no Anthropic). Usa `fetch` directo (sin SDK nuevo). Función `chatJSON({system,user,maxTokens})`.
+  - **Gotcha:** Kimi K2 vía Novita (OpenRouter) NO soporta `response_format:json_object` → devuelve 400. Por eso el JSON-mode es **opt-in** (`AI_JSON_MODE=1`); por defecto se confía en el prompt ("devuelve SOLO JSON") + `extraerJSON()` por regex.
+  - Env nuevas en `.env`: `OPENROUTER_API_KEY` (ya puesta), `OPENROUTER_MODEL` (default `moonshotai/kimi-k2`).
+- **`scripts/matchearCompetenciaIA.js`** (nuevo) — pone la IA a mapear sola. NO usa PDFs: usa el texto limpio ya en DB (nombre de evidencia con código `GA{n}-{comp}-AA{m}-EV{nn}` + descripción/criterios de RAP). Flujo: 1 llamada IA por competencia → deduplica evidencias por código canónico GA-AA-EV → upsert `RapEvidenciaRel` en TODAS las filas de ese código. Uso: `node scripts/matchearCompetenciaIA.js <comp|--todas> [--dry-run]`.
+- **`scripts/importarMapeoRaps.js`** (nuevo) — alternativa: importa un `.md` curado por IA externa (formato de `raps.md`, tabla evidencia→RAP + criterios). Útil para mapeos puntuales de alta calidad. Se usó con `raps.md` (Guía 01).
+
+**Resultado del run `--todas`:** **17 competencias mapeadas automáticamente**, casi todas confianza alta. **`RapEvidenciaRel`: 477 → 2147.** Criterios: 0 → 5 (del import de raps.md).
+
+**Pendientes del matching:**
+- ~20 competencias tienen evidencias pero su `Competencia`/`RAP` **no existe en DB** → extraer sus guías primero (`extraerTodasLasGuias.js`) y re-correr el comando.
+- `240201528` dio 0 vínculos (mismatch de formato de código) — caso puntual a revisar.
+- **Deduplicar evidencias**: cada código tiene ~10 filas `Evidencia` por scans repetidos (ver 14.4). El matching linkea todas; conviene dedup antes de generar actas en serio.
+- Revisar las de confianza media (220201501, 220501095, 220501097 tuvieron algunas).
+
+### 14.2 — Pruebas E2E con datos reales (todas verdes)
+
+- **`scripts/test-multitenant.js`** — 36/36 ✅, 0 fugas de aislamiento. 2 instructores de prueba (`instructor1/2.test@zajuna.local` / `Test1234!`) conservados en DB para browser. Cleanup: `--cleanup`.
+- **`scripts/setup-instructor-real.js`** + **`driver-descubrir-fichas.js`** + **`driver-escanear-evidencias.js`** + **`driver-acta-real.js`** — probaron el flujo REAL como "otro instructor" reusando las credenciales Zajuna del superadmin (copiadas cifradas) con competencia técnica. Instructor `instructor.real.test@zajuna.local` / `Test1234!`.
+  - Scan real: tecnólogo ADSI (course 51083) 199 evidencias / 19 competencias; técnico Programación de Software (course 77767) 74 evidencias, 47 aprendices con notas reales.
+  - Validado: evidencias cargan ✓, filtro por activación ✓ (Fase 1 discovery / Fase 2 solo activas), acta corta limpio sin vínculos (422) y funciona con vínculos ✓.
+- **`scripts/test-flujo-completo.js`** — 20/20 ✅ post-mortem del flujo completo (cargar→calificar→dashboard→actualizar→acta→reportes) con datos sembrados.
+
+### 14.3 — Fix de registro (bug real encontrado)
+
+`api/src/routes/auth.js`: `POST /api/auth/register` ahora **vincula `User.competenciaId`** buscando la `Competencia` por código. Antes quedaba `null` → el matching IA fallaba con "El usuario no tiene competencia asignada" (le pasó al superadmin el 9-jun). Cualquier instructor nuevo lo habría sufrido.
+
+### 14.4 — Auditorías de 4 features (agentes)
+
+- **Velocidad:** quedan cuellos — (1) **doble carga del grader report** (`evidenciasWorker.js:77` matriculados y `:182` notas pegan a la misma URL `perpage=5000` — quick-win <1h); (2) foros/quiz siguen 100% DOM serial; (3) lectura del scan aún en Chromium (migración fetch+cheerio a medias); (4) faltan `@@index` en Prisma. NO hay N+1 en auto-poblar (ya usa `in:`+`_count`).
+- **Config de evidencias (bug "cargar fechas no sale nada"):** causa en `api/src/routes/configEvidencias.js:202-208` — el GET responde `fromCache:true` por existir `EvidenciaConfig` (que solo guarda `raw`) pero el `config` sale de **otra columna** (`Evidencia.configCache`), que puede ser null → front sin datos ni jobId → vacío sin error. **Dos caches desincronizados.** Además la vista Tabla no muestra error si el lote falla 100% (sesión SSO expirada → tabla vacía silenciosa). Fix: unificar cache + degradar a error si `leidas===0`.
+- **Mensajes (estilo Extensión Z):** el envío FUNCIONA (`scraper/mensajes.js:12`, AJAX `core_message_send_instant_messages`) y la interpolación `{{nombre}}/{{ficha}}/{{instructor}}` ya está OK (`mensajeFormativoWorker.js:26`). **Hueco:** el listado de evidencias pendientes por aprendiz NO se inyecta — el dato (`dest.evidencias`) y el formateador (`construirMensaje`, `scraper/mensajes.js:87`) existen, pero el worker no los usa. **Fix (~15 líneas):** agregar token `{{evidencias}}` que expanda los pendientes por destinatario.
+- **Excel:** el reporte propio (`fichas.js:188`, `GET /api/fichas/:id/reporte-excel`) **ya supera a la Extensión Z** (la Z no genera Excel, opera en vivo). El commit "Z-Mejorado" de `C:\zajuna-excel` está **DETRÁS** de master → §12 desactualizada, no hay nada que mergear del Excel. Falta solo **pulido visual** (encabezados largos, fila de resumen por evidencia) + marcar suspendidos.
+
+### 14.5 — Operación / gotchas de la sesión
+
+- **App "en blanco" = Vite dev (5173) caído.** Los procesos node (`server.js`, `worker-entry.js`, `vite`) se mueren si se cierra la terminal/sesión de Windows que los lanzó. Relanzar: `node api/src/server.js`, `node api/src/worker-entry.js`, `cd web && npm run dev`. El build en `:3000` siempre funciona aunque Vite esté caído.
+- **Scripts de prueba/temporales creados** (no commiteados, varios en root `scripts/`): `test-multitenant.js`, `test-flujo-completo.js`, `setup-instructor-real.js`, `driver-*.js`, `importarMapeoRaps.js`, `matchearCompetenciaIA.js`, `raps.md`. Borrar usuarios/datos de prueba antes de producción.
+- **Pendientes inmediatos heredados:** JWT_SECRET real, dedup de evidencias, extraer guías de las ~20 competencias faltantes, los fixes de 14.4.

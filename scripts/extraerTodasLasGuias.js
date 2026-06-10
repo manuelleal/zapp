@@ -77,40 +77,67 @@ function extraerCompetencias(bloque) {
 }
 
 // ─── Parser de RAPs ─────────────────────────────────────────────────────────
-// Busca códigos con sufijo: XXXXXXXXX-NN (9 dígitos + guion + 2 dígitos).
-// Para cada RAP captura solo su descripción (una oración), deteniéndose en:
-//   • el siguiente código RAP
-//   • una línea en blanco (separa párrafos en el PDF)
-//   • fin del bloque
-// El .substring(0,400) es red de seguridad si el PDF no tiene línea en blanco.
+// Busca entradas con los dos formatos reales encontrados en PDFs de guías SENA:
+//
+//   Formato A (guías de inglés / algunos programas):
+//     • 240202501-05: Presentar un proceso para la realización...
+//     • Duración de la guía: 232 horas
+//
+//   Formato B (mayoría de guías técnicas):
+//     o 220501092-01 - Caracterizar los procesos de la organización...
+//     o 220501092-02 - Recolectar información del software...
+//
+// Estrategia del regex:
+//   1. Ancla en la viñeta `•` (Unicode •) O en `o ` (letra O minúscula al inicio
+//      de línea — estilo de bala usado por la plantilla GFPI-F-135).
+//      Ambas formas son toleradas; también acepta el código sin viñeta precedente.
+//   2. Captura el código 9-2 dígitos seguido de separador `:` o `-` o `–`.
+//   3. La descripción termina en el PRIMER punto seguido de espacio/salto
+//      (primera oración completa), o en cualquiera de los delimitadores de cierre:
+//        - siguiente viñeta • o `o ` seguido de código
+//        - "Duración" (introduce la línea de horas, NO es descripción)
+//        - "PRESENTACIÓN" / "FORMULACIÓN" (secciones del documento)
+//        - siguiente código RAP (\d{9}-\d{2})
+//        - fin del bloque
+//   4. Red de seguridad: .substring(0, 300) si ningún punto aparece antes.
+//
+// Por qué no usar [\s\S]+? hasta \n\n:
+//   Los PDFs insertan saltos de página (-- N of M --) dentro de un RAP, rompiendo
+//   la línea en blanco como delimitador. El regex anterior capturaba todo hasta el
+//   próximo párrafo vacío, arrastando texto de otras secciones.
 function extraerRAPs(bloque) {
-  const RE = /\b(\d{9}-\d{2})\b\s*[-–:]?\s*([\s\S]+?)(?=\b\d{9}-\d{2}\b|\n[ \t]*\n|$)/g;
+  // Viñeta: acepta • (Unicode) o `o` al inicio de línea (plantilla GFPI-F-135).
+  // El `(?:^|\n)\s*` asegura que la `o` esté al inicio de línea, no dentro de palabra.
+  // Separador tras el código: `:` (formato A) o `-`/`–` (formato B).
+  const RE = /(?:(?:^|\n)\s*[•o]\s*)(\d{9}-\d{2})\s*[-–:]\s*([\s\S]+?)(?=[•o]\s*\d{9}|[•o]\s*Duraci[oó]n|\bDuraci[oó]n\b|\bPRESENTACI[OÓ]N\b|\bFORMULACI[OÓ]N\b|\b\d{9}-\d{2}\b|\n[ \t]*\n|$)/gim;
+
   const resultados = [];
   let m;
   while ((m = RE.exec(bloque)) !== null) {
     const codigo = m[1].trim();
     let descripcion = m[2]
+      // Quitar artefactos de paginación del PDF (ej: "-- 1 of 40 --", "GFPI-F-135 V02")
       .replace(/--\s*\d+\s+of\s+\d+\s*--/gi, "")
       .replace(/GFPI-F-\d+\s+V\.?\s*\d+/gi, "")
+      // Colapsar saltos de línea internos y espacios múltiples a espacio simple
       .replace(/\s+/g, " ")
       .trim();
-      
-    // Truncar para no arrastrar toda la guía
-    const cutIdx = descripcion.search(/(\s•\s|\s-\sDuración|\sDuración|\s2\.\sPRESENTACIÓN|\so\sL|3\.\sFORMULACIÓN)/i);
-    if (cutIdx > 0) descripcion = descripcion.substring(0, cutIdx).trim();
-    // Eliminar ' o' final solitario si quedó
-    if (descripcion.endsWith(" o")) descripcion = descripcion.substring(0, descripcion.length - 2).trim();
 
-    // Red de seguridad estricta
-    if (descripcion.length > 400) {
-      const dotIdx = descripcion.indexOf('. ', 50);
-      if (dotIdx > 0 && dotIdx < 400) {
-        descripcion = descripcion.substring(0, dotIdx + 1);
-      } else {
-        descripcion = descripcion.substring(0, 400);
-      }
+    // Tomar solo la primera oración completa (hasta el primer ". " o ".$").
+    // Los RAPs SENA son siempre oraciones únicas; todo lo que siga al primer punto
+    // pertenece a la siguiente entrada o a texto de sección.
+    // Se ignoran puntos en los primeros 20 chars para no cortar siglas/acrónimos cortos.
+    const primerPunto = descripcion.search(/\.(?:\s|$)/);
+    if (primerPunto > 20) {
+      // Incluir el punto para conservar la puntuación natural de la descripción
+      descripcion = descripcion.substring(0, primerPunto + 1).trim();
     }
-    
+
+    // Red de seguridad: si no hubo punto o la oración es enorme, cortar a 300 chars
+    if (descripcion.length > 300) {
+      descripcion = descripcion.substring(0, 300).trim();
+    }
+
     if (descripcion.length > 5) {
       resultados.push({
         codigo,

@@ -1,18 +1,13 @@
-import { useState, useRef, useEffect } from "react"
+import { useState, useEffect } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   ChevronDown, ChevronRight, Link2, Unlink,
-  Upload, Download, Search, X, Loader2, AlertCircle, CheckCircle,
-  BookOpen,
+  Search, X, Loader2, BookOpen, RefreshCw,
 } from "lucide-react"
 import Layout from "@/components/Layout"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
-} from "@/components/ui/dialog"
 import { apiFetch, ApiError } from "@/api/client"
 import { toast } from "sonner"
 import { useAuthStore } from "@/store/auth"
@@ -67,12 +62,6 @@ interface FichaConEvidencias {
   evidencias: EvidenciaTodas[]
 }
 
-interface ImportPayload {
-  competenciaCodigo?: string
-  exportedAt?:        string
-  raps: { codigo: string; descripcion: string; criterios?: Criterio[] }[]
-}
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function tipoBadgeVariant(tipo: string): "blue" | "purple" | "yellow" | "gray" {
@@ -85,147 +74,6 @@ function tipoBadgeVariant(tipo: string): "blue" | "purple" | "yellow" | "gray" {
 function tipoBadgeLabel(tipo: string): string {
   const map: Record<string, string> = { assign: "Tarea", forum: "Foro", quiz: "Quiz" }
   return map[tipo] ?? tipo
-}
-
-// ─── Sub-componente: modal de importación ─────────────────────────────────────
-
-interface ImportModalProps {
-  open:    boolean
-  onClose: () => void
-  onConfirm: (payload: ImportPayload) => void
-  busy:    boolean
-  error:   string
-  result:  { created: number; updated: number; skipped: { codigo: string; error: string }[] } | null
-}
-
-function ImportModal({ open, onClose, onConfirm, busy, error, result }: ImportModalProps) {
-  const [parsed, setParsed]     = useState<ImportPayload | null>(null)
-  const [parseErr, setParseErr] = useState("")
-  const fileRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    if (!open) {
-      setParsed(null)
-      setParseErr("")
-      if (fileRef.current) fileRef.current.value = ""
-    }
-  }, [open])
-
-  function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!file) return
-    const reader = new FileReader()
-    reader.onload = ev => {
-      try {
-        const data = JSON.parse(ev.target?.result as string) as ImportPayload
-        if (!Array.isArray(data.raps)) throw new Error("El JSON no tiene la propiedad 'raps' como array.")
-        setParsed(data)
-        setParseErr("")
-      } catch (err) {
-        setParsed(null)
-        setParseErr(err instanceof Error ? err.message : "Archivo JSON inválido.")
-      }
-    }
-    reader.readAsText(file)
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={v => { if (!v && !busy) onClose() }}>
-      <DialogContent className="max-w-md">
-        <DialogHeader>
-          <DialogTitle>Importar RAPs desde JSON</DialogTitle>
-          <DialogDescription>
-            Selecciona un archivo JSON exportado desde esta herramienta. Los RAPs existentes se actualizarán; los nuevos se crearán.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-4">
-          <div>
-            <Label htmlFor="import-file">Archivo JSON</Label>
-            <input
-              id="import-file"
-              ref={fileRef}
-              type="file"
-              accept=".json,application/json"
-              onChange={handleFile}
-              disabled={busy}
-              className="mt-1.5 block w-full text-sm text-gray-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border file:border-gray-300 file:text-sm file:font-medium file:bg-white hover:file:bg-gray-50 cursor-pointer disabled:opacity-50"
-            />
-          </div>
-
-          {parseErr && (
-            <div className="flex items-center gap-2 text-sm text-red-600">
-              <AlertCircle className="w-4 h-4 shrink-0" />
-              <span>{parseErr}</span>
-            </div>
-          )}
-
-          {parsed && !result && (
-            <div className="rounded-md bg-blue-50 border border-blue-200 p-3 text-sm space-y-1">
-              <p className="font-medium text-blue-800">Vista previa</p>
-              {parsed.competenciaCodigo && (
-                <p className="text-blue-700">Competencia: <strong>{parsed.competenciaCodigo}</strong></p>
-              )}
-              <p className="text-blue-700">
-                <strong>{parsed.raps.length}</strong> RAP{parsed.raps.length !== 1 ? "s" : ""} a importar
-              </p>
-              <ul className="text-blue-600 text-xs mt-1 space-y-0.5 max-h-32 overflow-y-auto">
-                {parsed.raps.map((r, i) => (
-                  <li key={i} className="flex gap-1.5">
-                    <span className="font-mono font-semibold">{r.codigo}</span>
-                    <span className="text-blue-500 truncate">{r.descripcion}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {result && (
-            <div className="rounded-md bg-green-50 border border-green-200 p-3 text-sm space-y-1">
-              <p className="font-medium text-green-800 flex items-center gap-1.5">
-                <CheckCircle className="w-4 h-4" />
-                Importación completada
-              </p>
-              <p className="text-green-700">{result.created} creados · {result.updated} actualizados</p>
-              {result.skipped.length > 0 && (
-                <div className="text-red-600 mt-1">
-                  <p className="font-medium">Omitidos con error ({result.skipped.length}):</p>
-                  <ul className="text-xs list-disc pl-4 mt-0.5">
-                    {result.skipped.map((s, i) => (
-                      <li key={i}><strong>{s.codigo}</strong>: {s.error}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-          )}
-
-          {error && (
-            <div className="flex items-center gap-2 text-sm text-red-600">
-              <AlertCircle className="w-4 h-4 shrink-0" />
-              <span>{error}</span>
-            </div>
-          )}
-        </div>
-
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {result ? "Cerrar" : "Cancelar"}
-          </Button>
-          {!result && (
-            <Button
-              className="bg-sena-green hover:bg-sena-green/90"
-              disabled={!parsed || !!parseErr || busy}
-              onClick={() => parsed && onConfirm(parsed)}
-            >
-              {busy && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-              Confirmar importación
-            </Button>
-          )}
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
 }
 
 // ─── Sub-componente: panel de detalle de un RAP ───────────────────────────────
@@ -332,7 +180,10 @@ function RapDetailPanel({ rapId }: { rapId: string }) {
                   className="h-6 w-6 p-0 text-gray-400 hover:text-red-500 flex-shrink-0"
                   title="Quitar asociación"
                   disabled={desasociarMutation.isPending}
-                  onClick={() => desasociarMutation.mutate(ev.id)}
+                  onClick={() => {
+                    if (!confirm("¿Quitar esta evidencia del RAP?")) return
+                    desasociarMutation.mutate(ev.id)
+                  }}
                 >
                   <Unlink className="w-3.5 h-3.5" />
                 </Button>
@@ -423,13 +274,9 @@ export default function RapsPage() {
     }
   }, [])
 
-  const [expanded, setExpanded]         = useState<Set<string>>(new Set())
-  const [importOpen, setImportOpen]     = useState(false)
-  const [importBusy, setImportBusy]     = useState(false)
-  const [importError, setImportError]   = useState("")
-  const [importResult, setImportResult] = useState<{ created: number; updated: number; skipped: { codigo: string; error: string }[] } | null>(null)
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
-  const { data: raps, isLoading } = useQuery<RapSummary[]>({
+  const { data: raps, isLoading, isFetching, refetch } = useQuery<RapSummary[]>({
     queryKey: ["raps"],
     queryFn:  () => apiFetch<RapSummary[]>("/api/raps"),
     enabled:  !!jwt,
@@ -445,42 +292,6 @@ export default function RapsPage() {
     })
   }
 
-  async function handleExport() {
-    try {
-      const res = await fetch("/api/raps/export", {
-        headers: { Authorization: `Bearer ${localStorage.getItem("zajuna_jwt")}` },
-      })
-      if (!res.ok) throw new Error("Error al exportar.")
-      const blob = await res.blob()
-      const cd   = res.headers.get("Content-Disposition") ?? ""
-      const match = cd.match(/filename="([^"]+)"/)
-      const filename = match?.[1] ?? "raps-export.json"
-      const url = URL.createObjectURL(blob)
-      const a   = document.createElement("a")
-      a.href = url; a.download = filename; a.click()
-      URL.revokeObjectURL(url)
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Error al exportar.")
-    }
-  }
-
-  async function handleImport(payload: ImportPayload) {
-    setImportBusy(true)
-    setImportError("")
-    try {
-      const result = await apiFetch<{ created: number; updated: number; skipped: { codigo: string; error: string }[] }>(
-        "/api/raps/import",
-        { method: "POST", body: JSON.stringify(payload) }
-      )
-      setImportResult(result)
-      queryClient.invalidateQueries({ queryKey: ["raps"] })
-    } catch (e) {
-      setImportError(e instanceof ApiError ? e.message : "Error al importar.")
-    } finally {
-      setImportBusy(false)
-    }
-  }
-
   const rapsList = raps ?? []
 
   return (
@@ -492,26 +303,25 @@ export default function RapsPage() {
             <BookOpen className="w-4 h-4 text-sena-green" />
             <div>
               <h1 className="text-sm font-semibold text-gray-900">Resultados de Aprendizaje (RAPs)</h1>
-              {user?.competenciaNombre && (
-                <p className="text-xs text-gray-500 truncate">{user.competenciaNombre} · {user.competenciaCodigo}</p>
-              )}
+              {user?.competenciaNombre
+                ? <p className="text-xs text-gray-500 truncate">{user.competenciaNombre} · {user.competenciaCodigo}</p>
+                : <p className="text-xs text-gray-400">Tu competencia</p>
+              }
             </div>
           </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
-            <Button variant="outline" size="sm" className="gap-1.5 text-xs" onClick={handleExport} disabled={rapsList.length === 0}>
-              <Download className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Exportar JSON</span>
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1.5 text-xs"
-              onClick={() => { setImportResult(null); setImportError(""); setImportOpen(true) }}
-            >
-              <Upload className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Importar JSON</span>
-            </Button>
-          </div>
+          {rapsList.length > 0 && (
+            <Badge variant="gray" className="text-xs">{rapsList.length} RAP{rapsList.length !== 1 ? "s" : ""}</Badge>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5 text-xs"
+            onClick={() => refetch().then(() => toast.success("RAPs actualizados"))}
+            disabled={isFetching}
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isFetching ? "animate-spin" : ""}`} />
+            <span className="hidden sm:inline">Actualizar</span>
+          </Button>
         </div>
 
         {isLoading ? (
@@ -522,8 +332,12 @@ export default function RapsPage() {
         ) : rapsList.length === 0 ? (
           <div className="bg-white rounded-lg border p-12 text-center space-y-3">
             <BookOpen className="w-10 h-10 text-gray-300 mx-auto" />
-            <p className="text-gray-600 text-sm font-medium">No hay RAPs cargados aún.</p>
-            <p className="text-gray-400 text-xs">Usa "Importar JSON" para cargar los RAPs de tu competencia.</p>
+            <p className="text-gray-600 text-sm font-medium">No hay RAPs para tu competencia.</p>
+            <p className="text-gray-400 text-xs">Contacta al administrador para cargar los RAPs de tu programa.</p>
+            <Button variant="outline" size="sm" className="gap-1.5 text-xs mx-auto" onClick={() => refetch()} disabled={isFetching}>
+              <RefreshCw className={`w-3.5 h-3.5 ${isFetching ? "animate-spin" : ""}`} />
+              Reintentar
+            </Button>
           </div>
         ) : (
           <div className="space-y-2">
@@ -563,14 +377,6 @@ export default function RapsPage() {
         )}
       </div>
 
-      <ImportModal
-        open={importOpen}
-        onClose={() => { setImportOpen(false); setImportResult(null) }}
-        onConfirm={handleImport}
-        busy={importBusy}
-        error={importError}
-        result={importResult}
-      />
     </Layout>
   )
 }

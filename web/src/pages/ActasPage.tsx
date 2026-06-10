@@ -244,9 +244,9 @@ function NuevaActaModal({ open, onClose, fichas, raps }: NuevaActaModalProps) {
       <Dialog open={open} onOpenChange={v => { if (!v && !isBusy) onClose() }}>
         <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col">
           <DialogHeader className="flex-shrink-0">
-            <DialogTitle>Nueva Acta de Seguimiento — Flujo Nativo</DialogTitle>
+            <DialogTitle>Nueva Acta de Seguimiento</DialogTitle>
             <DialogDescription>
-              Completa los metadatos, selecciona los RAPs y presiona <strong>Vista Previa</strong> para calcular los juicios en tiempo real.
+              Completa los datos y presiona Vista Previa para calcular los resultados.
             </DialogDescription>
           </DialogHeader>
 
@@ -335,27 +335,15 @@ function NuevaActaModal({ open, onClose, fichas, raps }: NuevaActaModalProps) {
               </div>
             )}
 
-            {/* ── Botón Vista Previa ── */}
-            <div className="flex items-center gap-3 pt-1">
-              <Button
-                variant="outline"
-                className="gap-1.5 text-sm"
-                onClick={handleVistaPrevia}
-                disabled={isBusy}
-              >
-                {previewLoading
-                  ? <Loader2 className="w-4 h-4 animate-spin" />
-                  : <AlertTriangle className="w-4 h-4 text-amber-500" />}
-                Vista Previa
-              </Button>
-              {preview && (
-                <span className="text-xs text-gray-500">
-                  {preview.participantes.length} aprendices · {preview.warningsCount > 0
-                    ? <span className="text-amber-600 font-semibold">⚠️ {preview.warningsCount} con evidencias sin calificar</span>
-                    : <span className="text-green-600 font-semibold">Todo calificado ✓</span>}
-                </span>
-              )}
-            </div>
+            {/* ── Resumen de Preview ── */}
+            {preview && (
+              <div className="flex items-center gap-2 pt-1 text-xs text-gray-500">
+                <span>{preview.participantes.length} aprendices</span>
+                {preview.warningsCount > 0
+                  ? <span className="text-amber-600 font-semibold">· ⚠️ {preview.warningsCount} con evidencias sin calificar</span>
+                  : <span className="text-green-600 font-semibold">· Todo calificado ✓</span>}
+              </div>
+            )}
 
             {/* ── Tabla de Preview ── */}
             {preview && preview.participantes.length > 0 && (
@@ -507,8 +495,9 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
   const [cerrarConfirm,     setCerrarConfirm]     = useState(false)
   const [deletePartId,      setDeletePartId]      = useState<string | null>(null)
   const [guiaVisible,       setGuiaVisible]       = useState(true)
-  const [showMapeoModal,    setShowMapeoModal]    = useState(false)
-  const [rapsSinMapeo,      setRapsSinMapeo]      = useState<any[]>([])
+  const [showMapeoModal,       setShowMapeoModal]       = useState(false)
+  const [rapsSinMapeo,         setRapsSinMapeo]         = useState<any[]>([])
+  const [sinDatosRecientes,    setSinDatosRecientes]    = useState(false)
 
   const { data: acta, isLoading } = useQuery<ActaDetalle>({
     queryKey: ["acta-detalle", actaId],
@@ -582,6 +571,9 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
       ),
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["acta-detalle", actaId] })
+      // Mostrar banner amarillo si todos quedaron sin participar o no hay evidencias vinculadas
+      const todosSinParticipar = result.poblados > 0 && result.noParticiparon === result.poblados
+      setSinDatosRecientes(todosSinParticipar || result.evidenciasVinculadas === 0)
       if (result.poblados === 0) {
         toast.warning("No hay aprendices registrados en esta ficha. Escanea la ficha primero.")
       } else if (result.evidenciasVinculadas === 0) {
@@ -809,6 +801,16 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
             <span>
               Las columnas de RAP no aparecen porque el acta no tiene RAPs guardados.
               Selecciona los RAPs arriba, haz clic en <strong>Guardar RAPs</strong> y luego usa <strong>Auto-poblar desde evidencias</strong>.
+            </span>
+          </div>
+        )}
+
+        {/* Banner: sin datos recientes (todos sin participar o sin evidencias vinculadas) */}
+        {sinDatosRecientes && (
+          <div className="flex items-start gap-2 rounded-md border border-yellow-300 bg-yellow-50 px-3 py-2 text-xs text-yellow-800">
+            <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+            <span>
+              Algunas evidencias no tienen datos recientes. Escanea la ficha antes de generar el acta para obtener calificaciones actualizadas.
             </span>
           </div>
         )}
