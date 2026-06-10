@@ -215,13 +215,28 @@ async function extraerPostsForo(page) {
  * @param {string|number} courseId
  * @returns {Promise<Array<{ moodleUserId: string, nombre: string, email: string, documento: string }>>}
  */
-async function obtenerMatriculados(page, courseId) {
+// ─── Grader report: navegación compartida + extractores ─────────────────────
+// El grader report (/grade/report/grader/index.php) es la página MÁS pesada del
+// scan (tabla completa de alumnos × grade items). De su DOM salen DOS cosas:
+//   - matriculados (filas de alumnos)      → obtenerMatriculados()
+//   - notas del libro indexadas por itemid → obtenerNotasGrader()
+// Antes cada función navegaba por su cuenta, así que el scan cargaba la MISMA
+// URL pesada dos veces. cargarGrader() navega UNA sola vez y extrae ambas del
+// mismo DOM. Las funciones individuales siguen exportadas y funcionales
+// (delegan en navegarAlGrader + su extractor) por compatibilidad con callers
+// que solo necesitan una de las dos (p.ej. revisarEntregasForo sin cache).
+
+async function navegarAlGrader(page, courseId) {
   // perpage=5000 evita el render "all" (perpage=0) que en cursos grandes
   // tarda >30s. 5000 cubre cualquier ficha del SENA con margen.
   const url = `${BASE_URL}/grade/report/grader/index.php?id=${courseId}&perpage=5000`;
-  log(`[matriculados] GET ${url}`);
+  log(`[grader] GET ${url}`);
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
   await cerrarModal(page);
+}
+
+// Extrae los matriculados del grader report YA cargado en `page` (no navega).
+async function extraerMatriculadosDelGrader(page) {
   return await page.evaluate(() => {
     const txt = (el) => (el?.textContent ?? "").replace(/\s+/g, " ").trim();
 
@@ -263,6 +278,11 @@ async function obtenerMatriculados(page, courseId) {
     }
     return Array.from(map.values());
   });
+}
+
+async function obtenerMatriculados(page, courseId) {
+  await navegarAlGrader(page, courseId);
+  return await extraerMatriculadosDelGrader(page);
 }
 
 async function revisarEntregasForo(page, actId, courseId, matriculadosCache) {
@@ -623,11 +643,12 @@ async function listarParticipantesBatch(page, sesskey, assigns) {
  * @returns {Promise<Object>} { [itemid]: { [moodleUserId]: { numero:Number|null, letra:'A'|'D'|null } } }
  */
 async function obtenerNotasGrader(page, courseId) {
-  const url = `${BASE_URL}/grade/report/grader/index.php?id=${courseId}&perpage=5000`;
-  log(`[notas] GET ${url}`);
-  await page.goto(url, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
-  await cerrarModal(page);
+  await navegarAlGrader(page, courseId);
+  return await extraerNotasDelGrader(page);
+}
 
+// Extrae las notas por itemid del grader report YA cargado en `page` (no navega).
+async function extraerNotasDelGrader(page) {
   const data = await page.evaluate(() => {
     const out = {};
     const rows = Array.from(document.querySelectorAll("tr[data-uid].userrow"));
@@ -668,8 +689,27 @@ async function obtenerNotasGrader(page, courseId) {
   return data;
 }
 
+/**
+ * Carga el grader report UNA sola vez y extrae de ese mismo DOM tanto los
+ * matriculados como las notas por itemid. Reemplaza el par
+ * obtenerMatriculados() + obtenerNotasGrader() cuando se necesitan ambos
+ * (caso del scan en evidenciasWorker), ahorrando una navegación pesada
+ * (~5-30s en cursos grandes) por scan.
+ *
+ * @param {import('playwright').Page} page
+ * @param {string|number} courseId
+ * @returns {Promise<{ matriculados: Array, notasPorItem: Object }>}
+ */
+async function cargarGrader(page, courseId) {
+  await navegarAlGrader(page, courseId);
+  const matriculados = await extraerMatriculadosDelGrader(page);
+  const notasPorItem = await extraerNotasDelGrader(page);
+  return { matriculados, notasPorItem };
+}
+
 module.exports = {
   obtenerEvidencias, revisarEntregas, revisarEntregasForo, revisarEntregasQuiz,
   extraerPostsForo, obtenerMatriculados, descargarGradebookCSV, obtenerNotasGrader,
+  cargarGrader,
   obtenerSesskey, resolverAssignInfo, estadoDesdeParticipante, listarParticipantesBatch,
 };

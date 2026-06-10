@@ -7,8 +7,8 @@ const { decrypt } = require("../lib/crypto");
 const { saveSession, loadSession } = require("../lib/sessionStore");
 const prisma = require("../db/client");
 const { login, cerrarModal, BASE_URL, TIMEOUT, log } = require("../../../scraper/auth");
-const { obtenerEvidencias, revisarEntregas, revisarEntregasForo, revisarEntregasQuiz, obtenerMatriculados, descargarGradebookCSV,
-        obtenerNotasGrader, obtenerSesskey, resolverAssignInfo, estadoDesdeParticipante, listarParticipantesBatch } = require("../../../scraper/evidencias");
+const { obtenerEvidencias, revisarEntregas, revisarEntregasForo, revisarEntregasQuiz, cargarGrader, descargarGradebookCSV,
+        obtenerSesskey, resolverAssignInfo, estadoDesdeParticipante, listarParticipantesBatch } = require("../../../scraper/evidencias");
 const { parsearCSV } = require("../../../scraper/csvParser");
 
 // Normaliza una URL de Moodle conservando solo el parámetro ?id=NNN.
@@ -64,19 +64,27 @@ const worker = new Worker("evidencias", async (job) => {
     // CAPA 1 (perf): aquí había un `page.goto(/course/view.php)` + cerrarModal
     // que se eliminó. Era una navegación muerta (~2s, además con waitUntil:"load"
     // que es el más lento): su resultado no se leía y tanto obtenerEvidencias()
-    // como obtenerMatriculados() ya navegan y cierran el connection-guard-modal
+    // como cargarGrader() ya navegan y cierran el connection-guard-modal
     // por su cuenta. Moodle no exige visitar el curso para abrir el Gradebook
     // Tree ni el grade report, así que la visita no aportaba nada.
     const evidencias = await obtenerEvidencias(page, courseId);
     await prisma.job.update({ where: { id: jobId }, data: { progreso: 50 } });
 
-    // Fetchear matriculados SIEMPRE para usarlo como filtro global
-    // y eliminar definitivamente a los suspendidos en todas las evidencias.
+    // GRADER REPORT en UNA sola carga (perf): antes se navegaba dos veces a la
+    // misma URL pesada — obtenerMatriculados() aquí y obtenerNotasGrader() más
+    // abajo. cargarGrader() trae ambas cosas del mismo DOM:
+    //   - matriculados: filtro global de suspendidos en todas las evidencias.
+    //   - notasPorItem: notas del libro (número o A/D) por itemid → moodleUserId,
+    //     fuente determinista de la nota (como la Extensión Z), no depende de
+    //     casar columnas del CSV por nombre.
+    // Si el grader falla NO se tumba el scan: matriculados=[] (sin filtro de
+    // suspendidos) y notasPorItem={} (la nota cae al CSV de fallback).
     let matriculadosCache = [];
+    let notasPorItem = {};
     try {
-      matriculadosCache = await obtenerMatriculados(page, courseId);
+      ({ matriculados: matriculadosCache, notasPorItem } = await cargarGrader(page, courseId));
     } catch (e) {
-      console.error(`[evidenciasWorker] no se pudo fetchear matriculados: ${e.message}`);
+      console.error(`[evidenciasWorker] no se pudo cargar el grader report (${e.message}) → sin matriculados y notas por CSV de fallback`);
     }
     const matriculadosIds = new Set(matriculadosCache.map(m => m.moodleUserId));
 
@@ -176,13 +184,8 @@ const worker = new Worker("evidencias", async (job) => {
       return aprendizPorNombre.get(entrega.nombre) || null;
     };
 
-    // Notas del libro (número o A/D) por itemid → moodleUserId, leídas UNA vez
-    // del grader report (como la Extensión Z). Fuente determinista de la nota;
-    // no depende de casar columnas del CSV por nombre.
-    const notasPorItem = await obtenerNotasGrader(page, courseId).catch(e => {
-      log(`[evidenciasWorker] notas grader fallo (${e.message}) → se usa CSV de fallback`);
-      return {};
-    });
+    // Las notas del libro (notasPorItem) ya se leyeron arriba en la carga única
+    // del grader report (cargarGrader), junto con los matriculados.
 
     // =========================================================================
     // CAPA 2 (perf): leer las entregas de los `assign` activos vía AJAX EN LOTE,

@@ -77,6 +77,8 @@ model Ficha {
   mensajesFormativos MensajeFormativo[]
 
   @@unique([userId, codigo])
+  // Listados de fichas del instructor (toda la app filtra por userId, regla #1).
+  @@index([userId])
 }
 
 model Evidencia {
@@ -107,6 +109,10 @@ model Evidencia {
   matchingPropuestas MatchingPropuesta[]
 
   @@unique([fichaId, href])
+  // El scan y las actas listan evidencias por ficha (findMany { fichaId }).
+  // El unique [fichaId, href] ya cubre fichaId por prefijo, pero este índice
+  // simple es más liviano para los scans frecuentes de solo fichaId.
+  @@index([fichaId])
 }
 
 model EvidenciaConfig {
@@ -130,6 +136,8 @@ model Aprendiz {
   participaciones ActaParticipante[]
 
   @@unique([fichaId, nombre])
+  // Preload de aprendices por ficha en el scan (CAPA 1) y en actas.
+  @@index([fichaId])
 }
 
 model Entrega {
@@ -149,6 +157,9 @@ model Entrega {
   aiFeedback   AIFeedback[]
 
   @@unique([evidenciaId, aprendizId])
+  // El unique cubre evidenciaId por prefijo; falta el camino inverso:
+  // historial/juicios por aprendiz (actas recorren entregas de cada aprendiz).
+  @@index([aprendizId])
 }
 
 model HistorialEstado {
@@ -158,6 +169,9 @@ model HistorialEstado {
   estadoNuevo    String
   fecha          DateTime @default(now())
   entrega        Entrega  @relation(fields: [entregaId], references: [id])
+
+  // Timeline de estados por entrega (FK sin índice automático en Postgres).
+  @@index([entregaId])
 }
 
 model AIFeedback {
@@ -183,6 +197,9 @@ model Job {
   resultado Json?
   creadoAt  DateTime @default(now())
   user      User     @relation(fields: [userId], references: [id])
+
+  // Listado/polling de jobs del instructor (Dashboard consulta por userId).
+  @@index([userId])
 }
 
 model ConfigAudit {
@@ -224,6 +241,10 @@ model RapEvidenciaRel {
   evidencia   Evidencia @relation(fields: [evidenciaId], references: [id])
 
   @@unique([rapId, evidenciaId])
+  // actas.js arma el mapa RAP→evidencias consultando por ambos lados.
+  // El unique ya cubre rapId por prefijo; el índice simple es más liviano.
+  @@index([rapId])
+  @@index([evidenciaId])
 }
 
 // ─── Módulo 6: Matching IA Evidencias ↔ RAPs ─────────────────────────────────
@@ -244,6 +265,8 @@ model MatchingPropuesta {
   rap         RAP       @relation(fields: [rapId], references: [id])
 
   @@unique([userId, evidenciaId, rapId])
+  // actas.js busca propuestas aceptadas por RAP (where { rapId, estado }).
+  @@index([rapId, estado])
 }
 
 // ─── Módulo 7: Actas de Seguimiento + Mensajes Formales ─────────────────────
@@ -269,6 +292,9 @@ model ActaSeguimiento {
   ficha         Ficha              @relation(fields: [fichaId], references: [id])
   participantes ActaParticipante[]
   mensajes      MensajeFormativo[]
+
+  // Listado de actas por ficha en la UI de actas.
+  @@index([fichaId])
 }
 
 model ActaParticipante {
