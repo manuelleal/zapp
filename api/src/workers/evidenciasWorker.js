@@ -358,6 +358,36 @@ const worker = new Worker("evidencias", async (job) => {
           aprendizPorMoodle.set(String(entrega.aprendizMoodleId), aprendizDb);
         }
 
+        // Corregir nombre sucio de scans viejos. SOLO dos casos seguros:
+        //   a) el guardado es placeholder "Aprendiz {id}" (scan sin fullname), o
+        //   b) difiere únicamente en espacios (trailing/dobles de scans pre-trim).
+        // Un nombre genuinamente distinto NO pisa el guardado: las variantes
+        // basura de Moodle ("DH", "DHDANIEL...") fueron el origen de los
+        // duplicados y no queremos reintroducirlas por esta vía.
+        {
+          const nombreLimpio = (entrega.nombre || "").replace(/\s+/g, " ").trim();
+          const esPlaceholderDb      = /^Aprendiz \d+$/.test(aprendizDb.nombre);
+          const esPlaceholderEntrada = /^Aprendiz \d+$/.test(nombreLimpio);
+          const soloEspacios = aprendizDb.nombre.replace(/\s+/g, " ").trim() === nombreLimpio;
+          if (
+            nombreLimpio.length >= 3 && !esPlaceholderEntrada &&
+            nombreLimpio !== aprendizDb.nombre &&
+            (esPlaceholderDb || soloEspacios)
+          ) {
+            // No renombrar si otra fila de la ficha ya usa ese nombre
+            // (@@unique[fichaId,nombre]) — eso es trabajo de dedup-aprendices.js.
+            const ocupante = aprendizPorNombre.get(nombreLimpio);
+            if (!ocupante || ocupante.id === aprendizDb.id) {
+              aprendizUpdates.push(
+                prisma.aprendiz.update({ where: { id: aprendizDb.id }, data: { nombre: nombreLimpio } })
+              );
+              aprendizPorNombre.delete(aprendizDb.nombre);      // mantener los Maps al día
+              aprendizDb.nombre = nombreLimpio;
+              aprendizPorNombre.set(nombreLimpio, aprendizDb);
+            }
+          }
+        }
+
         // --- APLICAR CORRECCIÓN FAST-SYNC CSV (la nota del libro manda) ---
         if (colEvidencia) {
            let csvFila = null;
