@@ -49,8 +49,19 @@ async function authRoutes(fastify) {
     const zajunaUserEnc  = encrypt(zajunaUser);
     const zajunaPassEnc  = encrypt(zajunaPass);
 
+    // Vincular la FK competenciaId si la competencia ya existe en DB (por código).
+    // Sin esto, el Matching IA falla con "El usuario no tiene competencia asignada"
+    // y había que asignarla a mano (le pasó al superadmin el 9-jun-2026). Si la
+    // competencia aún no existe (instructor de un programa nuevo), queda null y se
+    // vincula después vía descubrir-competencias / extractor de guías.
+    const competencia = await prisma.competencia.findUnique({ where: { codigo: competenciaCodigo } });
+
     const user = await prisma.user.create({
-      data: { nombre, email, passwordHash, zajunaUserEnc, zajunaPassEnc, competenciaCodigo, competenciaNombre: competenciaNombre || "" },
+      data: {
+        nombre, email, passwordHash, zajunaUserEnc, zajunaPassEnc, competenciaCodigo,
+        competenciaNombre: competenciaNombre || competencia?.nombre || "",
+        competenciaId:     competencia?.id ?? null,
+      },
     });
 
     const token = fastify.jwt.sign({ id: user.id, email: user.email, nombre: user.nombre }, { expiresIn: "7d" });
