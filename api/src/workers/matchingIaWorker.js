@@ -1,19 +1,24 @@
 require("dotenv").config({ path: require("path").resolve(__dirname, "../../../.env") });
 
 const { Worker } = require("bullmq");
-const Anthropic  = require("@anthropic-ai/sdk");
 const { connection } = require("../lib/queue");
+const { chatJSON, proveedorActivo } = require("../lib/aiClient");
 const prisma = require("../db/client");
-
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+const SYSTEM_PROMPT =
+  "Eres un evaluador de competencias del SENA (Colombia). Mapeas evidencias de " +
+  "aprendizaje a su RAP (Resultado de Aprendizaje del Proceso) más apropiado. " +
+  "Respondes SIEMPRE con un único objeto JSON válido, sin texto adicional.";
+
 /**
- * Build the prompt for Claude to match a single evidencia against a list of RAPs.
+ * Construye el prompt de usuario para mapear UNA evidencia contra una lista de RAPs.
+ * El nombre de la evidencia trae el patrón GA{n}-{competencia}-AA{n}-EV{nn}, que es
+ * una pista fuerte de a qué resultado de aprendizaje pertenece.
  */
 function buildPrompt(ev, raps) {
-  return `Eres un evaluador de competencias SENA. Dada la siguiente evidencia de aprendizaje, determina cuál de los RAPs (Resultados de Aprendizaje del Proceso) de la lista evalúa mejor.
+  return `Dada esta evidencia de aprendizaje, elige cuál de los RAPs evalúa mejor.
 
 Evidencia: "${ev.nombre}"
 Tipo: ${ev.tipo}
@@ -21,30 +26,10 @@ Tipo: ${ev.tipo}
 RAPs disponibles:
 ${raps.map(r => `- ${r.id} | ${r.codigo}: ${r.descripcion}`).join("\n")}
 
-Responde SOLO con JSON válido en este formato:
-{"rapId": "<id del RAP más apropiado>", "confianza": <número 0-100>, "razon": "<explicación breve en español, max 150 chars>"}
+Responde SOLO con JSON en este formato exacto:
+{"rapId": "<id del RAP más apropiado de la lista>", "confianza": <0-100>, "razon": "<explicación breve en español, max 150 chars>"}
 
-Si ningún RAP aplica claramente, usa confianza < 50.`;
-}
-
-/**
- * Call Claude and extract JSON from the response text.
- * Returns null on failure (so the caller can log and continue).
- */
-async function callClaude(prompt) {
-  const message = await client.messages.create({
-    model:      "claude-haiku-4-5",
-    max_tokens: 256,
-    messages:   [{ role: "user", content: prompt }],
-  });
-
-  const text = message.content?.[0]?.text ?? "";
-
-  // Extract JSON from the response (Claude may wrap it in ```json ... ```)
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error(`Claude response did not contain JSON: ${text.slice(0, 200)}`);
-
-  return JSON.parse(jsonMatch[0]);
+Si ningún RAP aplica claramente, usa confianza < 50 pero igual elige el más cercano.`;
 }
 
 // ─── Worker ───────────────────────────────────────────────────────────────────
@@ -52,6 +37,7 @@ async function callClaude(prompt) {
 const worker = new Worker("matchingIa", async (job) => {
   const { jobId, userId, evidenciaIds } = job.data;
 
+  console.log(`[matchingIa] proveedor IA activo: ${proveedorActivo()}`);
   await prisma.job.update({ where: { id: jobId }, data: { status: "running", progreso: 5 } });
 
   // 1. Fetch the user + competencia
@@ -120,7 +106,7 @@ const worker = new Worker("matchingIa", async (job) => {
 
     try {
       const prompt = buildPrompt(ev, raps);
-      const parsed = await callClaude(prompt);
+      const parsed = await chatJSON({ system: SYSTEM_PROMPT, user: prompt, maxTokens: 256 });
 
       const { rapId, confianza, razon } = parsed;
 
