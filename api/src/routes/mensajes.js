@@ -226,6 +226,32 @@ async function mensajesRoutes(fastify) {
       };
     });
 
+    // ── Auto-poblar {{evidencias}} desde DB ─────────────────────────────────────
+    // Si el cuerpo/asunto usa el token y el front no mandó la lista (hoy no la
+    // manda), calculamos los pendientes REALES por aprendiz: evidencias activas
+    // de la ficha (no cerradas) cuya entrega está "sin_entregar". Así el mensaje
+    // personalizado por aprendiz sale completo sin depender de cambios en la UI.
+    const usaTokenEvidencias = /\{\{evidencias\}\}/i.test(cuerpo) || /\{\{evidencias\}\}/i.test(asunto);
+    if (usaTokenEvidencias && destinatariosEnriquecidos.some(d => d.evidencias.length === 0)) {
+      const entregasSinEntregar = await prisma.entrega.findMany({
+        where: {
+          aprendizId: { in: aprendizIds },
+          estado:     "sin_entregar",
+          evidencia:  { fichaId, cerradaAt: null, activaParaScan: true },
+        },
+        select: { aprendizId: true, evidencia: { select: { nombre: true } } },
+        orderBy: { evidencia: { nombre: "asc" } },
+      });
+      const pendientesPorAprendiz = new Map();
+      for (const e of entregasSinEntregar) {
+        if (!pendientesPorAprendiz.has(e.aprendizId)) pendientesPorAprendiz.set(e.aprendizId, []);
+        pendientesPorAprendiz.get(e.aprendizId).push(e.evidencia.nombre);
+      }
+      for (const d of destinatariosEnriquecidos) {
+        if (d.evidencias.length === 0) d.evidencias = pendientesPorAprendiz.get(d.aprendizId) ?? [];
+      }
+    }
+
     // ── Validación por canal ────────────────────────────────────────────────────
     // canal=email → requiere al menos un destinatario con email.
     // canal=zajuna → requiere al menos un destinatario con moodleId
