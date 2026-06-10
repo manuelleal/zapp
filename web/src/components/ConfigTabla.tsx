@@ -131,7 +131,25 @@ export default function ConfigTabla({ fichaId, preselectIds = [] }: { fichaId: s
       setLoadMsg(`Leyendo ${total} evidencias desde Moodle...`)
       pollLoad.start(
         jobId,
-        () => { setLoadPhase("idle"); setLoadMsg(""); queryClient.invalidateQueries({ queryKey: ["ficha-config", fichaId] }) },
+        (resultado) => {
+          // El worker (leerConfigLoteWorker) deja en el job:
+          // { leidas, fallidas, detalle: [{ evidenciaId, ok, error? }] }.
+          // Si el lote falló COMPLETO (ej. sesión SSO expulsada), el job queda
+          // "done" igual → antes la tabla quedaba en blanco sin mensaje.
+          // Mostramos el primer error del detalle en el banner rojo del toolbar.
+          const r = resultado as { leidas?: number; fallidas?: number; detalle?: { ok: boolean; error?: string }[] } | null
+          if (r && (r.fallidas ?? 0) > 0 && (r.leidas ?? 0) === 0) {
+            const primerError = r.detalle?.find(d => !d.ok && d.error)?.error
+            setLoadPhase("error")
+            setLoadMsg(`No se pudo leer ninguna evidencia${primerError ? ` — ${primerError}` : ""}. Reintenta (la sesión de Zajuna pudo haber expirado).`)
+            return
+          }
+          setLoadPhase("idle"); setLoadMsg("")
+          if (r && (r.fallidas ?? 0) > 0) {
+            toast.warning(`${r.leidas} leídas, ${r.fallidas} con error — reintenta para completarlas`)
+          }
+          queryClient.invalidateQueries({ queryKey: ["ficha-config", fichaId] })
+        },
         (m) => { setLoadPhase("error"); setLoadMsg(m) },
         (p) => setLoadMsg(`Leyendo desde Moodle... ${p}%`),
       )

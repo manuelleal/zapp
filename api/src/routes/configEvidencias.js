@@ -198,7 +198,12 @@ async function configEvidenciasRoutes(fastify) {
         where:   { evidenciaId: ev.id },
         orderBy: { scannedAt: "desc" },
       });
-      if (evConfig && (Date.now() - new Date(evConfig.scannedAt).getTime()) < TTL_MS) {
+      // Gotcha: EvidenciaConfig solo guarda `raw`; el `config` parseado vive en
+      // OTRA columna (Evidencia.configCache). Si hay fila reciente pero
+      // configCache es null, responder fromCache:true + config:null dejaba al
+      // front sin datos NI jobId → pantalla vacía sin error. En ese caso NO
+      // servimos cache: caemos al flujo de abajo que encola la re-lectura.
+      if (evConfig && ev.configCache != null && (Date.now() - new Date(evConfig.scannedAt).getTime()) < TTL_MS) {
         return reply.code(200).send({
           config:    ev.configCache,
           raw:       evConfig.raw,
