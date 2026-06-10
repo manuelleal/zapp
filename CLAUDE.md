@@ -165,7 +165,7 @@ ZAJUNA_PASS=
 | `feature/actas-nativas-fastsync` | ❓ Sin revisar | Actas nativas con sync rápido |
 | `feature/csv-and-robust-scraping` | ❓ Sin revisar | CSV parser + scraping robusto |
 
-> **⚠️ Sin remote configurado** — el `git push` falla con "origin does not appear to be a git repository". Cuando se configure, ramas listas para subir.
+> **✅ Remote configurado (verificado 9-jun tarde):** `origin = https://github.com/manuelleal/zapp.git`, con ramas pusheadas. `master` se pushea normalmente. Además `master` está ADELANTE de `refactor/p0-process-split` (el refactor P0 ya vive en master).
 > **⚠️ Rama default es `master`** (no `main`) — los comandos de merge del Paso 4 deben usar `master`.
 
 ---
@@ -549,7 +549,7 @@ Ese commit contiene mejoras al reporte Excel ("Z-Mejorado") sobre los commits de
 
 **También tiene** `NOTAS_PARA_CLAUDE.md` con un bug reportado sobre `EvidenciasConfig.tsx` ("cargar fechas → no sale nada") — revisar antes de mergear.
 
-**Acción pendiente:** revisar el commit `21205cb`, testear el Excel nuevo, y mergear `feat/excel-report` (desde `zajuna-excel`) a `master` si está completo. No trabajar en `zajuna-excel` como si fuera un repo separado — es el mismo, solo otro checkout.
+**~~Acción pendiente~~ RESUELTO (auditoría 9-jun tarde):** el commit `21205cb` ("Z-Mejorado") está **DETRÁS** de master, no adelante — `git diff` confirma que master ya contiene y supera ese Excel. **No hay nada que mergear de `zajuna-excel`** en cuanto al reporte. Lo único rescatable de ese checkout era el bug de `EvidenciasConfig.tsx` ("cargar fechas no sale nada"), ya corregido en master (commit `d6d64a4`).
 
 > ⚠️ `docs/CLEANUP_AUDIT.md` está **OBSOLETO** (escrito antes del refactor P0, 2 jun). Dice que `api/src/worker-entry.js` "no existe" cuando en realidad ya existe. No usarlo como fuente de verdad — leer el código directamente.
 
