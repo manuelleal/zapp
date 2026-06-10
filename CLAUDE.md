@@ -676,4 +676,16 @@ Para integrar: Kimi usa API compatible con OpenAI (`https://api.moonshot.cn/v1`)
 
 - **App "en blanco" = Vite dev (5173) caído.** Los procesos node (`server.js`, `worker-entry.js`, `vite`) se mueren si se cierra la terminal/sesión de Windows que los lanzó. Relanzar: `node api/src/server.js`, `node api/src/worker-entry.js`, `cd web && npm run dev`. El build en `:3000` siempre funciona aunque Vite esté caído.
 - **Scripts de prueba/temporales creados** (no commiteados, varios en root `scripts/`): `test-multitenant.js`, `test-flujo-completo.js`, `setup-instructor-real.js`, `driver-*.js`, `importarMapeoRaps.js`, `matchearCompetenciaIA.js`, `raps.md`. Borrar usuarios/datos de prueba antes de producción.
-- **Pendientes inmediatos heredados:** JWT_SECRET real, dedup de evidencias, extraer guías de las ~20 competencias faltantes, los fixes de 14.4.
+- **Pendientes inmediatos heredados:** ~~JWT_SECRET real~~ (rotado 9-jun noche), ~~dedup de evidencias~~ (descartado: medido 0 duplicados por ficha), extraer guías de las ~20 competencias faltantes, ~~los fixes de 14.4~~ (aplicados y commiteados 9-jun noche: nota+estado en calificar `9f7956a`, config fechas `d6d64a4`, mensajes `dc1f6bc`+`57b5f39`, perf grader+índices `5f585fa`).
+
+### 14.6 — 🔴 TAREA PARA MAÑANA (10-jun): selector de evidencias en Mensajes
+
+**Problema (detectado por el usuario):** el auto-poblado de `{{evidencias}}` (`api/src/routes/mensajes.js`, bloque "Auto-poblar {{evidencias}} desde DB") toma TODAS las evidencias `activaParaScan` de la ficha. Pero en una ficha (grupo) dan clase VARIOS instructores — el instructor solo conoce/gestiona las evidencias de SU competencia y no debe mandarle al aprendiz pendientes de competencias ajenas.
+
+**Cómo lo resuelve la Extensión Z (docs/MOODLE_REFERENCE.md):** la Z corre DENTRO del curso que el instructor está viendo (su competencia), así que su `{{evidencias}}` ("lista de evidencias pendientes/**desaprobadas**") siempre es del contexto elegido. Nuestra app ve la ficha completa → necesita selección explícita.
+
+**Diseño acordado (implementar mañana):**
+1. **UI:** en `web/src/pages/MensajesPage.tsx`, agregar un selector de evidencias **igual al `ExcelModal` de `web/src/pages/Fichas.tsx`** (agrupado por competencia · Guía N, la competencia del instructor primero y premarcada, checkboxes por evidencia). El front manda `evidenciaIds: string[]` en el POST `/api/mensajes/enviar-masivo`.
+2. **Backend (`api/src/routes/mensajes.js`):** si llegan `evidenciaIds`, el auto-poblado de `{{evidencias}}` filtra `evidenciaId: { in: evidenciaIds }` (validando pertenencia al userId). Si NO llegan, fallback más seguro que el actual: filtrar por la competencia del usuario (`Evidencia.nombre contains user.competenciaCodigo`) en vez de todas las activas.
+3. **Paridad con la Z:** incluir también las **desaprobadas** (nota <70 o cualitativa D) además de las `sin_entregar` — la Z reporta ambas listas (ver `construirMensaje()` en `scraper/mensajes.js`, que ya soporta los dos arrays). Sugerencia: checkbox "incluir desaprobadas" en la UI.
+4. Tests: caso con evidenciaIds, caso fallback por competencia, y verificación multi-tenant (no se cuelan evidencias de otro userId).
