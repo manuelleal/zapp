@@ -421,7 +421,7 @@ async function actasRoutes(fastify) {
           aprendizId:  { in: aprendizIds },
           evidenciaId: { in: todasEvidenciaIds },
         },
-        select: { aprendizId: true, evidenciaId: true, estado: true, notaActual: true },
+        select: { aprendizId: true, evidenciaId: true, estado: true, notaActual: true, notaCualitativa: true },
       });
     } else {
       todasEntregas = await prisma.entrega.findMany({
@@ -429,7 +429,7 @@ async function actasRoutes(fastify) {
           aprendizId: { in: aprendizIds },
           evidencia:  { fichaId: acta.fichaId },
         },
-        select: { aprendizId: true, evidenciaId: true, estado: true, notaActual: true },
+        select: { aprendizId: true, evidenciaId: true, estado: true, notaActual: true, notaCualitativa: true },
       });
     }
 
@@ -1281,12 +1281,12 @@ async function actasRoutes(fastify) {
     if (modoPerRap) {
       todasEntregas = await prisma.entrega.findMany({
         where: { aprendizId: { in: aprendizIds }, evidenciaId: { in: todasEvidenciaIds } },
-        select: { aprendizId: true, evidenciaId: true, estado: true, notaActual: true },
+        select: { aprendizId: true, evidenciaId: true, estado: true, notaActual: true, notaCualitativa: true },
       });
     } else {
       todasEntregas = await prisma.entrega.findMany({
         where: { aprendizId: { in: aprendizIds }, evidencia: { fichaId } },
-        select: { aprendizId: true, evidenciaId: true, estado: true, notaActual: true },
+        select: { aprendizId: true, evidenciaId: true, estado: true, notaActual: true, notaCualitativa: true },
       });
     }
     const entregasPorAprendiz = new Map();

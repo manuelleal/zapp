@@ -13,13 +13,22 @@
 const UMBRAL_SENA = 70;
 
 // ¿La entrega está aprobada?
-// Umbral SENA: 70 sobre 100. Notas por debajo (incluido 0) = PERDIDA.
-// Sin nota numérica: solo "A" o estado que contenga "aprobad" cuenta como aprobada.
+// Prioridad de señales (regla SENA, CLAUDE.md §5.10/§5.11):
+//   1. Nota numérica (manda sobre todo): >= 70 aprueba.
+//   2. Cualitativa explícita: "A" aprueba, "D" no (muchas evidencias SENA
+//      se califican SOLO con A/D, sin número — 60 casos reales en DB).
+//   3. Estado textual: "aprobad..." aprueba, PERO "desaprobado"/"no aprobado"
+//      NO (el regex viejo /aprobad/ los matcheaba por substring).
+//   "calificado" sin ninguna señal explícita NO aprueba (§5.11).
 function esAprobada(e) {
   if (e.notaActual !== null && e.notaActual !== undefined) {
     return e.notaActual >= UMBRAL_SENA;
   }
+  const cual = String(e.notaCualitativa ?? "").trim().toLowerCase();
+  if (cual === "a") return true;
+  if (cual.startsWith("d")) return false;
   const est = (e.estado ?? "").toLowerCase();
+  if (/desaprobad|no\s+aprobad/.test(est)) return false;
   return /aprobad/.test(est) || est === "a";
 }
 

@@ -62,6 +62,59 @@ test("esAprobada: estado vacío/ausente sin nota NO aprueba", () => {
   assert.equal(esAprobada({}), false);
 });
 
+// ─── esAprobada: cualitativa A/D ─────────────────────────────────────────────
+// Casos reales de DB: 60 entregas con notaCualitativa="A" y notaActual=null
+// que el motor viejo marcaba erróneamente como NO aprobadas.
+
+test("esAprobada: notaCualitativa A sin nota numérica aprueba", () => {
+  assert.equal(
+    esAprobada({ notaActual: null, estado: "calificado", notaCualitativa: "A" }),
+    true
+  );
+});
+
+test("esAprobada: notaCualitativa D sin nota numérica NO aprueba", () => {
+  assert.equal(
+    esAprobada({ notaActual: null, estado: "calificado", notaCualitativa: "D" }),
+    false
+  );
+});
+
+test("esAprobada: nota numérica manda sobre cualitativa A (50 < 70 = NO aprueba)", () => {
+  assert.equal(
+    esAprobada({ notaActual: 50, notaCualitativa: "A" }),
+    false
+  );
+});
+
+test("esAprobada: calificado sin nota numérica ni cualitativa NO aprueba", () => {
+  assert.equal(
+    esAprobada({ notaActual: null, estado: "calificado" }),
+    false
+  );
+});
+
+test("esAprobada: regresión regex — 'Desaprobado' NO aprueba (substring viejo lo matcheaba)", () => {
+  assert.equal(
+    esAprobada({ notaActual: null, estado: "Desaprobado" }),
+    false
+  );
+});
+
+test("esAprobada: 'No aprobado' NO aprueba", () => {
+  assert.equal(
+    esAprobada({ notaActual: null, estado: "No aprobado" }),
+    false
+  );
+});
+
+test("esAprobada: sin_entregar sin cualitativa NO aprueba", () => {
+  assert.equal(
+    esAprobada({ notaActual: null, estado: "sin_entregar", notaCualitativa: undefined }),
+    false
+  );
+});
+
 // ─── esPendiente / tieneParticipacion ────────────────────────────────────────
 
 test("esPendiente: solo el estado 'pendiente' literal", () => {
