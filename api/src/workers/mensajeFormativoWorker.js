@@ -17,6 +17,15 @@
  * job.data: { mensajeId, userId, destinatarios, cuerpo, zajunaUserEnc, zajunaPassEnc }
  *   Actualiza el registro MensajeFormativo (mensajeId) con el resultado.
  * concurrency: 1 (sesión Moodle única por usuario).
+ *
+ * IDEMPOTENCIA EN RETRY (anti-doble-envío):
+ * La cola tiene `attempts: 2`. Si el proceso muere a mitad del loop (OOM,
+ * taskkill, redeploy), BullMQ marca el job como stalled y lo reintenta.
+ * Para evitar que los aprendices ya contactados reciban el mensaje dos veces:
+ *   - Tras cada envío exitoso se persiste `job.progress.enviadosMoodleIds` en Redis
+ *     vía `job.updateProgress(...)`. BullMQ conserva este progreso entre attempts.
+ *   - Al inicio del handler se lee ese progreso y se filtran los ya enviados con
+ *     `destinatariosPendientes()` (ver api/src/lib/envioReanudable.js).
  */
 
 require("dotenv").config({ path: require("path").resolve(__dirname, "../../../.env") });
@@ -29,6 +38,7 @@ const { saveSession, loadSession } = require("../lib/sessionStore");
 const prisma = require("../db/client");
 const { login, cerrarModal, BASE_URL, log } = require("../../../scraper/auth");
 const { enviarMensajeMoodle } = require("../../../scraper/mensajes");
+const { destinatariosPendientes } = require("../lib/envioReanudable");
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -131,11 +141,28 @@ const worker = new Worker("mensajes", async (job) => {
 
   // ─── Envío por destinatario ────────────────────────────────────────────────
 
-  let enviados  = 0;
+  // Idempotencia en retry: recuperar los moodleIds ya enviados en attempts
+  // anteriores. En el primer attempt job.progress === 0 (número) → Set vacío.
+  const yaEnviados = new Set(
+    Array.isArray(job.progress?.enviadosMoodleIds)
+      ? job.progress.enviadosMoodleIds.map(String)
+      : []
+  );
+  if (yaEnviados.size > 0) {
+    log(`[mensajeFormativoWorker] retry: ${yaEnviados.size} destinatario(s) ya enviados en attempt anterior — se omiten`);
+  }
+
+  // Filtrar los que faltan usando la lib pura (excluye los ya enviados;
+  // los sin moodleId siempre pasan para que el loop los cuente como fallidos)
+  const pendientes = destinatariosPendientes(destinatarios, [...yaEnviados]);
+
+  // El contador `enviados` arranca con los que ya completamos en attempts previos
+  // para que el mensaje final "X/total enviados" sea veraz.
+  let enviados  = yaEnviados.size;
   let fallidos  = 0;
 
   try {
-    for (const dest of destinatarios) {
+    for (const dest of pendientes) {
       if (!dest.moodleId) {
         log(`[mensajeFormativoWorker] Sin moodleId para aprendizId=${dest.aprendizId} (${dest.nombre ?? "desconocido"}) — omitiendo`);
         fallidos++;
@@ -146,6 +173,10 @@ const worker = new Worker("mensajes", async (job) => {
         const cuerpoPersonalizado = personalizarCuerpo(cuerpo, dest, fichaCode, instructorNombre);
         const resultado = await enviarMensajeMoodle(page, dest.moodleId, cuerpoPersonalizado);
         if (resultado.ok) {
+          // Registrar envío exitoso antes de continuar con el siguiente:
+          // si el proceso muere aquí, el retry saltará este destinatario.
+          yaEnviados.add(String(dest.moodleId));
+          await job.updateProgress({ enviadosMoodleIds: [...yaEnviados] });
           enviados++;
         } else {
           log(`[mensajeFormativoWorker] Error enviando a moodleId=${dest.moodleId}: ${resultado.error}`);
@@ -211,6 +242,13 @@ const worker = new Worker("mensajes", async (job) => {
 }, { connection, concurrency: 1 });
 
 // ─── Evento failed ─────────────────────────────────────────────────────────────
+//
+// Este evento se dispara por CADA attempt fallido de BullMQ, incluidos los
+// intermedios (attempt 1 falla → marca estado "error"; attempt 2 completa →
+// el handler actualiza estado "enviado"/"error" con el resultado real).
+// El update del attempt 2 ocurre DESPUÉS del evento "failed" del attempt 1,
+// así que el estado final en DB es siempre el del último attempt que terminó.
+// No hay riesgo de sobreescritura: el attempt 2 tiene la última palabra.
 
 worker.on("failed", async (job, err) => {
   if (job?.data?.mensajeId) {
