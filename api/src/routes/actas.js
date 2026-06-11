@@ -39,6 +39,11 @@
 const prisma = require("../db/client");
 const { filtrarAprendicesValidos } = require("../lib/aprendices");
 const { calcularEstado, calcularJuicio } = require("../lib/calificacion");
+const {
+  construirMapaRapEvidencias,
+  detectarRapsSinEvidencias,
+  inyectarVirtualesSinEntregar,
+} = require("./actas.helpers");
 
 // ─── Helpers de autorización (IDOR check multi-tenant) ──────────────────────────
 
@@ -320,14 +325,8 @@ async function actasRoutes(fastify) {
       }),
     ]);
 
-    // Mapa: rapId → Set<evidenciaId>
-    const mapaRapEvidencias = new Map();
-    for (const rel of [...relsConfirmadas, ...relsIA]) {
-      if (!mapaRapEvidencias.has(rel.rapId)) mapaRapEvidencias.set(rel.rapId, new Set());
-      mapaRapEvidencias.get(rel.rapId).add(rel.evidenciaId);
-    }
-
-    const todasEvidenciaIds = [...new Set([...relsConfirmadas, ...relsIA].map(r => r.evidenciaId))];
+    // Mapa: rapId → Set<evidenciaId> (helper puro en actas.helpers.js)
+    const { mapaRapEvidencias, todasEvidenciaIds } = construirMapaRapEvidencias(relsConfirmadas, relsIA);
 
     // ── Aprendices de la ficha (filtrando nombres inválidos: AA, AG, ABALEJANDRO…)
     // Cargamos el conteo de entregas para poder deduplicar (sucio vs limpio).
@@ -388,16 +387,8 @@ async function actasRoutes(fastify) {
     // ── Validación Mapeo al Vuelo ───────────────────────────────────────────────
     // Detectar RAPs que no tienen evidencias vinculadas para notificar a la UI
     // y evitar el fallback silencioso que dejaba a todos en PENDIENTE.
-    const rapsSinEvidencias = [];
-    for (const rapId of rapIds) {
-      const evidenciasDelRap = mapaRapEvidencias.get(rapId);
-      if (!evidenciasDelRap || evidenciasDelRap.size === 0) {
-        rapsSinEvidencias.push({
-          id: rapId,
-          codigo: rapCodigoPorId.get(rapId) || rapId
-        });
-      }
-    }
+    // (helper puro en actas.helpers.js)
+    const rapsSinEvidencias = detectarRapsSinEvidencias(rapIds, mapaRapEvidencias, rapCodigoPorId);
 
     if (rapsSinEvidencias.length > 0) {
       return reply.code(422).send({
@@ -460,9 +451,8 @@ async function actasRoutes(fastify) {
         for (const rapId of rapIds) {
           const codigo = rapCodigoPorId.get(rapId) ?? rapId;
           const evidIds = mapaRapEvidencias.get(rapId) ?? new Set();
-          const entregasDelRap = [...evidIds].map(eid =>
-            entregasMap.get(eid) ?? { evidenciaId: eid, estado: "sin_entregar", notaActual: null }
-          );
+          // Inyectar virtuales para evidencias sin entrega (helper en actas.helpers.js).
+          const entregasDelRap = inyectarVirtualesSinEntregar(evidIds, entregasMap);
           const r = calcularEstado(entregasDelRap);
           rapStatus[codigo] = r.estado;
           if (r.hasUngraded) hasUngraded = true;
@@ -1201,12 +1191,8 @@ async function actasRoutes(fastify) {
       }),
     ]);
 
-    const mapaRapEvidencias = new Map();
-    for (const rel of [...relsConfirmadas, ...relsIA]) {
-      if (!mapaRapEvidencias.has(rel.rapId)) mapaRapEvidencias.set(rel.rapId, new Set());
-      mapaRapEvidencias.get(rel.rapId).add(rel.evidenciaId);
-    }
-    const todasEvidenciaIds = [...new Set([...relsConfirmadas, ...relsIA].map(r => r.evidenciaId))];
+    // Mapa: rapId → Set<evidenciaId> (helper puro en actas.helpers.js)
+    const { mapaRapEvidencias, todasEvidenciaIds } = construirMapaRapEvidencias(relsConfirmadas, relsIA);
 
     // 3. Aprendices
     const aprendicesRaw = await prisma.aprendiz.findMany({
@@ -1253,16 +1239,8 @@ async function actasRoutes(fastify) {
     // ── Validación Mapeo al Vuelo ───────────────────────────────────────────────
     // Detectar RAPs que no tienen evidencias vinculadas para notificar a la UI
     // y evitar el fallback silencioso que dejaba a todos en PENDIENTE.
-    const rapsSinEvidencias = [];
-    for (const rapId of rapIds) {
-      const evidenciasDelRap = mapaRapEvidencias.get(rapId);
-      if (!evidenciasDelRap || evidenciasDelRap.size === 0) {
-        rapsSinEvidencias.push({
-          id: rapId,
-          codigo: rapCodigoPorId.get(rapId) || rapId
-        });
-      }
-    }
+    // (helper puro en actas.helpers.js)
+    const rapsSinEvidencias = detectarRapsSinEvidencias(rapIds, mapaRapEvidencias, rapCodigoPorId);
 
     if (rapsSinEvidencias.length > 0) {
       return reply.code(422).send({
@@ -1308,10 +1286,8 @@ async function actasRoutes(fastify) {
         for (const rapId of rapIds) {
           const codigo = rapCodigoPorId.get(rapId) ?? rapId;
           const evidIds = mapaRapEvidencias.get(rapId) ?? new Set();
-          // Evidencias sin entrega del aprendiz → virtual sin_entregar.
-          const entregasDelRap = [...evidIds].map(eid =>
-            entregasMap.get(eid) ?? { evidenciaId: eid, estado: "sin_entregar", notaActual: null }
-          );
+          // Inyectar virtuales para evidencias sin entrega (helper en actas.helpers.js).
+          const entregasDelRap = inyectarVirtualesSinEntregar(evidIds, entregasMap);
           const r = calcularEstado(entregasDelRap);
           rapStatus[codigo] = r.estado;
           if (r.hasUngraded) hasUngraded = true;
