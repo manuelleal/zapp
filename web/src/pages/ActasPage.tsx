@@ -143,6 +143,11 @@ function NuevaActaModal({ open, onClose, fichas, raps }: NuevaActaModalProps) {
   const [objetivo, setObjetivo] = useState("")
   const [rapIds,   setRapIds]   = useState<string[]>([])
   const [errorMsg, setErrorMsg] = useState("")
+  // Campos del formato oficial GOR-F-084 V02 (opcionales).
+  const [ciudad,            setCiudad]            = useState("")
+  const [horaFin,           setHoraFin]           = useState("")
+  const [direccionRegional, setDireccionRegional] = useState("")
+  const [vocera,            setVocera]            = useState("")
 
   // ── Paso 2: Preview ──
   const [preview,          setPreview]          = useState<PreviewNativeResult | null>(null)
@@ -158,6 +163,7 @@ function NuevaActaModal({ open, onClose, fichas, raps }: NuevaActaModalProps) {
     if (!open) {
       setFichaId(""); setNumero(""); setFecha(""); setHora("")
       setLugar("Videoconferencia / Plataforma Zajuna"); setObjetivo("")
+      setCiudad(""); setHoraFin(""); setDireccionRegional(""); setVocera("")
       setRapIds([]); setErrorMsg(""); setPreview(null)
       setPreviewLoading(false); setShowWarningModal(false); setShowMapeoModal(false); setConfirmLoading(false)
     }
@@ -213,6 +219,12 @@ function NuevaActaModal({ open, onClose, fichas, raps }: NuevaActaModalProps) {
           objetivo: objetivo.trim(),
           rapIds,
           participantes: preview.participantes,
+          // Campos del formato oficial GOR-F-084 V02 (opcionales).
+          ciudad: ciudad.trim() || undefined,
+          horaInicio: hora || undefined,
+          horaFin: horaFin || undefined,
+          direccionRegional: direccionRegional.trim() || undefined,
+          vocera: vocera.trim() || undefined,
         }),
       })
       queryClient.invalidateQueries({ queryKey: ["actas"] })
@@ -289,13 +301,36 @@ function NuevaActaModal({ open, onClose, fichas, raps }: NuevaActaModalProps) {
 
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label htmlFor="acta-hora">Hora *</Label>
+                <Label htmlFor="acta-hora">Hora inicio *</Label>
                 <Input id="acta-hora" type="time" value={hora} onChange={e => setHora(e.target.value)} disabled={isBusy} />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="acta-lugar">Lugar *</Label>
-                <Input id="acta-lugar" value={lugar} onChange={e => setLugar(e.target.value)} disabled={isBusy} />
+                <Label htmlFor="acta-horafin">Hora fin</Label>
+                <Input id="acta-horafin" type="time" value={horaFin} onChange={e => setHoraFin(e.target.value)} disabled={isBusy} />
               </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="acta-lugar">Lugar y/o enlace *</Label>
+              <Input id="acta-lugar" value={lugar} onChange={e => setLugar(e.target.value)} disabled={isBusy} />
+            </div>
+
+            {/* Campos del formato oficial GOR-F-084 V02 (opcionales pero recomendados
+                para que el Word salga completo sin editar a mano). */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="acta-ciudad">Ciudad</Label>
+                <Input id="acta-ciudad" value={ciudad} onChange={e => setCiudad(e.target.value)} placeholder="ej. Concepción" disabled={isBusy} />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="acta-vocera">Vocero(a) de formación</Label>
+                <Input id="acta-vocera" value={vocera} onChange={e => setVocera(e.target.value)} placeholder="Nombre del aprendiz vocero(a)" disabled={isBusy} />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="acta-direccion">Dirección / Regional / Centro</Label>
+              <Input id="acta-direccion" value={direccionRegional} onChange={e => setDireccionRegional(e.target.value)} placeholder="ej. Centro Agroempresarial y Turístico de los Andes" disabled={isBusy} />
             </div>
 
             <div className="space-y-1.5">

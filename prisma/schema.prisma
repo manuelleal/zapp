@@ -286,6 +286,13 @@ model ActaSeguimiento {
   numero       String
   fecha        DateTime
   hora         String
+  // Campos del formato oficial GOR-F-084 V02 que no se derivan de la ficha.
+  // Opcionales para no romper actas viejas; el generador usa placeholders si faltan.
+  ciudad             String?  // "CIUDAD Y FECHA" — ciudad del encabezado
+  horaInicio         String?  // "HORA INICIO" (si falta, se usa `hora`)
+  horaFin            String?  // "HORA FIN"
+  direccionRegional  String?  // "DIRECCIÓN / REGIONAL / CENTRO"
+  vocera             String?  // vocera/vocero de formación que firma la aprobación
   lugar        String   @default("Videoconferencia / Plataforma Zajuna")
   objetivo     String
   conclusiones String?

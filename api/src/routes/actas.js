@@ -79,11 +79,18 @@ async function actasRoutes(fastify) {
           lugar:    { type: "string" },
           objetivo: { type: "string", minLength: 1 },
           rapIds:   { type: "array", items: { type: "string" } },
+          // Campos del formato oficial GOR-F-084 V02 (opcionales).
+          ciudad:            { type: "string" },
+          horaInicio:        { type: "string" },
+          horaFin:           { type: "string" },
+          direccionRegional: { type: "string" },
+          vocera:            { type: "string" },
         },
       },
     },
   }, async (req, reply) => {
-    const { fichaId, numero, fecha, hora, lugar, objetivo, rapIds } = req.body || {};
+    const { fichaId, numero, fecha, hora, lugar, objetivo, rapIds,
+            ciudad, horaInicio, horaFin, direccionRegional, vocera } = req.body || {};
 
     if (!fichaId || !numero || !fecha || !hora || !objetivo || !Array.isArray(rapIds)) {
       return reply.code(400).send({ error: "fichaId, numero, fecha, hora, objetivo y rapIds son requeridos." });
@@ -103,6 +110,11 @@ async function actasRoutes(fastify) {
         objetivo,
         rapIds,
         estado:    "borrador",
+        ciudad:            ciudad || null,
+        horaInicio:        horaInicio || null,
+        horaFin:           horaFin || null,
+        direccionRegional: direccionRegional || null,
+        vocera:            vocera || null,
       },
     });
 
@@ -191,7 +203,8 @@ async function actasRoutes(fastify) {
     const acta = await verificarActaDelUsuario(req.params.id, req.user.id, reply);
     if (!acta) return;
 
-    const { conclusiones, compromisos, hora, lugar, objetivo, rapIds, archivada, notas } = req.body || {};
+    const { conclusiones, compromisos, hora, lugar, objetivo, rapIds, archivada, notas,
+            ciudad, horaInicio, horaFin, direccionRegional, vocera } = req.body || {};
 
     // archivada toggle works for any estado; other edits require borrador
     if (acta.estado !== "borrador" && typeof archivada !== "boolean") {
@@ -207,6 +220,11 @@ async function actasRoutes(fastify) {
     if (objetivo     !== undefined) data.objetivo     = objetivo;
     if (rapIds       !== undefined) data.rapIds       = rapIds;
     if (notas        !== undefined) data.notas        = notas;
+    if (ciudad            !== undefined) data.ciudad            = ciudad;
+    if (horaInicio        !== undefined) data.horaInicio        = horaInicio;
+    if (horaFin           !== undefined) data.horaFin           = horaFin;
+    if (direccionRegional !== undefined) data.direccionRegional = direccionRegional;
+    if (vocera            !== undefined) data.vocera            = vocera;
 
     const actualizada = await prisma.actaSeguimiento.update({
       where: { id: acta.id },
@@ -801,6 +819,7 @@ async function actasRoutes(fastify) {
     const {
       Document, Paragraph, Table, TableRow, TableCell, TextRun,
       AlignmentType, WidthType, BorderStyle, Packer, VerticalAlign,
+      Header, Footer, TableLayoutType,
     } = require("docx");
 
     const acta = await verificarActaDelUsuario(req.params.id, req.user.id, reply);
@@ -856,303 +875,327 @@ async function actasRoutes(fastify) {
     const ficha        = actaCompleta.ficha || {};
     const participantes = actaCompleta.participantes || [];
 
-    // ── Conteos resumen ───────────────────────────────────────────────────────
-    let nAprobaron   = 0;
-    let nPendientes  = 0;
-    let nNoParticipo = 0;
-
-    for (const p of participantes) {
-      const j = p.juicio;
-      if (j === "APROBÓ")                                   nAprobaron++;
-      else if (j === "EVIDENCIAS PENDIENTES" || j === "PENDIENTE") nPendientes++;
-      else                                                   nNoParticipo++;
+    // Nombre de la competencia (todos los RAPs del acta son de la misma). Se lee
+    // del primer RAP → Competencia; cae a ficha.nombre si no se encuentra.
+    let competenciaNombre = ficha.nombre || "";
+    if (rapIds.length > 0) {
+      const primerRap = await prisma.rAP.findFirst({
+        where:  { id: { in: rapIds } },
+        select: { competencia: { select: { nombre: true } } },
+      });
+      if (primerRap?.competencia?.nombre) competenciaNombre = primerRap.competencia.nombre;
     }
 
+    // ── Conteos / particiones ──────────────────────────────────────────────────
+    // El formato GOR-F-084 separa en dos tablas: APROBARON vs PENDIENTES POR
+    // EVALUAR. Usamos el juicio general (APROBÓ = aprobó; el resto = por evaluar).
+    const aprobaron  = participantes.filter(p => p.juicio === "APROBÓ");
+    const porEvaluar = participantes.filter(p => p.juicio !== "APROBÓ");
+    const nTotal = participantes.length;
+
     // ── Helpers de estilo ──────────────────────────────────────────────────────
-
-    const BORDE = { style: BorderStyle.SINGLE, size: 4, color: "000000" };
+    const BORDE  = { style: BorderStyle.SINGLE, size: 4, color: "000000" };
     const BORDES = { top: BORDE, bottom: BORDE, left: BORDE, right: BORDE };
-    const VERDE_SENA = "39A900";
-    const GRIS_HEADER = "CCCCCC";
+    const VERDE_SENA = "39A900";   // verde institucional
+    const GRIS_HEADER = "D9D9D9";  // gris claro de encabezados de tabla
 
-    function celda(texto, opts = {}) {
+    // run(): TextRun con defaults del acta. `nl:true` agrega salto de línea antes.
+    const run = (text, o = {}) => new TextRun({
+      text: String(text ?? ""), bold: o.bold, italics: o.italics,
+      size: o.size || 18, color: o.color, break: o.nl ? 1 : undefined,
+    });
+
+    // celda(): contenido = string | TextRun[] (un párrafo) | {paras:[Paragraph]}.
+    function celda(contenido, opts = {}) {
+      let children;
+      if (contenido && Array.isArray(contenido.paras)) {
+        children = contenido.paras;
+      } else {
+        const runs = typeof contenido === "string"
+          ? [run(contenido, opts)]
+          : (Array.isArray(contenido) ? contenido : [run(contenido, opts)]);
+        children = [new Paragraph({
+          alignment: opts.center ? AlignmentType.CENTER : AlignmentType.LEFT,
+          children: runs,
+        })];
+      }
       return new TableCell({
-        borders:    BORDES,
-        shading:    opts.bg ? { fill: opts.bg } : undefined,
+        borders:       BORDES,
+        shading:       opts.bg ? { fill: opts.bg } : undefined,
         verticalAlign: VerticalAlign.CENTER,
-        width:      opts.width ? { size: opts.width, type: WidthType.DXA } : undefined,
-        columnSpan: opts.span,
-        children: [
-          new Paragraph({
-            alignment: opts.center ? AlignmentType.CENTER : AlignmentType.LEFT,
-            children: [
-              new TextRun({
-                text:  String(texto ?? ""),
-                bold:  opts.bold,
-                size:  opts.size || 18,
-                color: opts.color,
-              }),
-            ],
-          }),
-        ],
+        columnSpan:    opts.span,
+        children,
       });
     }
 
-    function fila(...celdas) {
-      return new TableRow({ children: celdas });
-    }
+    const fila = (...celdas) => new TableRow({ children: celdas });
 
-    function tabla(rows, widthPct = 100) {
+    // tabla(): layout FIJO con anchos por columna en DXA (suman ~10080 = ancho útil
+    // en carta con márgenes de 1080). Sin colWidths usa 100% auto.
+    function tabla(rows, colWidths) {
       return new Table({
-        width: { size: widthPct, type: WidthType.PERCENTAGE },
+        width:        { size: 100, type: WidthType.PERCENTAGE },
+        layout:       colWidths ? TableLayoutType.FIXED : undefined,
+        columnWidths: colWidths,
         rows,
       });
     }
 
-    function parrafo(texto, opts = {}) {
+    // parr(): párrafo suelto (fuera de tabla). children = string | TextRun[].
+    function parr(contenido, opts = {}) {
       return new Paragraph({
-        spacing: { before: opts.before ?? 80, after: opts.after ?? 60 },
-        alignment: opts.center ? AlignmentType.CENTER : AlignmentType.LEFT,
-        children: [
-          new TextRun({
-            text:    String(texto ?? ""),
-            bold:    opts.bold,
-            size:    opts.size || 20,
-            color:   opts.color,
-            italics: opts.italics,
-          }),
-        ],
+        spacing:   { before: opts.before ?? 80, after: opts.after ?? 60 },
+        alignment: opts.center ? AlignmentType.CENTER : (opts.justify ? AlignmentType.JUSTIFIED : AlignmentType.LEFT),
+        bullet:    opts.bullet ? { level: 0 } : undefined,
+        children:  typeof contenido === "string" ? [run(contenido, { size: opts.size || 20, bold: opts.bold, italics: opts.italics, color: opts.color })] : contenido,
       });
     }
+
+    // Banda de sección a todo el ancho (ej. "DESARROLLO DE LA REUNIÓN").
+    const banda = (texto) => tabla([
+      fila(celda(texto, { bold: true, center: true, size: 20, bg: GRIS_HEADER })),
+    ]);
 
     const fechaStr = acta.fecha
       ? new Date(acta.fecha).toLocaleDateString("es-CO", { day: "2-digit", month: "long", year: "numeric" })
       : "";
+    const horaIni = acta.horaInicio || acta.hora || "______";
+    const horaFin = acta.horaFin || "______";
+    const ciudad  = acta.ciudad || "______";
+    const dirReg  = acta.direccionRegional || "______";
 
-    // ── Sección 1: Header institucional ───────────────────────────────────────
-    const headerTabla = tabla([
-      fila(
-        celda("SERVICIO NACIONAL DE APRENDIZAJE\nSENA", { bold: true, center: true, size: 18, bg: VERDE_SENA, color: "FFFFFF", width: 2880 }),
-        celda("ACTA DE SEGUIMIENTO DE FORMACIÓN\nGOR-F-084 V02", { bold: true, center: true, size: 20, width: 6120 }),
-        celda(`FECHA: ${fechaStr}`, { center: true, size: 16, width: 1800 }),
-      ),
-    ]);
+    // Etiqueta del estado por RAP en las tablas R1..Rn (formato oficial).
+    const etiquetaRap = (estado) => estado === "APROBÓ" ? "APROBADO" : "POR EVALUAR";
 
-    // ── Sección 2: Info general del acta ──────────────────────────────────────
-    const infoTabla = tabla([
-      fila(
-        celda("PROGRAMA:", { bold: true, bg: GRIS_HEADER, width: 2000 }),
-        celda(ficha.programa || "", { width: 4600 }),
-        celda("N° ACTA:", { bold: true, bg: GRIS_HEADER, width: 1200 }),
-        celda(acta.numero, { center: true, bold: true, width: 1000 }),
-      ),
-      fila(
-        celda("FICHA:", { bold: true, bg: GRIS_HEADER }),
-        celda(ficha.codigo || "", {}),
-        celda("HORA:", { bold: true, bg: GRIS_HEADER }),
-        celda(acta.hora || "", { center: true }),
-      ),
-      fila(
-        celda("NOMBRE DEL PROGRAMA:", { bold: true, bg: GRIS_HEADER }),
-        celda(ficha.nombre || "", { span: 3 }),
-      ),
-      fila(
-        celda("LUGAR:", { bold: true, bg: GRIS_HEADER }),
-        celda(acta.lugar || "", { span: 3 }),
-      ),
-    ]);
-
-    // ── Sección 3: Objetivo ────────────────────────────────────────────────────
-    const objetivoTabla = tabla([
-      fila(celda("OBJETIVO DE LA SESIÓN", { bold: true, center: true, bg: GRIS_HEADER, span: 1 })),
-      fila(celda(acta.objetivo || "", {})),
-    ]);
-
-    // ── Sección 4: RAPs evaluados ─────────────────────────────────────────────
-    const rapFilas = [
-      fila(celda("RESULTADOS DE APRENDIZAJE EVALUADOS", { bold: true, center: true, bg: GRIS_HEADER })),
-    ];
-    if (rapsInfo.length > 0) {
-      for (const r of rapsInfo) {
-        rapFilas.push(fila(celda(`${r.codigo}: ${r.descripcion}`, { size: 18 })));
-      }
-    } else {
-      rapFilas.push(fila(celda("(Sin RAPs asociados)", { italics: true })));
-    }
-    const rapsTabla = tabla(rapFilas);
-
-    // ── Sección 5: Tabla de participantes ─────────────────────────────────────
-    const partFilas = [
-      fila(
-        celda("N°",          { bold: true, center: true, bg: GRIS_HEADER, width: 480  }),
-        celda("NOMBRE COMPLETO", { bold: true, bg: GRIS_HEADER, width: 3600 }),
-        celda("DOCUMENTO",   { bold: true, center: true, bg: GRIS_HEADER, width: 1200 }),
-        celda("ESTADO",      { bold: true, center: true, bg: GRIS_HEADER, width: 3240 }),
-      ),
-    ];
-
-    participantes.forEach((p, idx) => {
-      const nombre = p.aprendiz?.nombre || "";
-      const doc    = p.aprendiz?.documento || "—";
-      const rapStatus = p.rapStatus && typeof p.rapStatus === "object" ? p.rapStatus : null;
-
-      let estadoTexto;
-      if (rapStatus) {
-        const pendientesRaps = Object.entries(rapStatus)
-          .filter(([, v]) => v === "PENDIENTE")
-          .map(([k]) => k);
-        const noParticipoPorRap = Object.values(rapStatus).every(v => v === "NO PARTICIPÓ");
-        const todosAprobados   = Object.values(rapStatus).every(v => v === "APROBÓ");
-        if (todosAprobados)       estadoTexto = "Aprobó";
-        else if (noParticipoPorRap) estadoTexto = "No participó";
-        else if (pendientesRaps.length > 0) {
-          const rapsNombres = pendientesRaps.map(c => {
-            const m = c.match(/-?(\d+)$/);
-            return m ? `RAP ${m[1]}` : c;
-          }).join(", ");
-          estadoTexto = `Evidencias pendientes (${rapsNombres})`;
-        } else {
-          estadoTexto = "Pendiente";
-        }
-      } else {
-        const j = p.juicio;
-        if (j === "APROBÓ")        estadoTexto = "Aprobó";
-        else if (j === "PENDIENTE") estadoTexto = "Evidencias pendientes";
-        else                        estadoTexto = "No participó";
-      }
-
-      partFilas.push(fila(
-        celda(String(idx + 1), { center: true }),
-        celda(nombre),
-        celda(doc, { center: true, size: 16 }),
-        celda(estadoTexto, { center: true }),
-      ));
-    });
-
-    if (participantes.length === 0) {
-      partFilas.push(fila(celda("Sin participantes registrados.", { italics: true, span: 4, center: true })));
-    }
-
-    const participantesTabla = tabla(partFilas);
-
-    // ── Sección 6: Tabla resumen ───────────────────────────────────────────────
-    const resumenTabla = tabla([
-      fila(
-        celda("TOTAL APRENDICES", { bold: true, center: true, bg: GRIS_HEADER }),
-        celda("APROBÓ",           { bold: true, center: true, bg: GRIS_HEADER }),
-        celda("EVIDENCIAS PENDIENTES", { bold: true, center: true, bg: GRIS_HEADER }),
-        celda("NO PARTICIPÓ",     { bold: true, center: true, bg: GRIS_HEADER }),
-      ),
-      fila(
-        celda(String(participantes.length), { center: true, bold: true, size: 24 }),
-        celda(String(nAprobaron),           { center: true, bold: true, size: 24 }),
-        celda(String(nPendientes),          { center: true, bold: true, size: 24 }),
-        celda(String(nNoParticipo),         { center: true, bold: true, size: 24 }),
-      ),
-    ]);
-
-    // ── Sección 7: Conclusiones ────────────────────────────────────────────────
-    const conclusionesTabla = tabla([
-      fila(celda("CONCLUSIONES", { bold: true, center: true, bg: GRIS_HEADER })),
-      fila(celda(acta.conclusiones || "Sin conclusiones registradas.", {})),
-    ]);
-
-    // ── Sección 8: Nota (llamados de atención) ────────────────────────────────
-    const notaItems = [];
-    for (const p of participantes) {
-      const nombre = (p.aprendiz?.nombre || "").toUpperCase().trim();
-      const wc = warningPorNombre.get(nombre) || 0;
-      if (wc > 0) {
-        notaItems.push(`El/la aprendiz ${p.aprendiz?.nombre} tuvo ${wc} llamado(s) de atención por plataforma.`);
-      }
-    }
-    const notaTexto = notaItems.length > 0
-      ? notaItems.join("\n")
-      : "Sin llamados de atención registrados en la plataforma.";
-
-    const notaTabla = tabla([
-      fila(celda("NOTA", { bold: true, center: true, bg: GRIS_HEADER })),
-      fila(celda(notaTexto, { size: 16 })),
-    ]);
-
-    // ── Sección 9: Compromisos ─────────────────────────────────────────────────
-    const compromisos = Array.isArray(acta.compromisos) ? acta.compromisos : [];
-    const compromisosFilas = [
-      fila(
-        celda("ACTIVIDAD / COMPROMISO", { bold: true, bg: GRIS_HEADER }),
-        celda("FECHA",                  { bold: true, center: true, bg: GRIS_HEADER, width: 1500 }),
-        celda("RESPONSABLE",            { bold: true, bg: GRIS_HEADER, width: 2400 }),
-      ),
-    ];
-    if (compromisos.length === 0) {
-      compromisosFilas.push(fila(celda("Sin compromisos registrados.", { italics: true, span: 3, center: true })));
-    } else {
-      for (const c of compromisos) {
-        compromisosFilas.push(fila(
-          celda(c.actividad   || ""),
-          celda(c.fecha       || "", { center: true }),
-          celda(c.responsable || ""),
-        ));
-      }
-    }
-    const compromisosTabla = tabla(compromisosFilas);
-
-    // ── Sección 10: Notas / Aclaraciones (opcional) ─────────────────────────
-    const notasAclaraciones = acta.notas ? tabla([
-      fila(celda("NOTAS / ACLARACIONES", { bold: true, center: true, bg: GRIS_HEADER })),
-      fila(celda(acta.notas, { size: 18 })),
-    ]) : null;
-
-    // ── Sección 11: Firma ─────────────────────────────────────────────────────
     const user = await prisma.user.findUnique({
       where:  { id: acta.userId },
       select: { nombre: true },
     });
+    const instructorNombre = user?.nombre || "";
+    const espacio = parr("", { before: 80, after: 0 });
 
-    const firmaTabla = tabla([
+    // ════════════════════════════════════════════════════════════════════════════
+    // ENCABEZADO (caja superior del formato GOR-F-084 V02). Una tabla de 4 columnas;
+    // las filas largas usan span para ocupar todo el ancho.
+    // ════════════════════════════════════════════════════════════════════════════
+    const labelVal = (label, val, opts = {}) => celda({ paras: [
+      new Paragraph({ children: [run(label, { bold: true })] }),
+      new Paragraph({ children: [run(val)] }),
+    ] }, opts);
+
+    const nombreComite =
+      `Seguimiento y Evaluación de la formación ${ficha.programa || ficha.nombre || ""} FICHA: ${ficha.codigo || ""} ` +
+      `en el desarrollo y ejecución de la competencia ${competenciaNombre}`;
+
+    const AGENDA = [
+      "1. Verificación del quórum, saludo y bienvenida",
+      `2. Informe de Seguimiento Competencia ${competenciaNombre}`,
+      "3. Informe de llamados de Atención académicos y/o disciplinarios",
+      "4. Informe de seguimiento a la asistencia de los aprendices",
+      "5. Novedades",
+    ];
+
+    const headerInfoTabla = tabla([
+      fila(celda(`ACTA No. ${acta.numero}`, { bold: true, center: true, size: 24, span: 4 })),
+      fila(celda({ paras: [
+        new Paragraph({ children: [run("NOMBRE DEL COMITÉ O DE LA REUNIÓN:", { bold: true })] }),
+        new Paragraph({ alignment: AlignmentType.JUSTIFIED, children: [run(nombreComite)] }),
+      ] }, { span: 4 })),
       fila(
-        celda("FIRMA INSTRUCTOR DE FORMACIÓN",  { bold: true, center: true, bg: GRIS_HEADER }),
-        celda("FIRMA COORDINADOR ACADÉMICO",     { bold: true, center: true, bg: GRIS_HEADER }),
+        celda("CIUDAD Y FECHA:", { bold: true }),
+        celda(fechaStr, { bold: true }),
+        labelVal("HORA INICIO:", horaIni),
+        labelVal("HORA FIN:", horaFin),
       ),
       fila(
-        celda(`\n\n_______________________________\n${user?.nombre || ""}`, { center: true, size: 18 }),
-        celda("\n\n_______________________________\n",                        { center: true, size: 18 }),
+        celda("LUGAR Y/O ENLACE:", { bold: true }),
+        celda(acta.lugar || "", { bold: true }),
+        labelVal("DIRECCIÓN / REGIONAL / CENTRO:", dirReg, { span: 2 }),
       ),
-    ]);
+      fila(celda({ paras: [
+        new Paragraph({ children: [run("AGENDA O PUNTOS PARA DESARROLLAR:", { bold: true })] }),
+        ...AGENDA.map(t => new Paragraph({ children: [run(t)] })),
+      ] }, { span: 4 })),
+      fila(celda({ paras: [
+        new Paragraph({ children: [run("OBJETIVO(S) DE LA REUNIÓN:", { bold: true })] }),
+        new Paragraph({ alignment: AlignmentType.JUSTIFIED, children: [run(acta.objetivo || "")] }),
+      ] }, { span: 4 })),
+    ], [2520, 2520, 2520, 2520]);
 
-    // ── Ensamblar documento ─────────────────────────────────────────────────────
-    const espacio = parrafo("", { before: 120, after: 0 });
+    // ════════════════════════════════════════════════════════════════════════════
+    // DESARROLLO — verificación del quórum + roster de TODOS los aprendices.
+    // ════════════════════════════════════════════════════════════════════════════
+    const rosterFilas = [
+      fila(
+        celda("N°", { bold: true, center: true, bg: GRIS_HEADER }),
+        celda("NOMBRE COMPLETO", { bold: true, center: true, bg: GRIS_HEADER }),
+        celda("CC/TI", { bold: true, center: true, bg: GRIS_HEADER }),
+      ),
+    ];
+    if (participantes.length === 0) {
+      rosterFilas.push(fila(celda("Sin aprendices registrados.", { italics: true, center: true, span: 3 })));
+    } else {
+      participantes.forEach((p, idx) => rosterFilas.push(fila(
+        celda(String(idx + 1), { center: true }),
+        celda(p.aprendiz?.nombre || ""),
+        celda(p.aprendiz?.documento || "—", { center: true, size: 16 }),
+      )));
+    }
+    const rosterTabla = tabla(rosterFilas, [620, 6460, 3000]);
 
+    // ── Tablas R1..Rn (APROBARON / POR EVALUAR) ────────────────────────────────
+    const n = rapsInfo.length;
+    const nombreW = Math.max(1200, 8080 - 850 * n);
+    const colWidthsRaps = [500, nombreW, 1500, ...Array(n).fill(850)];
+
+    function tablaRaps(lista) {
+      const head = fila(
+        celda("N°", { bold: true, center: true, bg: GRIS_HEADER }),
+        celda("NOMBRE COMPLETO", { bold: true, center: true, bg: GRIS_HEADER }),
+        celda("CC/TI", { bold: true, center: true, bg: GRIS_HEADER }),
+        ...rapsInfo.map((r, i) => celda(`R${i + 1}`, { bold: true, center: true, bg: GRIS_HEADER })),
+      );
+      const rows = [head];
+      if (lista.length === 0) {
+        rows.push(fila(celda("Ninguno.", { italics: true, center: true, span: 3 + n })));
+      } else {
+        lista.forEach((p, idx) => {
+          const st = p.rapStatus && typeof p.rapStatus === "object" ? p.rapStatus : {};
+          rows.push(fila(
+            celda(String(idx + 1), { center: true }),
+            celda(p.aprendiz?.nombre || ""),
+            celda(p.aprendiz?.documento || "—", { center: true, size: 14 }),
+            ...rapsInfo.map(r => celda(etiquetaRap(st[r.codigo] ?? st[r.id] ?? "PENDIENTE"), { center: true, size: 14 })),
+          ));
+        });
+      }
+      return tabla(rows, colWidthsRaps);
+    }
+
+    // ── Resultados de aprendizaje a alcanzar (R1..Rn) ──────────────────────────
+    const rapsParrafos = rapsInfo.length > 0
+      ? rapsInfo.map((r, i) => parr([run(`R${i + 1}. `, { bold: true }), run(r.descripcion || r.codigo)]))
+      : [parr("(Sin resultados de aprendizaje asociados a esta acta.)", { italics: true })];
+
+    // ── Llamados de atención (desde mensajes/plataforma) ───────────────────────
+    const notaItems = [];
+    for (const p of participantes) {
+      const wc = warningPorNombre.get((p.aprendiz?.nombre || "").toUpperCase().trim()) || 0;
+      if (wc > 0) notaItems.push(`El/la aprendiz ${p.aprendiz?.nombre} registra ${wc} llamado(s) de atención por plataforma.`);
+    }
+    const llamadosTexto = notaItems.length > 0
+      ? notaItems.join(" ")
+      : "No se realizaron llamados de Atención académicos y/o disciplinarios a ningún aprendiz.";
+
+    // ── Conclusiones (viñetas desde el texto del acta) ─────────────────────────
+    const conclusionesLineas = (acta.conclusiones || "").split("\n").map(s => s.trim()).filter(Boolean);
+    const conclusionesParrafos = conclusionesLineas.length > 0
+      ? conclusionesLineas.map(t => parr(t, { bullet: true, justify: true }))
+      : [parr("Sin conclusiones registradas.", { italics: true })];
+
+    // ── Tabla ACTIVIDAD / DECISIÓN (compromisos) ───────────────────────────────
+    const compromisos = Array.isArray(acta.compromisos) ? acta.compromisos : [];
+    const actividadFilas = [
+      fila(
+        celda("ACTIVIDAD / DECISIÓN", { bold: true, center: true, bg: GRIS_HEADER }),
+        celda("FECHA", { bold: true, center: true, bg: GRIS_HEADER }),
+        celda("RESPONSABLE", { bold: true, center: true, bg: GRIS_HEADER }),
+        celda("FIRMA O PARTICIPACIÓN VIRTUAL", { bold: true, center: true, bg: GRIS_HEADER }),
+      ),
+    ];
+    if (compromisos.length === 0) {
+      actividadFilas.push(fila(celda("Sin actividades / decisiones registradas.", { italics: true, center: true, span: 4 })));
+    } else {
+      for (const c of compromisos) actividadFilas.push(fila(
+        celda(c.actividad || ""),
+        celda(c.fecha || "", { center: true }),
+        celda(c.responsable || instructorNombre, { center: true }),
+        celda("", {}),
+      ));
+    }
+    const actividadTabla = tabla(actividadFilas, [3500, 1400, 2700, 2480]);
+
+    // ── Tabla ASISTENTES Y APROBACIÓN DECISIONES ───────────────────────────────
+    const asistentesFilas = [
+      fila(
+        celda("NOMBRE", { bold: true, center: true, bg: GRIS_HEADER }),
+        celda("DEPENDENCIA / EMPRESA", { bold: true, center: true, bg: GRIS_HEADER }),
+        celda("APRUEBA (SI/NO)", { bold: true, center: true, bg: GRIS_HEADER }),
+        celda("OBSERVACIÓN", { bold: true, center: true, bg: GRIS_HEADER }),
+        celda("FIRMA O PARTICIPACIÓN VIRTUAL", { bold: true, center: true, bg: GRIS_HEADER }),
+      ),
+      fila(
+        celda(instructorNombre, { bold: true, center: true }),
+        celda("INSTRUCTOR(A) SENA", { center: true }),
+        celda("SI", { center: true }),
+        celda("NINGUNA", { center: true }),
+        celda("", {}),
+      ),
+    ];
+    if (acta.vocera) {
+      asistentesFilas.push(fila(
+        celda(acta.vocera, { bold: true, center: true }),
+        celda("VOCERO(A) DE LA FORMACIÓN", { center: true }),
+        celda("SI", { center: true }),
+        celda("NINGUNA", { center: true }),
+        celda("", {}),
+      ));
+    }
+    const asistentesTabla = tabla(asistentesFilas, [2400, 2200, 1200, 1800, 2480]);
+
+    const leyTexto =
+      "De acuerdo con la Ley 1581 de 2012, Protección de Datos Personales, el Servicio Nacional de Aprendizaje SENA, " +
+      "se compromete a garantizar la seguridad y protección de los datos personales que se encuentran almacenados en " +
+      "este documento, y les dará el tratamiento correspondiente en cumplimiento de lo establecido legalmente.";
+
+    // ════════════════════════════════════════════════════════════════════════════
+    // ENSAMBLAR — logo y "GOR-F-084 V02" se repiten por página vía header/footer.
+    // ════════════════════════════════════════════════════════════════════════════
     const doc = new Document({
       sections: [{
-        properties: {
-          page: {
-            margin: { top: 720, bottom: 720, left: 1080, right: 1080 },
-          },
-        },
+        properties: { page: { margin: { top: 720, bottom: 720, left: 1080, right: 1080 } } },
+        headers: { default: new Header({ children: [
+          new Paragraph({ alignment: AlignmentType.CENTER, children: [run("SENA", { bold: true, color: VERDE_SENA, size: 30 })] }),
+        ] }) },
+        footers: { default: new Footer({ children: [
+          new Paragraph({ alignment: AlignmentType.CENTER, children: [run("GOR-F-084 V02", { size: 16 })] }),
+        ] }) },
         children: [
-          headerTabla,
+          headerInfoTabla,
           espacio,
-          infoTabla,
+          banda("DESARROLLO DE LA REUNIÓN"),
+          parr("1. VERIFICACIÓN DEL QUORUM, SALUDO Y BIENVENIDA", { bold: true }),
+          parr("Se da inicio a la reunión una vez cumplido el quórum y se verifica la lista de ASISTENTES:"),
+          parr(`✓ ${instructorNombre} – Instructor(a) SENA`),
+          parr(`✓ APRENDICES ASOCIADOS A LA FICHA ${ficha.codigo || ""}, que se listan a continuación:`, { justify: true }),
+          rosterTabla,
           espacio,
-          objetivoTabla,
+          parr(`De los ${nTotal} aprendices asociados a la ficha, ${aprobaron.length} aprobaron satisfactoriamente la competencia y ${porEvaluar.length} quedaron pendientes por evaluar.`, { justify: true }),
+          parr("INFORME DE SEGUIMIENTO A LA COMPETENCIA Y EVALUACIÓN DE RESULTADOS DE APRENDIZAJE", { bold: true }),
+          parr([run("COMPETENCIA: ", { bold: true }), run(competenciaNombre)], { justify: true }),
+          parr("Resultados de Aprendizaje a alcanzar:", { bold: true }),
+          ...rapsParrafos,
           espacio,
-          rapsTabla,
+          parr([run("Los aprendices relacionados a continuación "), run("APROBARON SATISFACTORIAMENTE", { bold: true }), run(" la competencia con sus respectivos resultados de aprendizaje planteados.")], { justify: true }),
+          tablaRaps(aprobaron),
           espacio,
-          parrafo("REGISTRO DE PARTICIPANTES", { bold: true, center: true, size: 22, before: 80 }),
-          participantesTabla,
+          parr([run("Los aprendices relacionados a continuación "), run("QUEDARON PENDIENTES POR EVALUAR", { bold: true }), run(" la competencia con sus respectivos resultados de aprendizaje ya que no se presentaron y/o no asistieron ningún día a la formación.")], { justify: true }),
+          tablaRaps(porEvaluar),
           espacio,
-          parrafo("RESUMEN", { bold: true, center: true, size: 22, before: 80 }),
-          resumenTabla,
+          parr("2. INFORME DE LLAMADOS DE ATENCIÓN ACADÉMICOS Y/O DISCIPLINARIOS", { bold: true }),
+          parr(llamadosTexto, { justify: true }),
+          parr("3. INFORME DE SEGUIMIENTO A LA ASISTENCIA DE LOS APRENDICES", { bold: true }),
+          parr(`De los ${nTotal} aprendices asociados a la ficha, ${aprobaron.length} culminaron y aprobaron las actividades de la competencia. El detalle de asistencia reposa en el registro anexo.`, { justify: true }),
           espacio,
-          conclusionesTabla,
+          banda("CONCLUSIONES"),
+          ...conclusionesParrafos,
           espacio,
-          notaTabla,
+          actividadTabla,
           espacio,
-          compromisosTabla,
+          banda("ASISTENTES Y APROBACIÓN DECISIONES"),
+          asistentesTabla,
           espacio,
-          ...(notasAclaraciones ? [notasAclaraciones, espacio] : []),
-          firmaTabla,
+          parr(leyTexto, { justify: true, size: 16, italics: true }),
         ],
       }],
     });
@@ -1345,7 +1388,8 @@ async function actasRoutes(fastify) {
 
   // ── POST /api/actas/confirm-native ─────────────────────────────────────────
   fastify.post("/api/actas/confirm-native", { preHandler: fastify.authenticate }, async (req, reply) => {
-    const { fichaId, numero, fecha, hora, lugar, objetivo, rapIds, participantes } = req.body || {};
+    const { fichaId, numero, fecha, hora, lugar, objetivo, rapIds, participantes,
+            ciudad, horaInicio, horaFin, direccionRegional, vocera } = req.body || {};
 
     if (!fichaId || !numero || !fecha || !hora || !objetivo || !Array.isArray(rapIds) || !Array.isArray(participantes)) {
       return reply.code(400).send({ error: "Faltan datos requeridos para crear el acta." });
@@ -1366,6 +1410,11 @@ async function actasRoutes(fastify) {
         objetivo,
         rapIds,
         estado:    "borrador",
+        ciudad:            ciudad || null,
+        horaInicio:        horaInicio || null,
+        horaFin:           horaFin || null,
+        direccionRegional: direccionRegional || null,
+        vocera:            vocera || null,
       },
     });
 
