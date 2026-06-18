@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from "react-router-dom"
-import { LogOut, LayoutDashboard, FolderOpen, Settings2, BookOpen, ClipboardList, Mail, Settings, KeyRound } from "lucide-react"
+import { LogOut, LayoutDashboard, FolderOpen, Settings2, BookOpen, ClipboardList, Mail, Settings, KeyRound, Loader2 } from "lucide-react"
 import { useQuery } from "@tanstack/react-query"
 import { Button } from "@/components/ui/button"
 import { useAuthStore } from "@/store/auth"
@@ -7,6 +7,31 @@ import { apiFetch } from "@/api/client"
 
 function getUserInitials(nombre: string): string {
   return nombre.split(" ").filter(Boolean).map(w => w[0]).slice(0, 2).join("").toUpperCase()
+}
+
+// Aviso global de "tareas en curso": etiquetas legibles por tipo de job. El
+// trabajo corre en los workers del backend, así que el instructor puede navegar
+// libremente; este aviso solo lo refleja consultando /api/jobs/activos.
+interface JobActivo { id: string; tipo: string; status: string; progreso: number; fichaId: string | null }
+const TIPO_LABELS: Record<string, string> = {
+  evidencias:            "Escaneando evidencias",
+  fichas:                "Descubriendo fichas",
+  "config-leer":         "Leyendo fechas",
+  "config-leer-lote":    "Leyendo fechas",
+  "config-guardar":      "Guardando fechas",
+  config:                "Guardando fechas",
+  "cambiar-fecha":       "Cambiando fechas",
+  "cambiar-config":      "Cambiando configuración",
+  "batch-duedate":       "Cambiando fechas (lote)",
+  "batch-config":        "Cambiando configuración (lote)",
+  "foro-rating":         "Calificando foro",
+  "foro-descubrir":      "Revisando foro",
+  "matching-ia":         "Emparejando con IA",
+  descubrirCompetencias: "Descubriendo competencias",
+  mensajes:              "Enviando mensajes",
+}
+function labelTipo(tipo: string): string {
+  return TIPO_LABELS[tipo] || tipo.replace(/[-_]/g, " ").replace(/\b\w/g, c => c.toUpperCase())
 }
 
 const navItems = [
@@ -38,6 +63,19 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     refetchInterval: 60_000,
   })
   const credsInvalidas = !!zajunaEstado?.credsInvalidasAt
+
+  // Jobs en curso del usuario para el aviso global. Pollea rápido (3 s) cuando
+  // hay algo corriendo y lento (12 s) cuando no, para no machacar la API.
+  const { data: colasData } = useQuery<{ jobs: JobActivo[] }>({
+    queryKey: ["jobs-activos"],
+    queryFn:  () => apiFetch("/api/jobs/activos"),
+    enabled:  !!jwt,
+    refetchInterval: (query) => {
+      const jobs = (query.state.data as { jobs: JobActivo[] } | undefined)?.jobs ?? []
+      return jobs.length > 0 ? 3000 : 12000
+    },
+  })
+  const jobsActivos = colasData?.jobs ?? []
 
   function handleLogout() {
     clearAuth()
@@ -99,6 +137,29 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           </div>
         </div>
       </header>
+
+      {jobsActivos.length > 0 && (
+        <div className="bg-sena-green/10 border-b border-sena-green/20">
+          <div className="max-w-6xl mx-auto px-4 sm:px-6 py-2 flex items-center gap-3">
+            <Loader2 className="w-4 h-4 text-sena-green animate-spin flex-shrink-0" />
+            <p className="text-sm text-gray-800 flex-1 truncate">
+              <span className="font-semibold">
+                {jobsActivos.length} {jobsActivos.length === 1 ? "tarea en curso" : "tareas en curso"}:
+              </span>{" "}
+              {jobsActivos.slice(0, 4).map((j, i) => (
+                <span key={j.id}>
+                  {i > 0 && " · "}
+                  {labelTipo(j.tipo)}{j.status === "running" ? ` (${j.progreso}%)` : " (en cola)"}
+                </span>
+              ))}
+              {jobsActivos.length > 4 && ` · +${jobsActivos.length - 4} más`}
+            </p>
+            <span className="text-xs text-gray-500 hidden md:inline flex-shrink-0">
+              Puedes seguir navegando · no cierres la pestaña
+            </span>
+          </div>
+        </div>
+      )}
 
       {credsInvalidas && (
         <div className="bg-red-50 border-b border-red-200">
