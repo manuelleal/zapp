@@ -51,7 +51,7 @@ const worker = new Worker("fichas", async (job) => {
     if (savedSession) {
       await page.goto(`${BASE_URL}/my/`, { waitUntil: "domcontentloaded", timeout: 30_000 });
       await cerrarModal(page);
-      sessionValida = !page.url().includes("/login") && page.url().includes("zajuna.sena.edu.co");
+      sessionValida = page.url().includes("/my") && !page.url().includes("/login"); // sesión SSO expirada rebota al portal raíz (sin /my), NO a /login
       if (!sessionValida) log("[fichasWorker] Sesión expirada, login fresco");
     }
     if (!sessionValida) {

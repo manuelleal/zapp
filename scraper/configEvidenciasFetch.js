@@ -120,15 +120,31 @@ function aplicarDisabledIfFechas(data) {
 async function obtenerFormFetch(cookieStr, actId) {
   const url = `${BASE_URL}/course/modedit.php?update=${actId}&return=1`;
   const r = await fetchHtml(url, cookieStr);
-  if (/\/login|loginindex/i.test(r.finalUrl)) {
-    throw new Error("La sesion fue expulsada/expirada al leer el formulario (fetch).");
+  // Un GET exitoso de modedit se queda EN modedit.php (no redirige). Si la URL
+  // final ya no es modedit, Moodle nos rebotó: o la sesión SSO expiró (SENA
+  // redirige al PORTAL RAÍZ, no a /login — por eso no basta con buscar "/login")
+  // o el modo edición no quedó activo. Mensaje claro + diagnóstico (destino/HTTP)
+  // en vez del opaco "form no encontrado". Error normal → BullMQ reintenta con
+  // login fresco, que suele resolver una colisión de sesión transitoria.
+  const enModedit = /modedit\.php/i.test(r.finalUrl || "");
+  if (!enModedit || /\/login|loginindex/i.test(r.finalUrl || "")) {
+    throw new Error(
+      `No se pudo abrir el formulario de la evidencia (actId=${actId}): la sesión de ` +
+      `Zajuna expiró o el modo edición no quedó activo. Reintenta. ` +
+      `[destino=${r.finalUrl} http=${r.status}]`
+    );
   }
   const $ = cheerio.load(r.text);
   const formEl =
     $("#modeditform").get(0) ||
     $("form[method='post'][action*='modedit']").get(0) ||
     $("form.mform").get(0);
-  if (!formEl) throw new Error("Formulario modedit no encontrado (fetch).");
+  if (!formEl) {
+    throw new Error(
+      `Formulario modedit no encontrado (actId=${actId}): el modo edición del curso ` +
+      `posiblemente está apagado o falta courseId/sesskey. [destino=${r.finalUrl} http=${r.status}]`
+    );
+  }
   // El action del HTML crudo puede ser relativo ("modedit.php"); el fetch de Node
   // NO resuelve relativos (a diferencia del navegador). Lo absolutizamos contra
   // la URL de la página del form.
