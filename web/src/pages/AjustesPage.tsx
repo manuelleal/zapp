@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Settings, Loader2, Mail, CheckCircle2, Trash2, FlaskConical } from "lucide-react"
+import { Settings, Loader2, Mail, CheckCircle2, Trash2, FlaskConical, KeyRound, AlertTriangle } from "lucide-react"
 import Layout from "@/components/Layout"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -117,6 +117,41 @@ export default function AjustesPage() {
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Error al simular."),
   })
 
+  // ── Credenciales de Zajuna ─────────────────────────────────────────────────
+  const [zajunaUserInput, setZajunaUserInput] = useState("")
+  const [zajunaPassInput, setZajunaPassInput] = useState("")
+
+  const { data: zajunaEstado, isLoading: zajunaLoading } = useQuery<{ zajunaUser: string; credsInvalidasAt: string | null }>({
+    queryKey: ["ajustes-zajuna"],
+    queryFn:  () => apiFetch("/api/ajustes/zajuna"),
+    enabled:  !!jwt,
+  })
+
+  useEffect(() => {
+    if (zajunaEstado?.zajunaUser) setZajunaUserInput(zajunaEstado.zajunaUser)
+  }, [zajunaEstado])
+
+  const guardarZajunaMutation = useMutation({
+    mutationFn: () => apiFetch("/api/ajustes/zajuna", {
+      method: "POST",
+      body:   JSON.stringify({ zajunaUser: zajunaUserInput || undefined, zajunaPass: zajunaPassInput }),
+    }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["ajustes-zajuna"] })
+      queryClient.invalidateQueries({ queryKey: ["zajuna-estado"] }) // banner del Layout
+      setZajunaPassInput("")
+      toast.success("Contraseña de Zajuna actualizada. Los próximos escaneos usarán la nueva clave.")
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Error al guardar las credenciales."),
+  })
+
+  function handleGuardarZajuna() {
+    if (!zajunaPassInput.trim()) { toast.error("Ingresa tu nueva contraseña de Zajuna."); return }
+    guardarZajunaMutation.mutate()
+  }
+
+  const credsInvalidas = !!zajunaEstado?.credsInvalidasAt
+
   const [proveedorIdx, setProveedorIdx] = useState(0)
   const [smtpHost,     setSmtpHost]     = useState("smtp.office365.com")
   const [smtpPort,     setSmtpPort]     = useState(587)
@@ -215,6 +250,61 @@ export default function AjustesPage() {
         <div className="bg-white rounded-lg border border-gray-200 p-4 flex items-center gap-2">
           <Settings className="w-4 h-4 text-sena-green" />
           <h1 className="text-sm font-semibold text-gray-900">Ajustes</h1>
+        </div>
+
+        {/* ── Credenciales de Zajuna ──────────────────────────────────────── */}
+        <div className={`bg-white rounded-lg border p-5 space-y-4 ${credsInvalidas ? "border-red-300" : "border-gray-200"}`}>
+          <div className="flex items-center gap-2 border-b border-gray-100 pb-3">
+            <KeyRound className="w-4 h-4 text-sena-green" />
+            <h2 className="text-sm font-semibold text-gray-900">Contraseña de Zajuna</h2>
+            {credsInvalidas && (
+              <span className="ml-auto inline-flex items-center gap-1 text-xs text-red-700 bg-red-50 border border-red-200 px-2 py-0.5 rounded">
+                <AlertTriangle className="w-3 h-3" /> Requiere actualización
+              </span>
+            )}
+          </div>
+
+          {credsInvalidas && (
+            <p className="text-xs text-red-800 bg-red-50 border border-red-200 rounded-md px-3 py-2">
+              Detectamos que tu contraseña de Zajuna cambió. Los escaneos están fallando con la clave guardada.
+              Ingresa tu nueva contraseña para reanudarlos.
+            </p>
+          )}
+
+          {zajunaLoading ? (
+            <div className="flex items-center gap-2 text-sm text-gray-500">
+              <Loader2 className="w-4 h-4 animate-spin" /> Cargando...
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="zajuna-user">Documento (usuario de Zajuna)</Label>
+                <Input id="zajuna-user" value={zajunaUserInput}
+                  onChange={e => setZajunaUserInput(e.target.value)}
+                  placeholder="Número de documento" />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="zajuna-pass">Nueva contraseña *</Label>
+                <Input id="zajuna-pass" type="password" value={zajunaPassInput}
+                  onChange={e => setZajunaPassInput(e.target.value)}
+                  placeholder="Tu contraseña actual de Zajuna" />
+              </div>
+
+              <p className="text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-md px-3 py-2">
+                Cuando el SENA te pida cambiar la contraseña de Zajuna, actualízala también aquí.
+                Así la app puede seguir escaneando evidencias y enviando mensajes en tu nombre.
+              </p>
+
+              <div className="flex items-center gap-2 pt-2 border-t border-gray-100">
+                <Button size="sm" className="bg-sena-green hover:bg-sena-green/90 text-xs"
+                  onClick={handleGuardarZajuna} disabled={guardarZajunaMutation.isPending}>
+                  {guardarZajunaMutation.isPending && <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />}
+                  Guardar contraseña
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="bg-white rounded-lg border border-gray-200 p-5 space-y-5">

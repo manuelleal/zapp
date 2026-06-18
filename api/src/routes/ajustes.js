@@ -2,6 +2,7 @@ const nodemailer = require("nodemailer");
 const prisma = require("../db/client");
 const { encrypt, decrypt } = require("../lib/crypto");
 const { descubrirCompetenciasQueue } = require("../lib/queue");
+const { saveSession } = require("../lib/sessionStore");
 
 const SUPERADMIN = process.env.SUPERADMIN_EMAIL ?? "ddiddimmo@gmail.com";
 
@@ -112,6 +113,53 @@ async function ajustesRoutes(fastify) {
   // ── DELETE /api/ajustes/correo ──────────────────────────────────────────────
   fastify.delete("/api/ajustes/correo", { preHandler: fastify.authenticate }, async (req, reply) => {
     await prisma.configCorreo.deleteMany({ where: { userId: req.user.id } });
+    return reply.code(200).send({ ok: true });
+  });
+
+  // ── GET /api/ajustes/zajuna ───────────────────────────────────────────────
+  // Estado de las credenciales de Zajuna del instructor: su documento (usuario)
+  // y si quedaron inválidas (`credsInvalidasAt != null` → el banner de la UI pide
+  // actualizar la contraseña porque un worker detectó "Credenciales incorrectas").
+  fastify.get("/api/ajustes/zajuna", { preHandler: fastify.authenticate }, async (req) => {
+    const user = await prisma.user.findUnique({
+      where:  { id: req.user.id },
+      select: { zajunaUserEnc: true, zajunaCredsInvalidasAt: true },
+    });
+    let zajunaUser = "";
+    try { if (user?.zajunaUserEnc) zajunaUser = decrypt(user.zajunaUserEnc); } catch { /* clave de cifrado rotada */ }
+    return { zajunaUser, credsInvalidasAt: user?.zajunaCredsInvalidasAt ?? null };
+  });
+
+  // ── POST /api/ajustes/zajuna ──────────────────────────────────────────────
+  // Actualiza la contraseña (y opcionalmente el documento) de Zajuna. Sofía (admin
+  // del SENA) obliga a rotar la clave seguido; cuando el instructor la cambia en
+  // Zajuna debe re-guardarla aquí o todos los scans fallan con la clave vieja.
+  // Al guardar: limpia el flag de inválidas y BORRA la sesión Moodle cacheada en
+  // Redis para forzar un login fresco con la clave nueva en el próximo job.
+  fastify.post("/api/ajustes/zajuna", {
+    preHandler: fastify.authenticate,
+    schema: {
+      body: {
+        type: "object",
+        required: ["zajunaPass"],
+        properties: {
+          zajunaUser: { type: "string" },
+          zajunaPass: { type: "string", minLength: 1 },
+        },
+      },
+    },
+  }, async (req, reply) => {
+    const { zajunaUser, zajunaPass } = req.body || {};
+
+    const data = { zajunaPassEnc: encrypt(zajunaPass), zajunaCredsInvalidasAt: null };
+    if (zajunaUser && zajunaUser.trim()) data.zajunaUserEnc = encrypt(zajunaUser.trim());
+
+    await prisma.user.update({ where: { id: req.user.id }, data });
+
+    // Invalida la sesión cacheada → el siguiente worker hará login fresco con la
+    // clave nueva (si no, reusaría cookies viejas y no probaría la clave nueva).
+    await saveSession(req.user.id, null).catch(() => {});
+
     return reply.code(200).send({ ok: true });
   });
 

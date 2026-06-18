@@ -1,7 +1,9 @@
 import { NavLink, useNavigate } from "react-router-dom"
-import { LogOut, LayoutDashboard, FolderOpen, Settings2, BookOpen, ClipboardList, Mail, Settings } from "lucide-react"
+import { LogOut, LayoutDashboard, FolderOpen, Settings2, BookOpen, ClipboardList, Mail, Settings, KeyRound } from "lucide-react"
+import { useQuery } from "@tanstack/react-query"
 import { Button } from "@/components/ui/button"
 import { useAuthStore } from "@/store/auth"
+import { apiFetch } from "@/api/client"
 
 function getUserInitials(nombre: string): string {
   return nombre.split(" ").filter(Boolean).map(w => w[0]).slice(0, 2).join("").toUpperCase()
@@ -23,7 +25,19 @@ const navItems = [
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const navigate  = useNavigate()
-  const { user, clearAuth } = useAuthStore()
+  const { user, jwt, clearAuth } = useAuthStore()
+
+  // Estado de las credenciales de Zajuna. Si quedaron inválidas (el instructor
+  // cambió la clave en Zajuna y la app sigue con la vieja), mostramos un banner
+  // global pidiendo actualizarla. Se refresca cada 60 s para que el aviso aparezca
+  // sin recargar tras un scan fallido.
+  const { data: zajunaEstado } = useQuery<{ zajunaUser: string; credsInvalidasAt: string | null }>({
+    queryKey: ["zajuna-estado"],
+    queryFn:  () => apiFetch("/api/ajustes/zajuna"),
+    enabled:  !!jwt,
+    refetchInterval: 60_000,
+  })
+  const credsInvalidas = !!zajunaEstado?.credsInvalidasAt
 
   function handleLogout() {
     clearAuth()
@@ -85,6 +99,25 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           </div>
         </div>
       </header>
+
+      {credsInvalidas && (
+        <div className="bg-red-50 border-b border-red-200">
+          <div className="max-w-6xl mx-auto px-4 sm:px-6 py-2.5 flex items-center gap-3">
+            <KeyRound className="w-4 h-4 text-red-600 flex-shrink-0" />
+            <p className="text-sm text-red-800 flex-1">
+              <span className="font-semibold">Tu contraseña de Zajuna cambió.</span>{" "}
+              Las consultas a Zajuna están fallando con la clave guardada. Actualízala para reanudar los escaneos.
+            </p>
+            <Button
+              size="sm"
+              className="bg-red-600 hover:bg-red-700 text-white text-xs flex-shrink-0"
+              onClick={() => navigate("/ajustes")}
+            >
+              Actualizar contraseña
+            </Button>
+          </div>
+        </div>
+      )}
 
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-6">
         {children}

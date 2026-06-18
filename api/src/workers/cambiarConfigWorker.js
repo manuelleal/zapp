@@ -4,6 +4,7 @@ const { Worker, UnrecoverableError } = require("bullmq");
 const { acquireContext, releaseContext } = require("../lib/browserPool");
 const { connection } = require("../lib/queue");
 const { decrypt } = require("../lib/crypto");
+const { marcarCredencialesInvalidas, marcarCredencialesValidas } = require("../lib/credencialesEstado");
 const { saveSession, loadSession } = require("../lib/sessionStore");
 const prisma = require("../db/client");
 const { login, cerrarModal, BASE_URL, log } = require("../../../scraper/auth");
@@ -52,7 +53,13 @@ const worker = new Worker("cambiarConfig", async (job) => {
       if (!sessionValida) log("[cambiarConfigWorker] Sesión expirada, login fresco");
     }
     if (!sessionValida) {
-      await login(page, zajunaUser, zajunaPass);
+      try {
+        await login(page, zajunaUser, zajunaPass);
+        await marcarCredencialesValidas(userId);
+      } catch (err) {
+        if (err.message === "Credenciales incorrectas.") await marcarCredencialesInvalidas(userId);
+        throw err;
+      }
       const state = await ctx.storageState();
       await saveSession(userId, state).catch((e) => log(`[cambiarConfigWorker] no se pudo guardar sesión: ${e.message}`));
     }

@@ -49,6 +49,11 @@ model User {
   competenciaId     String?
   createdAt         DateTime     @default(now())
   lastAutoScanAt    DateTime?
+  // Marca cuándo un worker detectó que las credenciales de Zajuna guardadas
+  // quedaron inválidas (el instructor cambió la clave en Zajuna y la app sigue
+  // con la vieja). Se setea en el login fallido y se limpia al actualizar la
+  // clave en Ajustes o en el siguiente login exitoso. null = credenciales OK.
+  zajunaCredsInvalidasAt DateTime?
   fichas             Ficha[]
   jobs               Job[]
   configAudits       ConfigAudit[]

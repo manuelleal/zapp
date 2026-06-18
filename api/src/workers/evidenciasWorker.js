@@ -4,6 +4,7 @@ const { Worker, UnrecoverableError } = require("bullmq");
 const { acquireContext, releaseContext } = require("../lib/browserPool");
 const { connection } = require("../lib/queue");
 const { decrypt } = require("../lib/crypto");
+const { marcarCredencialesInvalidas, marcarCredencialesValidas } = require("../lib/credencialesEstado");
 const { saveSession, loadSession } = require("../lib/sessionStore");
 const prisma = require("../db/client");
 const { login, cerrarModal, BASE_URL, TIMEOUT, log } = require("../../../scraper/auth");
@@ -52,8 +53,12 @@ const worker = new Worker("evidencias", async (job) => {
     if (!sessionValida) {
       try {
         await login(page, zajunaUser, zajunaPass);
+        await marcarCredencialesValidas(userId);
       } catch (err) {
-        if (err.message === "Credenciales incorrectas.") throw new UnrecoverableError(err.message);
+        if (err.message === "Credenciales incorrectas.") {
+          await marcarCredencialesInvalidas(userId);
+          throw new UnrecoverableError(err.message);
+        }
         throw err;
       }
       const state = await ctx.storageState();
