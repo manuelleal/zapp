@@ -59,7 +59,20 @@ async function login(page, user, pass) {
     .catch(() => {});
 
   await cerrarModal(page);
-  log(`URL post-login: ${page.url()}`);
+  const urlPostLogin = page.url();
+  log(`URL post-login: ${urlPostLogin}`);
+
+  // Detección de credenciales incorrectas — SENA NO usa los selectores nativos de
+  // Moodle (.loginerrors/.alert-danger). Cuando el documento/clave son inválidos
+  // (caso típico: "Sofía obligó a rotar la clave" y la guardada quedó vieja) el
+  // portal redirige a /index.php?error=Los+datos+de+acceso+son+incorrectos...
+  // Sin esta verificación, login() reportaba "Sesión iniciada ✓" en falso y luego
+  // el scrape leía 0 notas por redirección. (Confirmado en log real 18-jun-2026.)
+  let urlDecodificada = urlPostLogin;
+  try { urlDecodificada = decodeURIComponent(urlPostLogin); } catch { /* URL malformada */ }
+  if (/[?&]error=/i.test(urlPostLogin) || /datos\s+de\s+acceso\s+son\s+incorrectos/i.test(urlDecodificada)) {
+    throw new Error("Credenciales incorrectas.");
+  }
 
   const hayError = await page
     .locator(".loginerrors, .alert-danger")
