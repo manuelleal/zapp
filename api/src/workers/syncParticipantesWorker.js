@@ -1,11 +1,10 @@
 require("dotenv").config({ path: require("path").resolve(__dirname, "../../../.env") });
 
 const { Worker } = require("bullmq");
-const { acquireContext, releaseContext } = require("../lib/browserPool");
 const { connection } = require("../lib/queue");
-const { decrypt } = require("../lib/crypto");
+const { crearSesionAutenticada } = require("../lib/playwrightSession");
 const prisma = require("../db/client");
-const { login, log } = require("../../../scraper/auth");
+const { log } = require("../../../scraper/auth");
 const { obtenerMatriculados } = require("../../../scraper/evidencias");
 
 // ─── Worker ───────────────────────────────────────────────────────────────────
@@ -19,15 +18,14 @@ const worker = new Worker("syncParticipantes", async (job) => {
     throw new Error("Faltan parámetros: fichaId, courseId, zajunaUserEnc, zajunaPassEnc.");
   }
 
-  const zajunaUser = decrypt(zajunaUserEnc);
-  const zajunaPass = decrypt(zajunaPassEnc);
+  // El job no trae userId; lo derivamos de la ficha para el candado por-usuario.
+  const ficha = await prisma.ficha.findUnique({ where: { id: fichaId }, select: { userId: true } });
+  if (!ficha) throw new Error(`Ficha ${fichaId} no encontrada.`);
 
-  const ctx     = await acquireContext({ locale: "es-CO", timezoneId: "America/Bogota" });
-  const page    = await ctx.newPage();
-  page.setDefaultTimeout(45_000);
+  const sesion = await crearSesionAutenticada({ userId: ficha.userId, zajunaUserEnc, zajunaPassEnc, opts: { timeout: 45_000 } });
+  const { page } = sesion;
 
   try {
-    await login(page, zajunaUser, zajunaPass);
     const participantes = await obtenerMatriculados(page, courseId);
 
     let actualizados   = 0;
@@ -68,7 +66,7 @@ const worker = new Worker("syncParticipantes", async (job) => {
     log(`[syncParticipantesWorker] fichaId=${fichaId} — actualizados=${actualizados}, sinMatch=${sinMatch}, total=${participantes.length}`);
     return { actualizados, creadosEmails, sinMatch, total: participantes.length };
   } finally {
-    await releaseContext(ctx);
+    await sesion.release();
   }
 }, { connection, concurrency: 1 });
 

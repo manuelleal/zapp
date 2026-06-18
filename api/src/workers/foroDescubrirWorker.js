@@ -22,14 +22,11 @@
  */
 require("dotenv").config({ path: require("path").resolve(__dirname, "../../../.env") });
 
-const { Worker, UnrecoverableError } = require("bullmq");
-const { acquireContext, releaseContext } = require("../lib/browserPool");
+const { Worker } = require("bullmq");
 const { connection } = require("../lib/queue");
-const { decrypt } = require("../lib/crypto");
-const { marcarCredencialesInvalidas, marcarCredencialesValidas } = require("../lib/credencialesEstado");
-const { saveSession, loadSession } = require("../lib/sessionStore");
+const { crearSesionAutenticada } = require("../lib/playwrightSession");
 const prisma = require("../db/client");
-const { login, cerrarModal, BASE_URL, log } = require("../../../scraper/auth");
+const { log } = require("../../../scraper/auth");
 const { descubrirCalificacionesPendientesForo } = require("../../../scraper/foroRating");
 
 const worker = new Worker("foroDescubrir", async (job) => {
@@ -37,41 +34,11 @@ const worker = new Worker("foroDescubrir", async (job) => {
 
   await prisma.job.update({ where: { id: jobId }, data: { status: "running", progreso: 5 } });
 
-  const zajunaUser = decrypt(zajunaUserEnc);
-  const zajunaPass = decrypt(zajunaPassEnc);
-
-  const savedSession = await loadSession(userId);
-  const ctx = await acquireContext({
-    locale: "es-CO",
-    timezoneId: "America/Bogota",
-    ...(savedSession ? { storageState: savedSession } : {}),
-  });
-  const page = await ctx.newPage();
-  page.setDefaultTimeout(30_000);
+  // Sesión + candado por-usuario vía factory (ver api/src/lib/playwrightSession.js).
+  const sesion = await crearSesionAutenticada({ userId, zajunaUserEnc, zajunaPassEnc, opts: { timeout: 30_000 } });
+  const { page } = sesion;
 
   try {
-    let sessionValida = false;
-    if (savedSession) {
-      await page.goto(`${BASE_URL}/my/`, { waitUntil: "domcontentloaded", timeout: 30_000 });
-      await cerrarModal(page);
-      sessionValida = page.url().includes("/my") && !page.url().includes("/login"); // sesión SSO expirada rebota al portal raíz (sin /my), NO a /login
-      if (!sessionValida) log("[foroDescubrirWorker] Sesión expirada, login fresco");
-    }
-    if (!sessionValida) {
-      try {
-        await login(page, zajunaUser, zajunaPass);
-        await marcarCredencialesValidas(userId);
-      } catch (err) {
-        if (err.message === "Credenciales incorrectas.") {
-          await marcarCredencialesInvalidas(userId);
-          throw new UnrecoverableError(err.message);
-        }
-        throw err;
-      }
-      const state = await ctx.storageState();
-      await saveSession(userId, state).catch(e => log(`[foroDescubrirWorker] no se pudo guardar sesión: ${e.message}`));
-    }
-
     await prisma.job.update({ where: { id: jobId }, data: { progreso: 25 } });
 
     // Scraping
@@ -128,7 +95,7 @@ const worker = new Worker("foroDescubrir", async (job) => {
     log(`[foroDescubrirWorker] ✓ ${resultado.pendientes.length} pendientes / ${resultado.calificados.length} calificados`);
 
   } finally {
-    await releaseContext(ctx);
+    await sesion.release();
   }
 
 }, { connection, concurrency: 2 });
