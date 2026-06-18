@@ -1,13 +1,10 @@
 require("dotenv").config({ path: require("path").resolve(__dirname, "../../../.env") });
 
-const { Worker, UnrecoverableError } = require("bullmq");
-const { acquireContext, releaseContext } = require("../lib/browserPool");
+const { Worker } = require("bullmq");
 const { connection } = require("../lib/queue");
-const { decrypt } = require("../lib/crypto");
-const { marcarCredencialesInvalidas, marcarCredencialesValidas } = require("../lib/credencialesEstado");
-const { saveSession, loadSession } = require("../lib/sessionStore");
+const { crearSesionAutenticada } = require("../lib/playwrightSession");
 const prisma = require("../db/client");
-const { login, cerrarModal, BASE_URL, log } = require("../../../scraper/auth");
+const { log } = require("../../../scraper/auth");
 const { enableEditMode } = require("../../../scraper/configEvidencias");
 const { cookieHeaderFromState, leerConfigEvidenciaFetch, guardarConfigEvidenciaFetch } = require("../../../scraper/configEvidenciasFetch");
 
@@ -34,48 +31,15 @@ const worker = new Worker("cambiarFecha", async (job) => {
   await prisma.job.update({ where: { id: jobId }, data: { status: "running", progreso: 2 } });
   await prisma.configChangeJob.update({ where: { id: configChangeJobId }, data: { status: "running" } });
 
-  const zajunaUser = decrypt(zajunaUserEnc);
-  const zajunaPass = decrypt(zajunaPassEnc);
-
   const total    = evidenciaIds.length;
   const detalle  = [];
 
-  // ── Helper: obtener una página Playwright autenticada ──────────────────────
-  async function getPaginaAutenticada() {
-    const savedSession = await loadSession(userId);
-    const ctx     = await acquireContext({
-      locale:     "es-CO",
-      timezoneId: "America/Bogota",
-      ...(savedSession ? { storageState: savedSession } : {}),
-    });
-    const page = await ctx.newPage();
-    page.setDefaultTimeout(45_000);
-
-    let sessionValida = false;
-    if (savedSession) {
-      await page.goto(`${BASE_URL}/my/`, { waitUntil: "domcontentloaded", timeout: 30_000 });
-      await cerrarModal(page);
-      sessionValida = page.url().includes("/my") && !page.url().includes("/login"); // sesión SSO expirada rebota al portal raíz (sin /my), NO a /login
-      if (!sessionValida) log("[cambiarFechaWorker] Sesión expirada, login fresco");
-    }
-    if (!sessionValida) {
-      try {
-        await login(page, zajunaUser, zajunaPass);
-        await marcarCredencialesValidas(userId);
-      } catch (err) {
-        if (err.message === "Credenciales incorrectas.") await marcarCredencialesInvalidas(userId);
-        throw err;
-      }
-      const state = await ctx.storageState();
-      await saveSession(userId, state).catch((e) => log(`[cambiarFechaWorker] no se pudo guardar sesión: ${e.message}`));
-    }
-    const cookieStr = cookieHeaderFromState(await ctx.storageState());
-    return { ctx, page, cookieStr };
-  }
-
-  let ctx, page, cookieStr;
+  // Sesión + candado por-usuario vía factory. cookieStr se recalcula tras cada
+  // (re)login; el grueso del trabajo va por fetch con esa cookie.
+  let sesion, cookieStr;
   try {
-    ({ ctx, page, cookieStr } = await getPaginaAutenticada());
+    sesion = await crearSesionAutenticada({ userId, zajunaUserEnc, zajunaPassEnc, opts: { timeout: 45_000 } });
+    cookieStr = cookieHeaderFromState(await sesion.ctx.storageState());
   } catch (err) {
     const msg = `Login fallido: ${err.message}`;
     log(`[cambiarFechaWorker] ${msg}`);
@@ -89,6 +53,7 @@ const worker = new Worker("cambiarFecha", async (job) => {
     });
     throw err;
   }
+  const page = sesion.page;
 
   try {
     for (let i = 0; i < evidenciaIds.length; i++) {
@@ -185,13 +150,9 @@ const worker = new Worker("cambiarFecha", async (job) => {
         // Si la sesión fue expulsada, reconectar para el próximo
         if (errMsg.includes("sesion fue expulsada") || errMsg.includes("Formulario modedit no encontrado")) {
           log("[cambiarFechaWorker] Sesión inválida, reconectando...");
-          await releaseContext(ctx);
           try {
-            await saveSession(userId, null).catch(() => {});
-            const reconect = await getPaginaAutenticada();
-            ctx  = reconect.ctx;
-            page = reconect.page;
-            cookieStr = reconect.cookieStr;
+            await sesion.relogin();   // re-login en el mismo context, conserva el candado
+            cookieStr = cookieHeaderFromState(await sesion.ctx.storageState());
           } catch (reconnErr) {
             log(`[cambiarFechaWorker] No se pudo reconectar: ${reconnErr.message}`);
           }
@@ -241,7 +202,7 @@ const worker = new Worker("cambiarFecha", async (job) => {
     log(`[cambiarFechaWorker] Completado: ${exitosas} exitosas, ${fallidas} fallidas de ${total}`);
 
   } finally {
-    await releaseContext(ctx);
+    await sesion.release();
   }
 
 }, { connection, concurrency: 1 });

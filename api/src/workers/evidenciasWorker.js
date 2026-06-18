@@ -1,13 +1,10 @@
 require("dotenv").config({ path: require("path").resolve(__dirname, "../../../.env") });
 
-const { Worker, UnrecoverableError } = require("bullmq");
-const { acquireContext, releaseContext } = require("../lib/browserPool");
+const { Worker } = require("bullmq");
 const { connection } = require("../lib/queue");
-const { decrypt } = require("../lib/crypto");
-const { marcarCredencialesInvalidas, marcarCredencialesValidas } = require("../lib/credencialesEstado");
-const { saveSession, loadSession } = require("../lib/sessionStore");
+const { crearSesionAutenticada } = require("../lib/playwrightSession");
 const prisma = require("../db/client");
-const { login, cerrarModal, BASE_URL, TIMEOUT, log } = require("../../../scraper/auth");
+const { log } = require("../../../scraper/auth");
 const { obtenerEvidencias, revisarEntregas, revisarEntregasForo, revisarEntregasQuiz, cargarGrader, descargarGradebookCSV,
         obtenerSesskey, resolverAssignInfo, estadoDesdeParticipante, listarParticipantesBatch } = require("../../../scraper/evidencias");
 const { parsearCSV } = require("../../../scraper/csvParser");
@@ -28,42 +25,11 @@ const worker = new Worker("evidencias", async (job) => {
 
   await prisma.job.update({ where: { id: jobId }, data: { status: "running", progreso: 5 } });
 
-  const zajunaUser = decrypt(zajunaUserEnc);
-  const zajunaPass = decrypt(zajunaPassEnc);
-
-  const savedSession = await loadSession(userId);
-  const ctx = await acquireContext({
-    locale: "es-CO",
-    timezoneId: "America/Bogota",
-    ...(savedSession ? { storageState: savedSession } : {}),
-  });
-  const page = await ctx.newPage();
-  page.setDefaultTimeout(TIMEOUT);
+  // Sesión + candado por-usuario vía factory (timeout default = TIMEOUT de auth).
+  const sesion = await crearSesionAutenticada({ userId, zajunaUserEnc, zajunaPassEnc });
+  const { page } = sesion;
 
   try {
-    let sessionValida = false;
-    if (savedSession) {
-      await page.goto(`${BASE_URL}/my/`, { waitUntil: "domcontentloaded", timeout: 30_000 });
-      await cerrarModal(page);
-      // La sesión expirada redirige a la raíz https://zajuna.sena.edu.co/ (página de login),
-      // NO a una ruta /login. Verificamos que la URL esté DENTRO de Moodle (/zajuna/).
-      sessionValida = page.url().includes("/zajuna/") && !page.url().includes("/login");
-      if (!sessionValida) log("[evidenciasWorker] Sesión expirada, login fresco");
-    }
-    if (!sessionValida) {
-      try {
-        await login(page, zajunaUser, zajunaPass);
-        await marcarCredencialesValidas(userId);
-      } catch (err) {
-        if (err.message === "Credenciales incorrectas.") {
-          await marcarCredencialesInvalidas(userId);
-          throw new UnrecoverableError(err.message);
-        }
-        throw err;
-      }
-      const state = await ctx.storageState();
-      await saveSession(userId, state).catch(e => log(`[evidenciasWorker] no se pudo guardar sesión: ${e.message}`));
-    }
     await prisma.job.update({ where: { id: jobId }, data: { progreso: 30 } });
 
     // CAPA 1 (perf): aquí había un `page.goto(/course/view.php)` + cerrarModal
@@ -520,7 +486,7 @@ const worker = new Worker("evidencias", async (job) => {
     });
 
   } finally {
-    await releaseContext(ctx);
+    await sesion.release();
   }
 
 }, { connection, concurrency: 3 });

@@ -31,12 +31,10 @@
 require("dotenv").config({ path: require("path").resolve(__dirname, "../../../.env") });
 
 const { Worker } = require("bullmq");
-const { acquireContext, releaseContext } = require("../lib/browserPool");
 const { connection } = require("../lib/queue");
-const { decrypt } = require("../lib/crypto");
-const { saveSession, loadSession } = require("../lib/sessionStore");
+const { crearSesionAutenticada } = require("../lib/playwrightSession");
 const prisma = require("../db/client");
-const { login, cerrarModal, BASE_URL, log } = require("../../../scraper/auth");
+const { log } = require("../../../scraper/auth");
 const { enviarMensajeMoodle } = require("../../../scraper/mensajes");
 const { destinatariosPendientes } = require("../lib/envioReanudable");
 
@@ -84,41 +82,11 @@ function personalizarCuerpo(cuerpo, dest, ficha, instructor) {
 const worker = new Worker("mensajes", async (job) => {
   const { mensajeId, userId, destinatarios, cuerpo, zajunaUserEnc, zajunaPassEnc } = job.data;
 
-  const zajunaUser = decrypt(zajunaUserEnc);
-  const zajunaPass = decrypt(zajunaPassEnc);
-
-  // ─── Autenticación Playwright ──────────────────────────────────────────────
-
-  async function getPaginaAutenticada() {
-    const savedSession = await loadSession(userId);
-    const ctx = await acquireContext({
-      locale:     "es-CO",
-      timezoneId: "America/Bogota",
-      ...(savedSession ? { storageState: savedSession } : {}),
-    });
-    const page = await ctx.newPage();
-    page.setDefaultTimeout(45_000);
-
-    let sessionValida = false;
-    if (savedSession) {
-      await page.goto(`${BASE_URL}/my/`, { waitUntil: "domcontentloaded", timeout: 30_000 });
-      await cerrarModal(page);
-      sessionValida = page.url().includes("/my") && !page.url().includes("/login"); // sesión SSO expirada rebota al portal raíz (sin /my), NO a /login
-      if (!sessionValida) log("[mensajeFormativoWorker] Sesión expirada, login fresco");
-    }
-    if (!sessionValida) {
-      await login(page, zajunaUser, zajunaPass);
-      const state = await ctx.storageState();
-      await saveSession(userId, state).catch(e => log(`[mensajeFormativoWorker] no se pudo guardar sesión: ${e.message}`));
-    }
-    return { ctx, page };
-  }
-
-  // ─── Login inicial ─────────────────────────────────────────────────────────
-
-  let ctx, page;
+  // ─── Sesión + candado por-usuario vía factory ──────────────────────────────
+  let sesion, page;
   try {
-    ({ ctx, page } = await getPaginaAutenticada());
+    sesion = await crearSesionAutenticada({ userId, zajunaUserEnc, zajunaPassEnc, opts: { timeout: 45_000 } });
+    page = sesion.page;
   } catch (err) {
     await prisma.mensajeFormativo.update({
       where: { id: mensajeId },
@@ -188,10 +156,8 @@ const worker = new Worker("mensajes", async (job) => {
             resultado.error.includes("session")
           )) {
             log("[mensajeFormativoWorker] Posible sesión inválida, reconectando...");
-            await releaseContext(ctx);
             try {
-              await saveSession(userId, null).catch(() => {});
-              ({ ctx, page } = await getPaginaAutenticada());
+              await sesion.relogin();   // re-login en el mismo context, conserva el candado
             } catch (reconnErr) {
               log(`[mensajeFormativoWorker] No se pudo reconectar: ${reconnErr.message}`);
             }
@@ -203,10 +169,8 @@ const worker = new Worker("mensajes", async (job) => {
 
         if (errDest.message.includes("sesion fue expulsada") || errDest.message.includes("session")) {
           log("[mensajeFormativoWorker] Sesión inválida detectada, reconectando...");
-          await releaseContext(ctx);
           try {
-            await saveSession(userId, null).catch(() => {});
-            ({ ctx, page } = await getPaginaAutenticada());
+            await sesion.relogin();
           } catch (reconnErr) {
             log(`[mensajeFormativoWorker] No se pudo reconectar: ${reconnErr.message}`);
           }
@@ -236,7 +200,7 @@ const worker = new Worker("mensajes", async (job) => {
 
     log(`[mensajeFormativoWorker] Completado: ${enviados} enviados, ${fallidos} fallidos de ${total}`);
   } finally {
-    await releaseContext(ctx);
+    await sesion.release();
   }
 
 }, { connection, concurrency: 1 });

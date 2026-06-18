@@ -1,141 +1,58 @@
 require("dotenv").config({ path: require("path").resolve(__dirname, "../../../.env") });
 
-const { Worker, UnrecoverableError } = require("bullmq");
-const { acquireContext, releaseContext } = require("../lib/browserPool");
+const { Worker } = require("bullmq");
 const { connection } = require("../lib/queue");
-const { decrypt } = require("../lib/crypto");
-const { marcarCredencialesInvalidas, marcarCredencialesValidas } = require("../lib/credencialesEstado");
-const { saveSession, loadSession } = require("../lib/sessionStore");
+const { crearSesionAutenticada } = require("../lib/playwrightSession");
 const prisma = require("../db/client");
-const { login, cerrarModal, BASE_URL, log } = require("../../../scraper/auth");
+const { log } = require("../../../scraper/auth");
 const { leerConfigEvidencia, enableEditMode } = require("../../../scraper/configEvidencias");
 
-// Dedicated read-only config worker — saves to EvidenciaConfig table.
-// NOTA: Este worker sigue en Playwright (no migrado). El camino moderno/liviano
-// es leerConfigLoteWorker.js usando fetch+cheerio.
-// Concurrency 1: Zajuna invalidates parallel sessions from the same account.
+// Lector de config de UNA evidencia (cola "leerConfig"). Guarda en EvidenciaConfig.
+// NOTA: el camino moderno/liviano es leerConfigLoteWorker.js (fetch+cheerio); este
+// sigue en Playwright. La sesión + candado por-usuario los da la factory
+// crearSesionAutenticada; si el form no carga (sesión expirada), se hace UN
+// relogin() y se reintenta una vez. Concurrency 1.
 const worker = new Worker("leerConfig", async (job) => {
-  const {
-    jobId,
-    userId,
-    evidenciaId,
-    actId,
-    zajunaUserEnc,
-    zajunaPassEnc,
-  } = job.data;
+  const { jobId, userId, evidenciaId, actId, zajunaUserEnc, zajunaPassEnc } = job.data;
 
   await prisma.job.update({ where: { id: jobId }, data: { status: "running", progreso: 5 } });
 
-  const zajunaUser = decrypt(zajunaUserEnc);
-  const zajunaPass = decrypt(zajunaPassEnc);
+  const sesion = await crearSesionAutenticada({ userId, zajunaUserEnc, zajunaPassEnc, opts: { timeout: 30_000 } });
 
-  const savedSession = await loadSession(userId);
-  const ctx = await acquireContext({
-    locale: "es-CO",
-    timezoneId: "America/Bogota",
-    ...(savedSession ? { storageState: savedSession } : {}),
-  });
-  let ctxReleased = false;
-  // Cierra el primer context de forma idempotente. En el path de reintento por
-  // sesión expirada se libera este context y se adquiere uno nuevo (ctx2).
-  async function releaseFirst() {
-    if (!ctxReleased) { ctxReleased = true; await releaseContext(ctx); }
-  }
-  const page = await ctx.newPage();
-  page.setDefaultTimeout(30_000);
-
-  try {
-    let sessionValida = false;
-    if (savedSession) {
-      await page.goto(`${BASE_URL}/my/`, { waitUntil: "domcontentloaded", timeout: 30_000 });
-      await cerrarModal(page);
-      sessionValida = page.url().includes("/my") && !page.url().includes("/login"); // sesión SSO expirada rebota al portal raíz (sin /my), NO a /login
-      if (!sessionValida) log("[leerConfigWorker] Sesión expirada, login fresco");
-    }
-    if (!sessionValida) {
-      try {
-        await login(page, zajunaUser, zajunaPass);
-        await marcarCredencialesValidas(userId);
-      } catch (err) {
-        if (err.message === "Credenciales incorrectas.") {
-          await marcarCredencialesInvalidas(userId);
-          throw new UnrecoverableError(err.message);
-        }
-        throw err;
-      }
-      const state = await ctx.storageState();
-      await saveSession(userId, state).catch((e) => log(`[leerConfigWorker] no se pudo guardar sesión: ${e.message}`));
-    }
-    await prisma.job.update({ where: { id: jobId }, data: { progreso: 20 } });
-
+  // Activa modo edición (Moodle lo exige para renderizar modedit) y lee la config.
+  async function leer() {
     const ev = await prisma.evidencia.findUnique({
       where:   { id: evidenciaId },
       include: { ficha: { select: { courseId: true } } },
     });
-    const courseId = ev?.ficha?.courseId;
-    if (courseId) await enableEditMode(page, courseId);
+    if (ev?.ficha?.courseId) await enableEditMode(sesion.page, ev.ficha.courseId);
+    return leerConfigEvidencia(sesion.page, actId);
+  }
 
-    await prisma.job.update({ where: { id: jobId }, data: { progreso: 40 } });
+  try {
+    await prisma.job.update({ where: { id: jobId }, data: { progreso: 20 } });
 
     let configActual;
     try {
-      configActual = await leerConfigEvidencia(page, actId);
+      configActual = await leer();
     } catch (firstErr) {
-      // Si el formulario no se encontró, puede ser sesión expirada.
-      // Borrar sesión guardada y reintentar con login fresco (1 solo retry).
+      // Form no encontrado / sesión expulsada → relogin (mismo context y candado)
+      // y un único reintento.
       if (
         firstErr.message.includes("Formulario modedit no encontrado") ||
         firstErr.message.includes("sesion fue expulsada")
       ) {
-        log(`[leerConfigWorker] Primer intento falló (${firstErr.message}). Borrando sesión y reintentando con login fresco.`);
-        await saveSession(userId, null).catch(() => {});
-        await releaseFirst();
-
-        const ctx2     = await acquireContext({ locale: "es-CO", timezoneId: "America/Bogota" });
-        const page2    = await ctx2.newPage();
-        page2.setDefaultTimeout(30_000);
-        try {
-          await login(page2, zajunaUser, zajunaPass);
-          const state2 = await ctx2.storageState();
-          await saveSession(userId, state2).catch((e) => log(`[leerConfigWorker] no se pudo guardar sesión: ${e.message}`));
-          await prisma.job.update({ where: { id: jobId }, data: { progreso: 50 } });
-
-          const ev2       = await prisma.evidencia.findUnique({
-            where:   { id: evidenciaId },
-            include: { ficha: { select: { courseId: true } } },
-          });
-          const courseId2 = ev2?.ficha?.courseId;
-          if (courseId2) await enableEditMode(page2, courseId2);
-
-          await prisma.job.update({ where: { id: jobId }, data: { progreso: 65 } });
-          configActual = await leerConfigEvidencia(page2, actId);
-        } finally {
-          await releaseContext(ctx2);
-        }
-        // Persist and return early from the retry path
-        await prisma.evidenciaConfig.create({ data: { evidenciaId, raw: configActual.raw ?? {} } });
-        await prisma.evidencia.update({
-          where: { id: evidenciaId },
-          data:  { configCache: configActual, configCacheAt: new Date() },
-        }).catch((e) => log(`[leerConfigWorker] no se pudo cachear: ${e.message}`));
-        await prisma.job.update({
-          where: { id: jobId },
-          data:  { status: "done", progreso: 100, resultado: { config: configActual } },
-        });
-        return;
+        log(`[leerConfigWorker] Primer intento falló (${firstErr.message}). Re-login y reintento.`);
+        await sesion.relogin();
+        await prisma.job.update({ where: { id: jobId }, data: { progreso: 50 } });
+        configActual = await leer();
+      } else {
+        throw firstErr;
       }
-      throw firstErr;
     }
 
-    // Persist to dedicated EvidenciaConfig table
-    await prisma.evidenciaConfig.create({
-      data: {
-        evidenciaId,
-        raw: configActual.raw ?? {},
-      },
-    });
-
-    // Also update inline cache for backward compat with configWorker consumers
+    // Persistir en EvidenciaConfig + cache inline (compat con consumidores).
+    await prisma.evidenciaConfig.create({ data: { evidenciaId, raw: configActual.raw ?? {} } });
     await prisma.evidencia.update({
       where: { id: evidenciaId },
       data:  { configCache: configActual, configCacheAt: new Date() },
@@ -145,9 +62,8 @@ const worker = new Worker("leerConfig", async (job) => {
       where: { id: jobId },
       data:  { status: "done", progreso: 100, resultado: { config: configActual } },
     });
-
   } finally {
-    await releaseFirst();
+    await sesion.release();
   }
 
 }, { connection, concurrency: 1 });
