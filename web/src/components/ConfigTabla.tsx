@@ -4,7 +4,7 @@ import { apiFetch, ApiError } from "@/api/client"
 import { usePollJob, pollJobOnce } from "@/hooks/usePollJob"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { RefreshCw, Loader2, Search, X, CheckCircle, AlertCircle, Save, Square, CheckSquare } from "lucide-react"
+import { RefreshCw, Loader2, Search, X, CheckCircle, AlertCircle, Save, Square, CheckSquare, ArrowDownToLine } from "lucide-react"
 import { toast } from "sonner"
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
@@ -61,6 +61,21 @@ function configToEdit(c: ConfigCache | null): RowEdit {
   }
 }
 
+// Clave de orden por guía: extrae GA{n}-…-AA{m}-…-EV{nn} del nombre de la
+// evidencia (ej. "Cuestionario. GA1-240202501-AA1-EV01") para listarlas de la
+// Guía 1 a la 6, luego por actividad (AA) y por evidencia (EV). Lo que no encaje
+// el patrón cae al final (999) y se desempata por nombre.
+function ordenEvidencia(nombre: string): [number, number, number] {
+  const ga = nombre.match(/GA\s*(\d+)/i)
+  const aa = nombre.match(/AA\s*(\d+)/i)
+  const ev = nombre.match(/EV\s*(\d+)/i)
+  return [
+    ga ? parseInt(ga[1], 10) : 999,
+    aa ? parseInt(aa[1], 10) : 999,
+    ev ? parseInt(ev[1], 10) : 999,
+  ]
+}
+
 // ─── Componente ──────────────────────────────────────────────────────────────
 export default function ConfigTabla({ fichaId, preselectIds = [] }: { fichaId: string; preselectIds?: string[] }) {
   const queryClient = useQueryClient()
@@ -99,12 +114,73 @@ export default function ConfigTabla({ fichaId, preselectIds = [] }: { fichaId: s
     let arr = data ?? []
     // Filtro por preselección de la Lista (si está activo).
     if (soloSeleccionadas && hayPreselect) arr = arr.filter(f => preselectSet.has(f.evidenciaId))
-    return q ? arr.filter(f => f.nombre.toLowerCase().includes(q) || f.tipo.toLowerCase().includes(q)) : arr
+    if (q) arr = arr.filter(f => f.nombre.toLowerCase().includes(q) || f.tipo.toLowerCase().includes(q))
+    // Orden por guía (GA1→GA6, luego AA y EV); desempate por nombre.
+    return [...arr].sort((a, b) => {
+      const ka = ordenEvidencia(a.nombre), kb = ordenEvidencia(b.nombre)
+      for (let i = 0; i < 3; i++) if (ka[i] !== kb[i]) return ka[i] - kb[i]
+      return a.nombre.localeCompare(b.nombre)
+    })
   }, [data, search, soloSeleccionadas, hayPreselect, preselectSet])
 
   function setField(id: string, key: keyof RowEdit, val: string) {
     setEdits(prev => ({ ...prev, [id]: { ...prev[id], [key]: val } }))
     setRowState(prev => ({ ...prev, [id]: { phase: "idle" } }))
+  }
+
+  // Copia la fecha+hora de una columna (apertura/entrega/límite) al resto de
+  // evidencias: a las SELECCIONADAS si hay alguna marcada, si no a TODAS las
+  // visibles. Así el instructor pone la fecha una vez y la propaga (lo que el
+  // input nativo type=date no permite copiar/pegar a mano). Respeta qué tipos
+  // soportan "límite" (solo assign).
+  function aplicarColumna(campo: "apertura" | "entrega" | "limite", fecha: string, hora: string) {
+    if (!fecha) { toast.error("Primero pon una fecha en esta fila para copiarla."); return }
+    const objetivo = selected.size > 0 ? filas.filter(f => selected.has(f.evidenciaId)) : filas
+    const afectadas = objetivo.filter(f => campo !== "limite" || soporta(f.tipo).limite)
+
+    // Coherencia assign: el límite (cutoffdate) NO puede quedar anterior a la
+    // entrega (duedate) o Moodle rechaza el guardado con error. Al aplicar la
+    // entrega, en las assign cuyo límite quede antes (o esté vacío) arrastramos
+    // el límite a la misma fecha/hora. Contamos cuántas ajustamos para el aviso.
+    const entregaTime = `${fecha}T${hora || "23:55"}`
+    let limitesAjustados = 0
+    if (campo === "entrega") {
+      const en = new Date(entregaTime)
+      for (const f of afectadas) {
+        if (!soporta(f.tipo).limite) continue
+        const cur = edits[f.evidenciaId]
+        const li = cur?.limiteFecha ? new Date(`${cur.limiteFecha}T${cur.limiteHora || "23:55"}`) : null
+        if (!li || li < en) limitesAjustados++
+      }
+    }
+
+    setEdits(prev => {
+      const next = { ...prev }
+      for (const f of afectadas) {
+        const cur = next[f.evidenciaId] ?? emptyEdit()
+        if (campo === "apertura") {
+          next[f.evidenciaId] = { ...cur, abrirFecha: fecha, abrirHora: hora || cur.abrirHora || "00:00" }
+        } else if (campo === "entrega") {
+          const entregaHora = hora || cur.entregaHora || "23:55"
+          const nuevo: RowEdit = { ...cur, entregaFecha: fecha, entregaHora }
+          if (soporta(f.tipo).limite) {
+            const li = nuevo.limiteFecha ? new Date(`${nuevo.limiteFecha}T${nuevo.limiteHora || "23:55"}`) : null
+            const en = new Date(`${fecha}T${entregaHora}`)
+            if (!li || li < en) { nuevo.limiteFecha = fecha; nuevo.limiteHora = entregaHora }
+          }
+          next[f.evidenciaId] = nuevo
+        } else {
+          next[f.evidenciaId] = { ...cur, limiteFecha: fecha, limiteHora: hora || cur.limiteHora || "23:55" }
+        }
+      }
+      return next
+    })
+    const etq = campo === "limite" ? "límite" : campo
+    const ambito = selected.size > 0 ? "seleccionadas" : "visibles"
+    const extra = limitesAjustados > 0
+      ? ` — ajusté el límite en ${limitesAjustados} assign para que no quede antes de la entrega`
+      : ""
+    toast.success(`Fecha de ${etq} aplicada a ${afectadas.length} evidencia${afectadas.length !== 1 ? "s" : ""} ${ambito}${extra}. Revisa y guarda.`)
   }
 
   function toggleSel(id: string) {
@@ -304,17 +380,20 @@ export default function ConfigTabla({ fichaId, preselectIds = [] }: { fichaId: s
                     {/* Apertura */}
                     <td className="px-2 py-1.5 align-top">
                       <DateTimeCell enabled={sop.apertura} fecha={e.abrirFecha} hora={e.abrirHora}
-                        onFecha={v => setField(fila.evidenciaId, "abrirFecha", v)} onHora={v => setField(fila.evidenciaId, "abrirHora", v)} />
+                        onFecha={v => setField(fila.evidenciaId, "abrirFecha", v)} onHora={v => setField(fila.evidenciaId, "abrirHora", v)}
+                        onAplicarTodas={() => aplicarColumna("apertura", e.abrirFecha, e.abrirHora)} />
                     </td>
                     {/* Entrega */}
                     <td className="px-2 py-1.5 align-top">
                       <DateTimeCell enabled={sop.entrega} fecha={e.entregaFecha} hora={e.entregaHora}
-                        onFecha={v => setField(fila.evidenciaId, "entregaFecha", v)} onHora={v => setField(fila.evidenciaId, "entregaHora", v)} />
+                        onFecha={v => setField(fila.evidenciaId, "entregaFecha", v)} onHora={v => setField(fila.evidenciaId, "entregaHora", v)}
+                        onAplicarTodas={() => aplicarColumna("entrega", e.entregaFecha, e.entregaHora)} />
                     </td>
                     {/* Límite */}
                     <td className="px-2 py-1.5 align-top">
                       <DateTimeCell enabled={sop.limite} fecha={e.limiteFecha} hora={e.limiteHora}
-                        onFecha={v => setField(fila.evidenciaId, "limiteFecha", v)} onHora={v => setField(fila.evidenciaId, "limiteHora", v)} />
+                        onFecha={v => setField(fila.evidenciaId, "limiteFecha", v)} onHora={v => setField(fila.evidenciaId, "limiteHora", v)}
+                        onAplicarTodas={() => aplicarColumna("limite", e.limiteFecha, e.limiteHora)} />
                     </td>
                     {/* Intentos */}
                     <td className="px-2 py-1.5 align-top">
@@ -351,13 +430,24 @@ export default function ConfigTabla({ fichaId, preselectIds = [] }: { fichaId: s
 }
 
 // Celda de fecha+hora reutilizable. Si !enabled muestra guion (tipo no lo soporta).
-function DateTimeCell({ enabled, fecha, hora, onFecha, onHora }: {
-  enabled: boolean; fecha: string; hora: string; onFecha: (v: string) => void; onHora: (v: string) => void
+// onAplicarTodas (opcional): botón ↓ que copia esta fecha+hora al resto de filas.
+function DateTimeCell({ enabled, fecha, hora, onFecha, onHora, onAplicarTodas }: {
+  enabled: boolean; fecha: string; hora: string
+  onFecha: (v: string) => void; onHora: (v: string) => void; onAplicarTodas?: () => void
 }) {
   if (!enabled) return <span className="text-gray-300 text-xs">—</span>
   return (
     <div className="flex flex-col gap-1">
-      <Input type="date" className="h-7 text-xs w-32" value={fecha} onChange={e => onFecha(e.target.value)} />
+      <div className="flex items-center gap-1">
+        <Input type="date" className="h-7 text-xs w-32" value={fecha} onChange={e => onFecha(e.target.value)} />
+        {onAplicarTodas && fecha && (
+          <button type="button" onClick={onAplicarTodas}
+            title="Aplicar esta fecha y hora a las evidencias seleccionadas (o a todas las visibles si no hay ninguna marcada)"
+            className="shrink-0 text-gray-400 hover:text-sena-green">
+            <ArrowDownToLine className="w-3.5 h-3.5" />
+          </button>
+        )}
+      </div>
       <Input type="time" step={300} className="h-7 text-xs w-24" value={hora} onChange={e => onHora(e.target.value)} disabled={!fecha} />
     </div>
   )
