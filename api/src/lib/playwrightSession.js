@@ -96,18 +96,25 @@ async function crearSesionAutenticada({ userId, zajunaUserEnc, zajunaPassEnc, op
       await entrar(true);
     }
 
-    let liberado = false;
+    let ctxLiberado = false;
+    let lockLiberado = false;
+    // Libera SOLO el browser (context), manteniendo el candado. Para jobs que
+    // tras el login hacen el trabajo pesado por fetch (sin Chromium) pero deben
+    // seguir siendo dueños únicos de la sesión (ej. leerConfigLoteWorker).
+    async function releaseBrowser() {
+      if (ctxLiberado) return;
+      ctxLiberado = true;
+      await releaseContext(ctx);
+    }
+    // Libera todo (browser + candado). Idempotente. SIEMPRE en el finally.
     async function release() {
-      if (liberado) return;
-      liberado = true;
-      try {
-        await releaseContext(ctx);
-      } finally {
-        await releaseLock();
-      }
+      await releaseBrowser();
+      if (lockLiberado) return;
+      lockLiberado = true;
+      await releaseLock();
     }
 
-    return { ctx, page, relogin, release };
+    return { ctx, page, relogin, release, releaseBrowser };
   } catch (err) {
     // Falló antes de devolver: soltar context (si se creó) y el candado SIEMPRE.
     if (ctx) await releaseContext(ctx).catch(() => {});

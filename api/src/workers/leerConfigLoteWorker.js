@@ -1,13 +1,10 @@
 require("dotenv").config({ path: require("path").resolve(__dirname, "../../../.env") });
 
-const { Worker, UnrecoverableError } = require("bullmq");
-const { acquireContext, releaseContext } = require("../lib/browserPool");
+const { Worker } = require("bullmq");
 const { connection } = require("../lib/queue");
-const { decrypt } = require("../lib/crypto");
-const { marcarCredencialesInvalidas, marcarCredencialesValidas } = require("../lib/credencialesEstado");
-const { saveSession, loadSession } = require("../lib/sessionStore");
+const { crearSesionAutenticada } = require("../lib/playwrightSession");
 const prisma = require("../db/client");
-const { login, cerrarModal, BASE_URL, log } = require("../../../scraper/auth");
+const { log } = require("../../../scraper/auth");
 const { enableEditMode } = require("../../../scraper/configEvidencias");
 const { cookieHeaderFromState, leerConfigEvidenciaFetch } = require("../../../scraper/configEvidenciasFetch");
 
@@ -23,9 +20,6 @@ const worker = new Worker("leerConfigLote", async (job) => {
 
   await prisma.job.update({ where: { id: jobId }, data: { status: "running", progreso: 2 } });
 
-  const zajunaUser = decrypt(zajunaUserEnc);
-  const zajunaPass = decrypt(zajunaPassEnc);
-
   const total = Array.isArray(evidencias) ? evidencias.length : 0;
   if (total === 0) {
     await prisma.job.update({
@@ -40,51 +34,20 @@ const worker = new Worker("leerConfigLote", async (job) => {
   let fallidas = 0;
 
   // ── FASE 1: Playwright SOLO para login + modo edición + extraer cookies ─────
-  // Se abre un context efímero, se valida/refresca la sesión, se activa edit=on
-  // (preferencia de usuario que persiste en la cookie) y se sacan las cookies.
-  // Luego se LIBERA el browser: el loop pesado no toca Chromium.
+  // La factory adquiere el CANDADO por-usuario (que se mantiene durante TODO el
+  // job, incluido el loop de fetch — si otro job logueara, invalidaría la sesión
+  // y los fetch rebotarían). Tras activar edit=on y sacar las cookies, liberamos
+  // SOLO el browser (releaseBrowser) para no gastar RAM en el loop; el candado
+  // sigue tomado hasta release() en el finally.
+  const sesion = await crearSesionAutenticada({ userId, zajunaUserEnc, zajunaPassEnc, opts: { timeout: 30_000 } });
   let cookieStr;
-  {
-    const savedSession = await loadSession(userId);
-    const ctx = await acquireContext({
-      locale: "es-CO",
-      timezoneId: "America/Bogota",
-      ...(savedSession ? { storageState: savedSession } : {}),
-    });
-    const page = await ctx.newPage();
-    page.setDefaultTimeout(30_000);
-    try {
-      let sessionValida = false;
-      if (savedSession) {
-        await page.goto(`${BASE_URL}/my/`, { waitUntil: "domcontentloaded", timeout: 30_000 });
-        await cerrarModal(page);
-        sessionValida = page.url().includes("/my") && !page.url().includes("/login"); // sesión SSO expirada rebota al portal raíz (sin /my), NO a /login
-        if (!sessionValida) log("[leerConfigLote] Sesión expirada, login fresco");
-      }
-      if (!sessionValida) {
-        try {
-          await login(page, zajunaUser, zajunaPass);
-          await marcarCredencialesValidas(userId);
-        } catch (err) {
-          if (err.message === "Credenciales incorrectas.") {
-            await marcarCredencialesInvalidas(userId);
-            throw new UnrecoverableError(err.message);
-          }
-          throw err;
-        }
-      }
-      // Modo edición una vez (preferencia de sesión → la heredan los fetch).
-      if (courseId) await enableEditMode(page, courseId);
+  try {
+    // Modo edición una vez (preferencia de sesión → la heredan los fetch).
+    if (courseId) await enableEditMode(sesion.page, courseId);
+    cookieStr = cookieHeaderFromState(await sesion.ctx.storageState());
+    await sesion.releaseBrowser(); // libera Chromium ANTES del loop; mantiene el candado
 
-      const state = await ctx.storageState();
-      await saveSession(userId, state).catch((e) => log(`[leerConfigLote] no se pudo guardar sesión: ${e.message}`));
-      cookieStr = cookieHeaderFromState(state);
-    } finally {
-      await releaseContext(ctx); // libera Chromium ANTES del loop
-    }
-  }
-
-  await prisma.job.update({ where: { id: jobId }, data: { progreso: 8 } });
+    await prisma.job.update({ where: { id: jobId }, data: { progreso: 8 } });
 
   // ── FASE 2: recorrer evidencias por FETCH (sin Chromium), en paralelo ───────
   // Concurrencia alta: cada fetch pesa KB, no MB. Cursor compartido entre carriles.
@@ -132,6 +95,9 @@ const worker = new Worker("leerConfigLote", async (job) => {
     where: { id: jobId },
     data:  { status: "done", progreso: 100, resultado: { leidas, fallidas, detalle } },
   });
+  } finally {
+    await sesion.release(); // libera el candado por-usuario (el browser ya se liberó tras FASE 1)
+  }
 }, { connection, concurrency: 1 });
 
 worker.on("failed", async (job, err) => {

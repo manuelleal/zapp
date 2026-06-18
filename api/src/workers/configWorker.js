@@ -1,13 +1,9 @@
 require("dotenv").config({ path: require("path").resolve(__dirname, "../../../.env") });
 
-const { Worker, UnrecoverableError } = require("bullmq");
-const { acquireContext, releaseContext } = require("../lib/browserPool");
+const { Worker } = require("bullmq");
 const { connection } = require("../lib/queue");
-const { decrypt } = require("../lib/crypto");
-const { marcarCredencialesInvalidas, marcarCredencialesValidas } = require("../lib/credencialesEstado");
-const { saveSession, loadSession } = require("../lib/sessionStore");
+const { crearSesionAutenticada } = require("../lib/playwrightSession");
 const prisma = require("../db/client");
-const { login, cerrarModal, BASE_URL, log } = require("../../../scraper/auth");
 const { enableEditMode } = require("../../../scraper/configEvidencias");
 const { cookieHeaderFromState, leerConfigEvidenciaFetch, guardarConfigEvidenciaFetch } = require("../../../scraper/configEvidenciasFetch");
 
@@ -28,40 +24,13 @@ const worker = new Worker("config", async (job) => {
 
   await prisma.job.update({ where: { id: jobId }, data: { status: "running", progreso: 5 } });
 
-  const zajunaUser = decrypt(zajunaUserEnc);
-  const zajunaPass = decrypt(zajunaPassEnc);
-
-  const savedSession = await loadSession(userId);
-  const ctx = await acquireContext({
-    locale: "es-CO",
-    timezoneId: "America/Bogota",
-    ...(savedSession ? { storageState: savedSession } : {}),
-  });
-  const page = await ctx.newPage();
-  page.setDefaultTimeout(30_000);
+  // Sesión autenticada vía factory: compone loadSession/login/saveSession y
+  // adquiere el candado por-usuario (Zajuna = 1 sesión/cuenta). release() en el
+  // finally libera context Y candado. Ver api/src/lib/playwrightSession.js.
+  const sesion = await crearSesionAutenticada({ userId, zajunaUserEnc, zajunaPassEnc, opts: { timeout: 30_000 } });
+  const { page, ctx } = sesion;
 
   try {
-    let sessionValida = false;
-    if (savedSession) {
-      await page.goto(`${BASE_URL}/my/`, { waitUntil: "domcontentloaded", timeout: 30_000 });
-      await cerrarModal(page);
-      sessionValida = page.url().includes("/my") && !page.url().includes("/login"); // sesión SSO expirada rebota al portal raíz (sin /my), NO a /login
-      if (!sessionValida) log("[configWorker] Sesión expirada, login fresco");
-    }
-    if (!sessionValida) {
-      try {
-        await login(page, zajunaUser, zajunaPass);
-        await marcarCredencialesValidas(userId);
-      } catch (err) {
-        if (err.message === "Credenciales incorrectas.") {
-          await marcarCredencialesInvalidas(userId);
-          throw new UnrecoverableError(err.message);
-        }
-        throw err;
-      }
-      const state = await ctx.storageState();
-      await saveSession(userId, state).catch(e => log(`[configWorker] no se pudo guardar sesión: ${e.message}`));
-    }
     await prisma.job.update({ where: { id: jobId }, data: { progreso: 20 } });
 
     // Sprint 2.6 fix: Moodle requiere modo edición ON para que /course/modedit.php
@@ -124,7 +93,7 @@ const worker = new Worker("config", async (job) => {
     }
 
   } finally {
-    await releaseContext(ctx);
+    await sesion.release();
   }
 
 // Sprint 2.6 FIX D: concurrency=1 — Zajuna invalida sesiones paralelas
