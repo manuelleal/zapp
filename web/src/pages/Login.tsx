@@ -115,7 +115,7 @@ export default function Login() {
             </svg>
           </div>
           <div>
-            <div className="font-bold text-lg text-gray-900">Zajuna Manager</div>
+            <div className="font-bold text-lg text-gray-900">Helper</div>
             <div className="text-sm text-gray-500">Gestión de fichas SENA</div>
           </div>
         </div>

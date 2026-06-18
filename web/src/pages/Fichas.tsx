@@ -148,7 +148,7 @@ export default function Fichas() {
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
       a.href = url
-      a.download = `Reporte_Zajuna_${codigo}_${new Date().toISOString().slice(0,10)}.xlsx`
+      a.download = `Reporte_Helper_${codigo}_${new Date().toISOString().slice(0,10)}.xlsx`
       a.click()
       URL.revokeObjectURL(url)
       toast.success("Excel descargado con éxito")

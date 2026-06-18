@@ -97,7 +97,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                   <rect x="14" y="14" width="7" height="7" rx="1.5" />
                 </svg>
               </div>
-              <span className="font-semibold text-sm text-gray-900 hidden sm:inline">Zajuna</span>
+              <span className="font-semibold text-sm text-gray-900 hidden sm:inline">Helper</span>
             </div>
 
             <nav className="flex items-center gap-1">
