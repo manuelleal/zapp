@@ -100,7 +100,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               <span className="font-semibold text-sm text-gray-900 hidden sm:inline">Helper</span>
             </div>
 
-            <nav className="flex items-center gap-1">
+            <nav className="flex items-center gap-1 overflow-x-auto max-w-[55vw] sm:max-w-none scrollbar-hide">
               {navItems.map(({ to, label, icon: Icon }) => (
                 <NavLink
                   key={to}

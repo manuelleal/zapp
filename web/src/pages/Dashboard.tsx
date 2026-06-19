@@ -280,7 +280,7 @@ export default function Dashboard() {
 
                       return (
                         <div key={ev.id}>
-                          <div className="px-4 py-3 flex items-center gap-3 hover:bg-gray-50">
+                          <div className="px-4 py-3 flex items-center gap-3 hover:bg-gray-50 flex-wrap sm:flex-nowrap">
                             <div className="flex-1 min-w-0">
                               <p className="text-sm font-medium text-gray-800 truncate" title={ev.nombre}>{ev.nombre}</p>
                               <p className="text-xs text-gray-400 mt-0.5">{tiempoRelativo(ev.ultimoScan)}</p>

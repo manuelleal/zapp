@@ -640,7 +640,7 @@ export default function MensajesPage() {
                   ) : aprendices.length === 0 ? (
                     <p className="text-xs text-gray-400 italic">Sin aprendices. Escanea la ficha en la página Fichas.</p>
                   ) : (
-                    <div className="border border-gray-200 rounded-md max-h-96 overflow-y-auto">
+                    <div className="border border-gray-200 rounded-md max-h-96 overflow-y-auto overflow-x-auto">
                       <table className="w-full text-xs">
                         <thead className="bg-gray-50 sticky top-0">
                           <tr>
@@ -776,7 +776,7 @@ export default function MensajesPage() {
           </div>
         ) : tab === "historial" ? (
           // ── Tab: Historial ─────────────────────────────────────────────────
-          <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+          <div className="bg-white rounded-lg border border-gray-200 overflow-x-auto">
             {historial.length === 0 ? (
               <p className="text-sm text-gray-500 p-8 text-center">Sin mensajes enviados aún.</p>
             ) : (
@@ -811,7 +811,7 @@ export default function MensajesPage() {
           </div>
         ) : (
           // ── Tab: Programados ───────────────────────────────────────────────
-          <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+          <div className="bg-white rounded-lg border border-gray-200 overflow-x-auto">
             {programados.length === 0 ? (
               <div className="p-8 text-center text-sm text-gray-500 space-y-1">
                 <p>Sin mensajes programados.</p>

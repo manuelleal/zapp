@@ -24,7 +24,7 @@ export function MapeoAlVueloModal({ open, onClose, fichaId, rapsSinMapeo, onSucc
   const [selecciones, setSelecciones] = useState<Record<string, Set<string>>>({})
 
   // Traer todas las evidencias de la ficha para que el usuario pueda elegir
-  const { data: evidencias, isLoading: cargandoEvidencias } = useQuery({
+  const { data: evidencias, isLoading: cargandoEvidencias, isError: errorEvidencias, refetch: recargarEvidencias } = useQuery({
     queryKey: ["evidencias-ficha", fichaId],
     queryFn: () => apiFetch<any[]>(`/api/fichas/${fichaId}/evidencias`),
     enabled: open && !!fichaId,
@@ -97,6 +97,12 @@ export function MapeoAlVueloModal({ open, onClose, fichaId, rapsSinMapeo, onSucc
           {cargandoEvidencias ? (
             <div className="flex items-center justify-center py-10 text-gray-500 gap-2">
               <Loader2 className="w-5 h-5 animate-spin" /> Cargando evidencias de la ficha...
+            </div>
+          ) : errorEvidencias ? (
+            <div className="flex flex-col items-center justify-center py-10 text-gray-600 gap-3">
+              <AlertCircle className="w-8 h-8 text-red-500" />
+              <p className="text-sm text-center">No se pudieron cargar las evidencias de la ficha.</p>
+              <Button variant="outline" size="sm" onClick={() => recargarEvidencias()}>Reintentar</Button>
             </div>
           ) : (
             rapsSinMapeo.map(rap => (

@@ -288,7 +288,7 @@ function NuevaActaModal({ open, onClose, fichas, raps }: NuevaActaModalProps) {
               </select>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label htmlFor="acta-numero">Número de acta *</Label>
                 <Input id="acta-numero" value={numero} onChange={e => setNumero(e.target.value)} placeholder="ej. 01" disabled={isBusy} />
@@ -299,7 +299,7 @@ function NuevaActaModal({ open, onClose, fichas, raps }: NuevaActaModalProps) {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label htmlFor="acta-hora">Hora inicio *</Label>
                 <Input id="acta-hora" type="time" value={hora} onChange={e => setHora(e.target.value)} disabled={isBusy} />
@@ -317,7 +317,7 @@ function NuevaActaModal({ open, onClose, fichas, raps }: NuevaActaModalProps) {
 
             {/* Campos del formato oficial GOR-F-084 V02 (opcionales pero recomendados
                 para que el Word salga completo sin editar a mano). */}
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label htmlFor="acta-ciudad">Ciudad</Label>
                 <Input id="acta-ciudad" value={ciudad} onChange={e => setCiudad(e.target.value)} placeholder="ej. Concepción" disabled={isBusy} />
