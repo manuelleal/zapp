@@ -1,3 +1,22 @@
+/**
+ * api/src/routes/auth.js — Registro e inicio de sesión de instructores.
+ *
+ * Rutas:
+ *   POST /api/auth/register — crear cuenta (nombre, email, password, credenciales Zajuna,
+ *                              competenciaCodigo). Las credenciales Moodle se cifran con
+ *                              AES-256-GCM (lib/crypto.js) antes de persistir.
+ *   POST /api/auth/login    — autenticar y devolver JWT (7d de vida).
+ *
+ * Rate limiting: Map en memoria (no Redis), max RATE_MAX intentos / 15 min por IP.
+ * Razón de ser in-memory: suficiente para el MVP; migrar a Redis es P1 (§11.3 #8).
+ * LIMITACIÓN: no sobrevive reinicios ni se comparte si hubiera múltiples procesos API
+ * (hoy solo hay 1 instancia PM2).
+ *
+ * competenciaId: se vincula por código en el registro. Sin esto el matching IA
+ * falla con "El usuario no tiene competencia asignada". Si la competencia aún no
+ * existe en DB (instructor de programa nuevo) queda null y se asigna luego vía
+ * descubrir-competencias o el extractor de guías.
+ */
 const bcrypt = require("bcrypt");
 const prisma = require("../db/client");
 const { encrypt } = require("../lib/crypto");
@@ -64,8 +83,8 @@ async function authRoutes(fastify) {
       },
     });
 
-    const token = fastify.jwt.sign({ id: user.id, email: user.email, nombre: user.nombre }, { expiresIn: "7d" });
-    return { token, user: { id: user.id, email: user.email, nombre: user.nombre, competenciaNombre: user.competenciaNombre } };
+    const token = fastify.jwt.sign({ id: user.id, email: user.email, nombre: user.nombre, rol: user.rol }, { expiresIn: "7d" });
+    return { token, user: { id: user.id, email: user.email, nombre: user.nombre, rol: user.rol, competenciaNombre: user.competenciaNombre, aceptoTerminosAt: user.aceptoTerminosAt } };
   });
 
   fastify.post("/api/auth/login", async (req, reply) => {
@@ -82,8 +101,36 @@ async function authRoutes(fastify) {
     const ok = await bcrypt.compare(password, user.passwordHash);
     if (!ok) return reply.code(401).send({ error: "Credenciales inválidas." });
 
-    const token = fastify.jwt.sign({ id: user.id, email: user.email, nombre: user.nombre }, { expiresIn: "7d" });
-    return { token, user: { id: user.id, email: user.email, nombre: user.nombre, competenciaNombre: user.competenciaNombre } };
+    // Cuenta suspendida por el superadmin (soft-state): no puede iniciar sesión.
+    if (user.suspendedAt) return reply.code(403).send({ error: "Tu cuenta está suspendida. Contacta al administrador." });
+
+    const token = fastify.jwt.sign({ id: user.id, email: user.email, nombre: user.nombre, rol: user.rol }, { expiresIn: "7d" });
+    return { token, user: { id: user.id, email: user.email, nombre: user.nombre, rol: user.rol, competenciaNombre: user.competenciaNombre, aceptoTerminosAt: user.aceptoTerminosAt } };
+  });
+
+  // ── GET /api/auth/me ──────────────────────────────────────────────────────
+  // Devuelve el usuario actual (para que el front decida nav de admin / modal de
+  // bienvenida tras un reload, sin re-loguear). Lee de DB para reflejar rol/estado
+  // actuales (un cambio de rol no requiere re-login).
+  fastify.get("/api/auth/me", { preHandler: fastify.authenticate }, async (req, reply) => {
+    const user = await prisma.user.findUnique({
+      where:  { id: req.user.id },
+      select: { id: true, email: true, nombre: true, rol: true, competenciaNombre: true, aceptoTerminosAt: true, suspendedAt: true },
+    });
+    if (!user) return reply.code(404).send({ error: "Usuario no encontrado." });
+    if (user.suspendedAt) return reply.code(403).send({ error: "Cuenta suspendida." });
+    return { user };
+  });
+
+  // ── POST /api/auth/aceptar-terminos ───────────────────────────────────────
+  // Marca que el instructor aceptó el aviso de uso/tratamiento de datos (modal de
+  // bienvenida). Idempotente: si ya aceptó, conserva la fecha original.
+  fastify.post("/api/auth/aceptar-terminos", { preHandler: fastify.authenticate }, async (req, reply) => {
+    const actual = await prisma.user.findUnique({ where: { id: req.user.id }, select: { aceptoTerminosAt: true } });
+    if (actual && !actual.aceptoTerminosAt) {
+      await prisma.user.update({ where: { id: req.user.id }, data: { aceptoTerminosAt: new Date() } });
+    }
+    return { ok: true };
   });
 }
 

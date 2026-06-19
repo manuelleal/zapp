@@ -1,3 +1,22 @@
+/**
+ * api/src/server.js — Servidor HTTP Fastify (solo API + estáticos).
+ *
+ * IMPORTANTE: este proceso NO carga los workers BullMQ. Los workers corren en un
+ * proceso separado (`api/src/worker-entry.js`, app "workers" en ecosystem.config.js).
+ * Esta separación es crítica: un OOM de un scraper Playwright no derriba la API.
+ * Ver CLAUDE.md §11.1 y §11.3 P0 #1 para el razonamiento completo.
+ *
+ * Plugins registrados:
+ *   - @fastify/cors      → ALLOWED_ORIGIN (.env) o localhost:5173 (dev)
+ *   - @fastify/jwt       → JWT_SECRET (.env); token expira en 7d
+ *   - @fastify/static    → sirve web/dist/ (build de React/Vite)
+ *   - SPA fallback       → cualquier GET no-API sin match devuelve index.html
+ *
+ * Headers de seguridad inyectados en onSend (todos los responses):
+ *   X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy.
+ *
+ * Puerto: 3000 (configurable en el future con PORT env).
+ */
 require("dotenv").config({ path: require("path").resolve(__dirname, "../../.env") });
 
 const path    = require("path");
@@ -106,6 +125,7 @@ fastify.register(require("./routes/actas"));
 fastify.register(require("./routes/actasImport"));
 fastify.register(require("./routes/mensajes"));
 fastify.register(require("./routes/ajustes"));
+fastify.register(require("./routes/admin"));
 
 // ─── WORKERS ─────────────────────────────────────────────────────────────────
 // Los workers BullMQ ya NO viven aquí. Corren en un proceso separado

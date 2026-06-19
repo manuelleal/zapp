@@ -49,6 +49,14 @@ model User {
   competenciaId     String?
   createdAt         DateTime     @default(now())
   lastAutoScanAt    DateTime?
+  // rol: "instructor" (default) | "superadmin" (dueño de la app / quien la licencia).
+  // El panel de administración (/api/admin/*) exige rol="superadmin".
+  rol               String       @default("instructor")
+  // Soft-state (regla #4): si != null, el instructor está suspendido y no puede
+  // iniciar sesión (lo gestiona el superadmin desde el panel).
+  suspendedAt       DateTime?
+  // Cuándo aceptó el aviso de uso/tratamiento de datos (modal de bienvenida).
+  aceptoTerminosAt  DateTime?
   // Marca cuándo un worker detectó que las credenciales de Zajuna guardadas
   // quedaron inválidas (el instructor cambió la clave en Zajuna y la app sigue
   // con la vieja). Se setea en el login fallido y se limpia al actualizar la
