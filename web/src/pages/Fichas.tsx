@@ -241,12 +241,15 @@ export default function Fichas() {
       }
       const arr = [...m.values()];
       arr.forEach(g => g.evs.sort((a, b) => aaDe(a.nombre) - aaDe(b.nombre) || evDe(a.nombre) - evDe(b.nombre)));
-      // Agrupar por CÓDIGO de competencia (la tuya primero), y dentro de cada
-      // código las guías en orden 1 → N.
+      // Orden: (1) TU competencia primero (premarcada), (2) las guías por NÚMERO
+      // ascendente (Guía 1 → N — lo que pidió el instructor; antes ordenaba por
+      // código de competencia y mostraba Guía 5 antes que Guía 1), (3) "Sin guía"
+      // (ga=0, evidencias sin código GA) al final, (4) desempate por competencia.
       return arr.sort((a, b) =>
         ((a.comp === miComp ? 0 : 1) - (b.comp === miComp ? 0 : 1)) ||
-        a.comp.localeCompare(b.comp) ||
-        a.ga - b.ga);
+        ((a.ga === 0 ? 1 : 0) - (b.ga === 0 ? 1 : 0)) ||
+        (a.ga - b.ga) ||
+        a.comp.localeCompare(b.comp));
     }, [data])
 
     const [sel, setSel] = useState<Set<string>>(new Set())   // evidenciaIds

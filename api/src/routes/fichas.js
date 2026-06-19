@@ -346,6 +346,7 @@ async function fichasRoutes(fastify) {
       row.getCell(2).border = borde;
       row.getCell(2).alignment = { horizontal: 'center', vertical: 'middle' };
 
+      let aprobadas = 0;
       ficha.evidencias.forEach((ev, idx) => {
         const cell = row.getCell(idx + 3);
         const entrega = entregasMap.get(ev.id);
@@ -359,37 +360,35 @@ async function fichasRoutes(fastify) {
         // "sin_entregar" = el aprendiz NO subió nada (no hay envío que calificar).
         const noEntrego = est != null && (est.includes("sin_entreg") || est.includes("no_entreg") || est.includes("sin entregar"));
 
+        // Link directo a la evidencia del aprendiz en Zajuna (grader con su userid).
+        // Va en TODAS las celdas para revisar/rectificar cualquier estado: si el
+        // aprendiz pregunta "profe, ¿por qué perdí?", clic y abres su entrega.
+        const url = urlCalificar(ev, a.moodleId);
+        const poner = (texto, bg, tx, bold) => {
+          cell.value = url
+            ? { text: String(texto), hyperlink: url, tooltip: "Abrir esta evidencia del aprendiz en Zajuna" }
+            : texto;
+          cell.fill = fill(bg);
+          cell.font = { color: { argb: tx }, bold: !!bold, size: 9, underline: url ? true : undefined };
+        };
+
         if (!entrega) {
-          // Sin dato: lo más probable es que la evidencia no se haya escaneado.
-          cell.value = "—";
-          cell.fill = fill(C.nsBg); cell.font = { color: { argb: C.nsTx }, size: 9 };
+          poner("—", C.nsBg, C.nsTx, false);                 // Sin escanear / sin dato
         } else if (noEntrego) {
-          // No entregó: gris, SIN link de calificar (no hay nada que calificar).
-          cell.value = "NE";
-          cell.fill = fill(C.seBg); cell.font = { color: { argb: C.seTx }, size: 9 };
+          poner("NE", C.seBg, C.seTx, false);                // No entregó
         } else if (tieneNota) {
-          const aprob = cual === "A" || (num !== null && num >= 70);   // Calificado
-          cell.value = cual !== null ? cual : num;            // número como NÚMERO (para COUNTIF)
-          cell.fill = fill(aprob ? C.okBg : C.malBg);
-          cell.font = { color: { argb: aprob ? C.okTx : C.malTx }, bold: true, size: 9 };
+          const aprob = cual === "A" || (num !== null && num >= 70);
+          poner(cual !== null ? cual : num, aprob ? C.okBg : C.malBg, aprob ? C.okTx : C.malTx, true);
+          if (aprob) aprobadas++;
         } else {
-          // Entregó pero sin nota → por calificar (con link directo al grader).
-          const url = urlCalificar(ev, a.moodleId);
-          if (url) {
-            cell.value = { text: "PC ▸", hyperlink: url, tooltip: "Ir a calificar en Zajuna" };
-            cell.font = { color: { argb: C.pendLink }, underline: true, bold: true, size: 9 };
-          } else {
-            cell.value = "PC"; cell.font = { color: { argb: C.pendTx }, bold: true, size: 9 };
-          }
-          cell.fill = fill(C.pendBg);
+          poner("PC ▸", C.pendBg, C.pendLink, true);         // Entregó, por calificar
         }
       });
 
-      // Columna "Aprobadas": fórmula viva (cuenta "A" + numéricas ≥70).
-      const r = row.number;
-      const rango = `${firstEvLetter}${r}:${lastEvLetter}${r}`;
+      // Columna "Aprobadas": conteo en JS (las notas ahora son hyperlinks de texto,
+      // así que COUNTIF ya no aplicaría — A cualitativa o nota numérica ≥ 70).
       const cAprob = row.getCell(colAprob);
-      cAprob.value = { formula: `COUNTIF(${rango},"A")+COUNTIF(${rango},">=70")` };
+      cAprob.value = aprobadas;
       cAprob.border = borde;
       cAprob.alignment = { horizontal: 'center', vertical: 'middle' };
       cAprob.font = { bold: true, size: 9, color: { argb: C.okTx } };
@@ -422,6 +421,7 @@ async function fichasRoutes(fastify) {
     const rAct = leg.addRow(["", `Última actualización de los datos: ${fmt(maxScan)}`]);
     rAct.getCell(2).font = { bold: true, color: { argb: C.rap } };
     leg.addRow(["", "Encabezados por tipo: azul = tarea · rosa = cuestionario · verde = foro"]);
+    leg.addRow(["", "💡 Cada celda de evidencia es un enlace: clic para abrir esa entrega del aprendiz en Zajuna (revisar o rectificar la nota)."]);
     leg.addRow(["", `Generado por Helper — ${new Date().toLocaleDateString("es-CO")}`]);
 
     const buffer = await workbook.xlsx.writeBuffer();
