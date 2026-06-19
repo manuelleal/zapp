@@ -13,12 +13,19 @@ async function matchingIaRoutes(fastify) {
     const userId      = req.user.id;
     const evidenciaIds = req.body?.evidenciaIds ?? [];
 
-    // Resolve total count for the response
+    // SEGURIDAD (multi-tenant, regla #1): los evidenciaIds vienen del cliente. Hay
+    // que filtrarlos a SOLO los que pertenecen al usuario ANTES de encolar; si no, el
+    // worker correría matching IA sobre evidencias ajenas. Antes el `total` ya se
+    // contaba con `ficha:{userId}`, pero a la cola iban los IDs crudos del body.
+    let idsValidos = null;   // null = todas las del usuario
     let total;
     if (Array.isArray(evidenciaIds) && evidenciaIds.length > 0) {
-      total = await prisma.evidencia.count({
-        where: { id: { in: evidenciaIds }, ficha: { userId } },
+      const validas = await prisma.evidencia.findMany({
+        where:  { id: { in: evidenciaIds }, ficha: { userId } },
+        select: { id: true },
       });
+      idsValidos = validas.map(e => e.id);
+      total = idsValidos.length;
     } else {
       total = await prisma.evidencia.count({
         where: { ficha: { userId } },
@@ -34,11 +41,11 @@ async function matchingIaRoutes(fastify) {
       data: { userId, tipo: "matching-ia", status: "queued" },
     });
 
-    // Enqueue BullMQ job
+    // Enqueue BullMQ job — solo los IDs ya validados como del usuario (o null = todas).
     await matchingIaQueue.add("matchingIa", {
       jobId:       job.id,
       userId,
-      evidenciaIds: Array.isArray(evidenciaIds) && evidenciaIds.length > 0 ? evidenciaIds : null,
+      evidenciaIds: idsValidos,
     });
 
     return reply.code(202).send({ jobId: job.id, total });

@@ -19,7 +19,11 @@ const leerConfigQueue   = new Queue("leerConfig",   { connection, defaultJobOpti
 const leerConfigLoteQueue = new Queue("leerConfigLote", { connection, defaultJobOptions: { attempts: 1, removeOnComplete: 20, removeOnFail: 10 } });
 const cambiarFechaQueue  = new Queue("cambiarFecha",  { connection, defaultJobOptions: { removeOnComplete: 50, removeOnFail: 20, attempts: 1 } });
 const cambiarConfigQueue = new Queue("cambiarConfig", { connection, defaultJobOptions: { removeOnComplete: 50, removeOnFail: 20, attempts: 1 } });
-const foroRatingQueue    = new Queue("foroRating",    { connection, defaultJobOptions: retryOpts });
+// attempts:1 — calificar un foro hace POST a /rating/rate.php por cada post SIN
+// chequear si ya estaba calificado. Con reintentos, un POST cuya respuesta se pierde
+// haría que BullMQ recalifique (doble calificación). Hasta que el scraper salte el
+// POST si el post ya tiene la nota deseada, mantener 1 intento (como cambiarFecha).
+const foroRatingQueue    = new Queue("foroRating",    { connection, defaultJobOptions: { ...retryOpts, attempts: 1 } });
 const foroDescubrirQueue = new Queue("foroDescubrir", { connection, defaultJobOptions: { attempts: 1, removeOnComplete: 30, removeOnFail: 10 } });
 const autoScanQueue     = new Queue("autoScan",   { connection, defaultJobOptions: { removeOnComplete: 20, removeOnFail: 10 } });
 const matchingIaQueue   = new Queue("matchingIa",  { connection, defaultJobOptions: { attempts: 1,  removeOnComplete: 50 } });

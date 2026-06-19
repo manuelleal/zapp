@@ -54,6 +54,22 @@ fastify.decorate("authenticate", async (req, reply) => {
   }
 });
 
+// ─── ERROR HANDLER GLOBAL ────────────────────────────────────────────────────
+// Evita filtrar al cliente stacks/mensajes internos (Prisma, etc.) en errores no
+// controlados. Loguea el error completo del lado servidor; al cliente le devuelve
+// el statusCode original si es un 4xx esperado, o un 500 genérico si no.
+fastify.setErrorHandler((error, req, reply) => {
+  const status = error.statusCode && error.statusCode >= 400 && error.statusCode < 500
+    ? error.statusCode
+    : 500;
+  if (status >= 500) {
+    req.log.error({ err: error }, "Error no controlado");
+    return reply.code(500).send({ error: "Error interno del servidor." });
+  }
+  // 4xx de validación de Fastify u otros: el mensaje es seguro de mostrar.
+  return reply.code(status).send({ error: error.message || "Solicitud inválida." });
+});
+
 // ─── HEALTH ──────────────────────────────────────────────────────────────────
 // Ping rápido a Postgres y Redis. 200 si ambos responden, 503 si alguno falla.
 // Útil para Docker healthcheck / k8s readiness / monitoreo externo.
