@@ -39,6 +39,7 @@
 const prisma = require("../db/client");
 const { filtrarAprendicesValidos } = require("../lib/aprendices");
 const { calcularEstado, calcularJuicio } = require("../lib/calificacion");
+const { sanearActa, formatearDocumento } = require("../lib/actaSaneado");
 const {
   construirMapaRapEvidencias,
   detectarRapsSinEvidencias,
@@ -809,8 +810,10 @@ async function actasRoutes(fastify) {
     const {
       Document, Paragraph, Table, TableRow, TableCell, TextRun,
       AlignmentType, WidthType, BorderStyle, Packer, VerticalAlign,
-      Header, Footer, TableLayoutType,
+      Header, Footer, TableLayoutType, ImageRun,
     } = require("docx");
+    const fs = require("fs");
+    const path = require("path");
 
     const acta = await verificarActaDelUsuario(req.params.id, req.user.id, reply);
     if (!acta) return;
@@ -865,16 +868,40 @@ async function actasRoutes(fastify) {
     const ficha        = actaCompleta.ficha || {};
     const participantes = actaCompleta.participantes || [];
 
-    // Nombre de la competencia (todos los RAPs del acta son de la misma). Se lee
-    // del primer RAP → Competencia; cae a ficha.nombre si no se encuentra.
+    // Nombre + código de la competencia (todos los RAPs del acta son de la misma).
+    // Se lee del primer RAP → Competencia; cae a ficha.nombre si no se encuentra.
     let competenciaNombre = ficha.nombre || "";
+    let competenciaCodigo = "";
     if (rapIds.length > 0) {
       const primerRap = await prisma.rAP.findFirst({
         where:  { id: { in: rapIds } },
-        select: { competencia: { select: { nombre: true } } },
+        select: { competencia: { select: { nombre: true, codigo: true } } },
       });
       if (primerRap?.competencia?.nombre) competenciaNombre = primerRap.competencia.nombre;
+      if (primerRap?.competencia?.codigo) competenciaCodigo = primerRap.competencia.codigo;
     }
+
+    // ── Saneo de textos (determinista + IA best-effort) ────────────────────────
+    // Repara datos sucios de extracción ANTES de imprimirlos en el documento
+    // institucional: descripción de RAP con basura del PDF, competencia placeholder
+    // "[Sin nombre…]", programa como código "P_228118…", typos del objetivo. La IA
+    // NO toca juicios académicos (regla #8); si falla, cae al saneo determinista.
+    // Ver api/src/lib/actaSaneado.js.
+    const saneado = await sanearActa({
+      competenciaNombre,
+      competenciaCodigo,
+      programaNombre: ficha.programa || ficha.nombre || "",
+      objetivo:       acta.objetivo || "",
+      raps:           rapsInfo.map(r => ({ codigo: r.codigo, descripcion: r.descripcion })),
+    });
+
+    // Texto final a imprimir (con fallbacks legibles si el saneo deja algo vacío).
+    competenciaNombre = saneado.competenciaNombre || ficha.nombre || "la competencia del programa";
+    // Si no hay nombre de programa legible, omitimos el token (no imprimir "—").
+    const programaLegible = saneado.programaNombre || "";
+    const objetivoLegible = saneado.objetivo || acta.objetivo || "";
+    // Descripción saneada por código de RAP, para las tablas/párrafos R1..Rn.
+    const descRapPorCodigo = new Map(saneado.raps.map(r => [String(r.codigo), r.descripcion]));
 
     // ── Conteos / particiones ──────────────────────────────────────────────────
     // El formato GOR-F-084 separa en dos tablas: APROBARON vs PENDIENTES POR
@@ -974,7 +1001,7 @@ async function actasRoutes(fastify) {
     ] }, opts);
 
     const nombreComite =
-      `Seguimiento y Evaluación de la formación ${ficha.programa || ficha.nombre || ""} FICHA: ${ficha.codigo || ""} ` +
+      `Seguimiento y Evaluación de la formación ${programaLegible ? programaLegible + " " : ""}FICHA: ${ficha.codigo || ""} ` +
       `en el desarrollo y ejecución de la competencia ${competenciaNombre}`;
 
     const AGENDA = [
@@ -993,7 +1020,8 @@ async function actasRoutes(fastify) {
       ] }, { span: 4 })),
       fila(
         celda("CIUDAD Y FECHA:", { bold: true }),
-        celda(fechaStr, { bold: true }),
+        // Ciudad + fecha juntas (antes la ciudad se leía pero NUNCA se imprimía).
+        celda(acta.ciudad ? `${acta.ciudad}, ${fechaStr}` : fechaStr, { bold: true }),
         labelVal("HORA INICIO:", horaIni),
         labelVal("HORA FIN:", horaFin),
       ),
@@ -1008,7 +1036,7 @@ async function actasRoutes(fastify) {
       ] }, { span: 4 })),
       fila(celda({ paras: [
         new Paragraph({ children: [run("OBJETIVO(S) DE LA REUNIÓN:", { bold: true })] }),
-        new Paragraph({ alignment: AlignmentType.JUSTIFIED, children: [run(acta.objetivo || "")] }),
+        new Paragraph({ alignment: AlignmentType.JUSTIFIED, children: [run(objetivoLegible)] }),
       ] }, { span: 4 })),
     ], [2520, 2520, 2520, 2520]);
 
@@ -1028,7 +1056,7 @@ async function actasRoutes(fastify) {
       participantes.forEach((p, idx) => rosterFilas.push(fila(
         celda(String(idx + 1), { center: true }),
         celda(p.aprendiz?.nombre || ""),
-        celda(p.aprendiz?.documento || "—", { center: true, size: 16 }),
+        celda(formatearDocumento(p.aprendiz?.documento), { center: true, size: 16 }),
       )));
     }
     const rosterTabla = tabla(rosterFilas, [620, 6460, 3000]);
@@ -1054,7 +1082,7 @@ async function actasRoutes(fastify) {
           rows.push(fila(
             celda(String(idx + 1), { center: true }),
             celda(p.aprendiz?.nombre || ""),
-            celda(p.aprendiz?.documento || "—", { center: true, size: 14 }),
+            celda(formatearDocumento(p.aprendiz?.documento), { center: true, size: 14 }),
             ...rapsInfo.map(r => celda(etiquetaRap(st[r.codigo] ?? st[r.id] ?? "PENDIENTE"), { center: true, size: 14 })),
           ));
         });
@@ -1063,8 +1091,15 @@ async function actasRoutes(fastify) {
     }
 
     // ── Resultados de aprendizaje a alcanzar (R1..Rn) ──────────────────────────
+    // El rótulo "R{n}" es secuencial (como el formato oficial), pero acompañamos
+    // el CÓDIGO real del RAP entre paréntesis para trazabilidad (antes solo decía
+    // "R1" y se perdía la referencia, ej. 240202501-06). La descripción viene
+    // saneada (sin la basura del PDF) por descRapPorCodigo.
     const rapsParrafos = rapsInfo.length > 0
-      ? rapsInfo.map((r, i) => parr([run(`R${i + 1}. `, { bold: true }), run(r.descripcion || r.codigo)]))
+      ? rapsInfo.map((r, i) => parr([
+          run(`R${i + 1} (${r.codigo}). `, { bold: true }),
+          run(descRapPorCodigo.get(String(r.codigo)) || r.descripcion || r.codigo),
+        ]))
       : [parr("(Sin resultados de aprendizaje asociados a esta acta.)", { italics: true })];
 
     // ── Llamados de atención (desde mensajes/plataforma) ───────────────────────
@@ -1141,16 +1176,38 @@ async function actasRoutes(fastify) {
     // ════════════════════════════════════════════════════════════════════════════
     // ENSAMBLAR — logo y "GOR-F-084 V02" se repiten por página vía header/footer.
     // ════════════════════════════════════════════════════════════════════════════
+    // Logo SENA oficial: imagen incrustada (api/assets/sena-logo.png). Si el archivo
+    // no está, cae al texto "SENA" en verde para no romper la generación.
+    let logoHeaderParr;
+    try {
+      const logoBuf = fs.readFileSync(path.join(__dirname, "../assets/sena-logo.png"));
+      logoHeaderParr = new Paragraph({
+        alignment: AlignmentType.CENTER,
+        children: [new ImageRun({
+          data: logoBuf,
+          transformation: { width: 70, height: 70 },
+        })],
+      });
+    } catch (_) {
+      logoHeaderParr = new Paragraph({ alignment: AlignmentType.CENTER, children: [run("SENA", { bold: true, color: VERDE_SENA, size: 30 })] });
+    }
+
     const doc = new Document({
       sections: [{
         properties: { page: { margin: { top: 720, bottom: 720, left: 1080, right: 1080 } } },
-        headers: { default: new Header({ children: [
-          new Paragraph({ alignment: AlignmentType.CENTER, children: [run("SENA", { bold: true, color: VERDE_SENA, size: 30 })] }),
-        ] }) },
+        headers: { default: new Header({ children: [logoHeaderParr] }) },
         footers: { default: new Footer({ children: [
           new Paragraph({ alignment: AlignmentType.CENTER, children: [run("GOR-F-084 V02", { size: 16 })] }),
         ] }) },
         children: [
+          // Nota de revisión SIEMPRE visible: el acta se genera con los datos de la
+          // plataforma; lo que falte queda en blanco (campos con "______"). El
+          // instructor debe revisarla/completarla antes de firmar y subir. Borrar
+          // esta línea antes de la versión final.
+          parr(
+            "⚠ Borrador generado automáticamente. Revise y complete los datos faltantes (marcados con ______) antes de firmar y subir el acta. Elimine este aviso en la versión final.",
+            { center: true, italics: true, color: "C00000", size: 16, before: 0, after: 120 }
+          ),
           headerInfoTabla,
           espacio,
           banda("DESARROLLO DE LA REUNIÓN"),
@@ -1169,7 +1226,7 @@ async function actasRoutes(fastify) {
           parr([run("Los aprendices relacionados a continuación "), run("APROBARON SATISFACTORIAMENTE", { bold: true }), run(" la competencia con sus respectivos resultados de aprendizaje planteados.")], { justify: true }),
           tablaRaps(aprobaron),
           espacio,
-          parr([run("Los aprendices relacionados a continuación "), run("QUEDARON PENDIENTES POR EVALUAR", { bold: true }), run(" la competencia con sus respectivos resultados de aprendizaje ya que no se presentaron y/o no asistieron ningún día a la formación.")], { justify: true }),
+          parr([run("Los aprendices relacionados a continuación "), run("QUEDARON PENDIENTES POR EVALUAR", { bold: true }), run(" la competencia con sus respectivos resultados de aprendizaje.")], { justify: true }),
           tablaRaps(porEvaluar),
           espacio,
           parr("2. INFORME DE LLAMADOS DE ATENCIÓN ACADÉMICOS Y/O DISCIPLINARIOS", { bold: true }),
@@ -1394,15 +1451,35 @@ async function actasRoutes(fastify) {
       },
     });
 
-    // Guardar los participantes
+    // SEGURIDAD (multi-tenant, regla #1): los aprendizId vienen del cliente. Hay que
+    // verificar que TODOS pertenezcan a la ficha del acta; si no, se podrían adjuntar
+    // aprendices de otra ficha/instructor y sus nombres+documentos saldrían en el Word
+    // (fuga de datos personales — la propia acta cita la Ley 1581). Validar antes del
+    // createMany (el FK solo exige que el aprendiz exista, no que sea de esta ficha).
+    const aprendizIdsPedidos = [...new Set(participantes.map(p => p.aprendizId).filter(Boolean))];
+    const aprendicesValidos = await prisma.aprendiz.findMany({
+      where:  { fichaId, id: { in: aprendizIdsPedidos } },
+      select: { id: true },
+    });
+    const setValidos = new Set(aprendicesValidos.map(a => a.id));
+    const ajenos = aprendizIdsPedidos.filter(id => !setValidos.has(id));
+    if (ajenos.length > 0) {
+      // Rollback del acta recién creada para no dejar un borrador huérfano.
+      await prisma.actaSeguimiento.delete({ where: { id: acta.id } }).catch(() => {});
+      return reply.code(403).send({ error: "Algunos aprendices no pertenecen a esta ficha." });
+    }
+
+    // Guardar los participantes (solo los ya validados como de la ficha).
     await prisma.actaParticipante.createMany({
-      data: participantes.map(p => ({
-        actaId: acta.id,
-        aprendizId: p.aprendizId,
-        juicio: p.juicio ?? "NO PARTICIPÓ",
-        rapStatus: p.rapStatus ?? {},
-        hasUngraded: Boolean(p.hasUngraded)
-      }))
+      data: participantes
+        .filter(p => setValidos.has(p.aprendizId))
+        .map(p => ({
+          actaId: acta.id,
+          aprendizId: p.aprendizId,
+          juicio: p.juicio ?? "NO PARTICIPÓ",
+          rapStatus: p.rapStatus ?? {},
+          hasUngraded: Boolean(p.hasUngraded)
+        }))
     });
 
     return reply.code(201).send({ actaId: acta.id });
