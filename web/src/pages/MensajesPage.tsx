@@ -81,39 +81,46 @@ interface MensajeHistorial {
 const TEMPLATES = {
   inactividad: {
     label: "Aprendices inactivos (>7 días)",
-    asunto: "Aprendiz inactivo en Zajuna — {{nombre}}",
+    asunto: "Te extrañamos en tu formación — Ficha {{ficha}}",
     cuerpo: `Hola {{nombre}},
 
-Hemos notado que llevas varios días sin ingresar a la plataforma Zajuna. Te recordamos que tienes evidencias por entregar en la ficha {{ficha}}.
+Notamos que llevas varios días sin ingresar a la plataforma Zajuna y queremos acompañarte para que no te atrases en tu proceso de formación de la ficha {{ficha}}.
 
-Por favor ingresa lo antes posible para revisar tu estado de formación.
+Ingresa lo antes posible para revisar tus actividades y evidencias pendientes. Si tienes alguna dificultad para conectarte o avanzar, respóndeme este mensaje y lo resolvemos juntos.
 
-Saludos,
-{{instructor}}`,
+¡Cuento contigo!
+
+Cordialmente,
+{{instructor}}
+Instructor(a) SENA`,
   },
   pendientes: {
     label: "Evidencias pendientes",
-    asunto: "Evidencias pendientes — {{nombre}}",
+    asunto: "Tienes evidencias por entregar — Ficha {{ficha}}",
     cuerpo: `Hola {{nombre}},
 
-Tienes las siguientes evidencias pendientes en la ficha {{ficha}}:
+Te escribo para recordarte que en la ficha {{ficha}} tienes las siguientes evidencias pendientes por entregar:
 
 {{evidencias}}
 
-Por favor entrega lo antes posible.
+Te invito a entregarlas lo antes posible para mantener al día tu proceso de evaluación. Si necesitas orientación sobre alguna de ellas, con gusto te apoyo.
 
-Saludos,
-{{instructor}}`,
+Cordialmente,
+{{instructor}}
+Instructor(a) SENA`,
   },
   recordatorio: {
     label: "Recordatorio general",
-    asunto: "Recordatorio formación — {{ficha}}",
+    asunto: "Recordatorio de tu formación — Ficha {{ficha}}",
     cuerpo: `Hola {{nombre}},
 
-Te recordamos revisar tu progreso en la ficha {{ficha}}.
+Te invito a revisar tu progreso en la ficha {{ficha}} y a ponerte al día con las actividades y evidencias de tu programa de formación.
 
-Saludos,
-{{instructor}}`,
+Recuerda que tu constancia es clave para certificarte. Si tienes dudas o inconvenientes, estoy para ayudarte.
+
+Cordialmente,
+{{instructor}}
+Instructor(a) SENA`,
   },
 } as const
 
@@ -135,6 +142,7 @@ function diasSinAcceso(iso: string | null): number | null {
 
 function estadoBadge(estado: string): "green" | "yellow" | "gray" | "red" {
   if (estado === "enviado")    return "green"
+  if (estado === "parcial")    return "yellow"   // se entregó a la mayoría; algunos fallaron
   if (estado === "pendiente")  return "yellow"
   if (estado === "error")      return "red" as never
   return "gray"

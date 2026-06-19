@@ -3,6 +3,7 @@ const prisma = require("../db/client");
 const { encrypt, decrypt } = require("../lib/crypto");
 const { descubrirCompetenciasQueue } = require("../lib/queue");
 const { saveSession } = require("../lib/sessionStore");
+const { humanizarErrorSMTP } = require("../lib/smtpErrors");
 
 // Superadmin definido SOLO por env (sin fallback hardcodeado). Si no está seteada,
 // nadie es superadmin → los endpoints restringidos quedan cerrados (ver guardas abajo).
@@ -99,16 +100,9 @@ async function ajustesRoutes(fastify) {
       await transporter.verify();
       return { ok: true };
     } catch (err) {
-      const msg = err.message || "";
-      // Microsoft deshabilita SMTP Auth básico a nivel de tenant (política corporativa).
-      // Código de error: "SmtpClientAuthentication is disabled" / "535 5.7.139"
-      if (msg.includes("SmtpClientAuthentication") || msg.includes("535 5.7.139")) {
-        return reply.code(200).send({
-          ok: false,
-          error: "Tu cuenta de Outlook/SENA tiene autenticación SMTP deshabilitada por el administrador de Microsoft. Usa Gmail con contraseña de aplicación, o contacta a sistemas del SENA.",
-        });
-      }
-      return reply.code(200).send({ ok: false, error: msg });
+      // Traduce el error crudo de SMTP a una pista accionable en español (Gmail app
+      // password, Outlook con SMTP Auth deshabilitado, credenciales, host/puerto…).
+      return reply.code(200).send({ ok: false, error: humanizarErrorSMTP(err.message || "") });
     }
   });
 

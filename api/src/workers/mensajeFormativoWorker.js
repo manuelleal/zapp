@@ -56,15 +56,13 @@ function nombresDeEvidencias(evidencias) {
 
 /**
  * Texto plano para el token {{evidencias}} (ver cabecera del archivo).
- * Devuelve "" si no hay items — el token desaparece del mensaje.
+ * Devuelve SOLO la lista numerada (sin frase introductoria, para no duplicar el
+ * "tienes N pendientes" que ya trae la plantilla). "" si no hay items.
  */
 function formatearEvidencias(evidencias) {
   const nombres = nombresDeEvidencias(evidencias);
   if (nombres.length === 0) return "";
-  return [
-    `Tienes ${nombres.length} evidencia(s) pendiente(s):`,
-    ...nombres.map((n, i) => `  ${i + 1}. ${n}`),
-  ].join("\n");
+  return nombres.map((n, i) => `  ${i + 1}. ${n}`).join("\n");
 }
 
 function personalizarCuerpo(cuerpo, dest, ficha, instructor) {
@@ -182,21 +180,20 @@ const worker = new Worker("mensajes", async (job) => {
 
     const total = destinatarios.length;
 
-    if (fallidos === 0) {
-      await prisma.mensajeFormativo.update({
-        where: { id: mensajeId },
-        data:  { estado: "enviado", enviadoAt: new Date() },
-      });
-    } else {
-      await prisma.mensajeFormativo.update({
-        where: { id: mensajeId },
-        data:  {
-          estado:    "error",
-          errorMsg:  `${enviados}/${total} enviados`,
-          enviadoAt: new Date(),
-        },
-      });
-    }
+    // Estado final con tres niveles (antes "error" en cuanto fallaba 1 de N, lo que
+    // hacía ver un envío de 49/50 como fallo total):
+    //   - todos OK            → "enviado"
+    //   - ninguno se envió    → "error"
+    //   - algunos sí, otros no → "parcial" (la mayoría se entregó; revisar los fallidos)
+    let estado, errorMsg = null;
+    if (fallidos === 0)        { estado = "enviado"; }
+    else if (enviados === 0)   { estado = "error";   errorMsg = `No se pudo enviar a ningún destinatario (0/${total}).`; }
+    else                       { estado = "parcial"; errorMsg = `${enviados}/${total} enviados, ${fallidos} fallidos (sin usuario de Moodle o sesión interrumpida).`; }
+
+    await prisma.mensajeFormativo.update({
+      where: { id: mensajeId },
+      data:  { estado, errorMsg, enviadoAt: new Date() },
+    });
 
     log(`[mensajeFormativoWorker] Completado: ${enviados} enviados, ${fallidos} fallidos de ${total}`);
   } finally {

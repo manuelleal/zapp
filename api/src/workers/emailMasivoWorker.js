@@ -15,6 +15,7 @@ const { Worker } = require("bullmq");
 const nodemailer = require("nodemailer");
 const { connection } = require("../lib/queue");
 const { decrypt } = require("../lib/crypto");
+const { humanizarErrorSMTP } = require("../lib/smtpErrors");
 const prisma = require("../db/client");
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -62,9 +63,11 @@ function personalizarMensaje(cuerpo, dest) {
   // {{evidencias}} en HTML: encabezado "Tienes N..." + <ol> numerado, misma
   // semántica que el texto plano de mensajeFormativoWorker (paridad de canales).
   // Si no hay evidencias → "" (no queda el token crudo en el correo).
+  // Solo la lista numerada (sin "Tienes N..." — la plantilla ya da el contexto,
+  // evita el texto duplicado). Si no hay evidencias → "" (no queda token crudo).
   const nombresEv = nombresDeEvidencias(dest.evidencias);
   const evidenciasHtml = nombresEv.length
-    ? `Tienes ${nombresEv.length} evidencia(s) pendiente(s):<ol>${nombresEv.map(e => `<li>${escapeHtml(e)}</li>`).join("")}</ol>`
+    ? `<ol style="margin:8px 0;padding-left:20px">${nombresEv.map(e => `<li>${escapeHtml(e)}</li>`).join("")}</ol>`
     : "";
 
   const texto = String(cuerpo ?? "")
@@ -75,16 +78,17 @@ function personalizarMensaje(cuerpo, dest) {
     .replace(/\{\{instructor\}\}/gi, escapeHtml(dest.instructor ?? ""));
 
   return `
-<div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:24px">
-  <div style="background:#1d4ed8;padding:16px;border-radius:8px 8px 0 0">
-    <h2 style="color:white;margin:0;font-size:16px">🎓 Notificación SENA</h2>
+<div style="font-family:Segoe UI,Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;background:#f8fafc">
+  <div style="background:#39A900;padding:18px 20px;border-radius:8px 8px 0 0">
+    <h2 style="color:white;margin:0;font-size:17px;font-weight:600">Servicio Nacional de Aprendizaje — SENA</h2>
   </div>
-  <div style="border:1px solid #e5e7eb;border-top:none;padding:20px;border-radius:0 0 8px 8px">
+  <div style="background:#ffffff;border:1px solid #e5e7eb;border-top:none;padding:22px;border-radius:0 0 8px 8px;color:#1f2937;font-size:14px;line-height:1.55">
     ${texto.replace(/\n/g, "<br>")}
-    <hr style="margin:16px 0;border:none;border-top:1px solid #e5e7eb">
-    <p style="color:#6b7280;font-size:12px">
-      Sistema de gestión SENA — Zajuna App<br>
-      <a href="https://zajuna.sena.edu.co">Ingresar a Zajuna</a>
+    <hr style="margin:18px 0;border:none;border-top:1px solid #e5e7eb">
+    <p style="color:#6b7280;font-size:12px;margin:0">
+      Este es un mensaje de seguimiento de tu proceso de formación.
+      Ingresa a la plataforma para revisar tus evidencias:
+      <a href="https://zajuna.sena.edu.co" style="color:#39A900;text-decoration:none;font-weight:600">zajuna.sena.edu.co</a>
     </p>
   </div>
 </div>`;
@@ -142,17 +146,23 @@ const worker = new Worker("emailMasivo", async (job) => {
   }
 
   const total = destinatarios.length;
+  // Tres niveles, igual que el canal Zajuna: enviado / parcial / error.
   const estadoFinal = errores === 0 ? "enviado"
     : enviados === 0 ? "error"
-    : "enviado"; // parcial → "enviado" con errorMsg
+    : "parcial";
+
+  // Mensaje de error legible: si todo falló por la misma causa SMTP (ej. Gmail sin
+  // contraseña de aplicación), se muestra esa pista en vez de un críptico "X/Y".
+  let errorMsg = null;
+  if (errores > 0) {
+    const primera = erroresDetalle.find(e => e.error && e.error !== "Sin email")?.error;
+    const pista = primera ? humanizarErrorSMTP(primera) : null;
+    errorMsg = `${enviados}/${total} enviados, ${errores} fallidos.` + (pista ? ` ${pista}` : "");
+  }
 
   await prisma.mensajeFormativo.update({
     where: { id: mensajeFormativoId },
-    data: {
-      estado:    estadoFinal,
-      enviadoAt: new Date(),
-      errorMsg:  errores > 0 ? `${enviados}/${total} enviados. ${errores} fallidos.` : null,
-    },
+    data: { estado: estadoFinal, enviadoAt: new Date(), errorMsg },
   });
 
   return { enviados, errores, total, erroresDetalle };
