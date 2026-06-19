@@ -230,7 +230,8 @@ async function fichasRoutes(fastify) {
       okBg:  'FFBBF7D0', okTx:  'FF166534',         // aprobado (verde)
       malBg: 'FFFECACA', malTx: 'FF991B1B',         // reprobado (rojo)
       pendBg:'FFFEF08A', pendTx:'FF854D0E', pendLink:'FF2563EB', // por calificar
-      seBg:  'FFE5E7EB', seTx:  'FF6B7280',         // sin entregar
+      seBg:  'FFE5E7EB', seTx:  'FF6B7280',         // no entregó
+      nsBg:  'FFF8FAFC', nsTx:  'FF94A3B8',         // sin escanear / sin dato (—)
     };
     const borde = { top:{style:'thin'}, left:{style:'thin'}, bottom:{style:'thin'}, right:{style:'thin'} };
     const fill = (argb) => ({ type:'pattern', pattern:'solid', fgColor:{ argb } });
@@ -247,7 +248,56 @@ async function fichasRoutes(fastify) {
     const N = ficha.evidencias.length;
     const colAprob = 3 + N; // 1=Aprendiz, 2=Documento, 3..2+N=evidencias, última=Aprobadas
 
-    // Fila 1: RAPs
+    // ── Detección de "sin escanear" ───────────────────────────────────────────
+    // Una evidencia sin NINGUNA entrega en toda la ficha = nunca se escaneó (no es
+    // que nadie entregó: simplemente no hay dato). El instructor debe escanear antes
+    // de fiarse del reporte; por eso lo avisamos explícito (antes salía "SE" y se
+    // confundía con "no entregó").
+    const entregasPorEvid = new Map();
+    ficha.aprendices.forEach(a => a.entregas.forEach(e =>
+      entregasPorEvid.set(e.evidenciaId, (entregasPorEvid.get(e.evidenciaId) || 0) + 1)));
+    const evidsSinEscanear = ficha.evidencias.filter(ev => !(entregasPorEvid.get(ev.id) > 0)).length;
+    const hayQueEscanear = ficha.aprendices.length === 0 || evidsSinEscanear > 0;
+
+    // ── Fila 1: Título + aviso de escaneo (a todo el ancho) ───────────────────
+    const tituloTxt = `Reporte de evidencias — Ficha ${ficha.codigo}`
+      + (hayQueEscanear
+          ? `   ⚠ HAY EVIDENCIAS SIN ESCANEAR (marcadas “—”). Escanea la ficha en Helper (botón “Escanear”) para ver el estado real antes de usar este reporte.`
+          : "");
+    const rowTitulo = sheet.addRow([tituloTxt]);
+    sheet.mergeCells(1, 1, 1, colAprob);
+    rowTitulo.height = hayQueEscanear ? 30 : 20;
+    rowTitulo.getCell(1).fill = fill(hayQueEscanear ? 'FFFEF3C7' : C.rap);
+    rowTitulo.getCell(1).font = { bold: true, size: 11, color: { argb: hayQueEscanear ? 'FF92400E' : 'FFFFFFFF' } };
+    rowTitulo.getCell(1).alignment = { horizontal: 'left', vertical: 'middle', wrapText: true };
+
+    // ── Fila 2: Banda de agrupación por GUÍA (GA1, GA2…) ──────────────────────
+    // Las evidencias ya vienen ordenadas por GA→AA→EV; aquí agrupamos visualmente
+    // las columnas de cada guía con una celda combinada "Guía N" (lo que pidió el
+    // instructor: ver el reporte organizado por guía).
+    const rowGA = sheet.addRow(new Array(colAprob).fill(""));
+    rowGA.height = 18;
+    sheet.mergeCells(2, 1, 2, 2);
+    sheet.getCell(2, 1).value = "Guía →";
+    sheet.getCell(2, 1).font = { italic: true, size: 9, color: { argb: 'FF6B7280' } };
+    sheet.getCell(2, 1).alignment = { horizontal: 'right', vertical: 'middle' };
+    const gaColors = ['FFDBEAFE', 'FFEDE9FE', 'FFDCFCE7', 'FFFEF9C3', 'FFFFE4E6', 'FFE0F2FE'];
+    let gi = 0, k = 0;
+    while (k < N) {
+      const ga = gaDe(ficha.evidencias[k].nombre);
+      let j = k; while (j < N && gaDe(ficha.evidencias[j].nombre) === ga) j++;
+      const cStart = 3 + k, cEnd = 3 + j - 1;
+      if (cEnd > cStart) sheet.mergeCells(2, cStart, 2, cEnd);
+      const cg = sheet.getCell(2, cStart);
+      cg.value = ga >= 0 ? `Guía ${ga}` : "Otras";
+      cg.fill = fill(gaColors[gi % gaColors.length]);
+      cg.font = { bold: true, size: 9, color: { argb: 'FF374151' } };
+      cg.alignment = { horizontal: 'center', vertical: 'middle' };
+      cg.border = borde;
+      gi++; k = j;
+    }
+
+    // ── Fila 3: RAPs ──────────────────────────────────────────────────────────
     const rowRaps = ["Resultados de Aprendizaje (RAP)", ""];
     ficha.evidencias.forEach(ev => rowRaps.push(ev.rapRels.map(r => r.rap.codigo).join("\n") || "Sin RAP"));
     rowRaps.push("");
@@ -256,7 +306,7 @@ async function fichasRoutes(fastify) {
     headerRaps.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
     headerRaps.eachCell(c => { c.fill = fill(C.rap); c.border = borde; });
 
-    // Fila 2: Encabezados (Aprendiz, Documento, evidencias coloreadas por tipo, Aprobadas)
+    // ── Fila 4: Encabezados (Aprendiz, Documento, evidencias por tipo, Aprobadas) ─
     const rowEvidencias = ["Aprendiz", "Documento", ...ficha.evidencias.map(ev => ev.nombre), "Aprobadas"];
     const headerEvi = sheet.addRow(rowEvidencias);
     headerEvi.font = { bold: true, size: 9 };
@@ -273,10 +323,11 @@ async function fichasRoutes(fastify) {
 
     sheet.getColumn(1).width = 32;
     sheet.getColumn(2).width = 16;
-    for (let i = 3; i <= 2 + N; i++) sheet.getColumn(i).width = 13;
+    for (let i = 3; i <= 2 + N; i++) sheet.getColumn(i).width = 15;
     sheet.getColumn(colAprob).width = 11;
-    sheet.views = [{ state: 'frozen', xSplit: 2, ySplit: 2 }];
-    sheet.autoFilter = { from: { row: 2, column: 1 }, to: { row: 2, column: colAprob } };
+    // Congela las 2 primeras columnas (nombre+documento) y las 4 filas de cabecera.
+    sheet.views = [{ state: 'frozen', xSplit: 2, ySplit: 4 }];
+    sheet.autoFilter = { from: { row: 4, column: 1 }, to: { row: 4, column: colAprob } };
 
     const firstEvLetter = sheet.getColumn(3).letter;
     const lastEvLetter  = sheet.getColumn(2 + N).letter;
@@ -286,7 +337,9 @@ async function fichasRoutes(fastify) {
       const entregasMap = new Map();
       a.entregas.forEach(ent => entregasMap.set(ent.evidenciaId, ent));
 
-      const row = sheet.addRow([a.nombre, a.documento || ""]);
+      // Limpia el "cc"/"ti" que Moodle pega al final del documento (ej. "79451297cc").
+      const docLimpio = String(a.documento || "").replace(/\s*(cc|ti|ce|pep|ppt)\s*$/i, "").trim();
+      const row = sheet.addRow([a.nombre, docLimpio]);
       row.alignment = { vertical: 'middle' };
       row.font = { size: 9 };
       row.getCell(1).border = borde;
@@ -302,13 +355,26 @@ async function fichasRoutes(fastify) {
         const cual = entrega && entrega.notaCualitativa ? String(entrega.notaCualitativa).toUpperCase() : null;
         const num  = entrega && typeof entrega.notaActual === "number" ? entrega.notaActual : null;
         const tieneNota = cual !== null || num !== null;
-        const estadoPend = entrega && (entrega.estado.toLowerCase().includes("calificar") || entrega.estado.toLowerCase().includes("borrador"));
+        const est = entrega ? String(entrega.estado || "").toLowerCase() : null;
+        // "sin_entregar" = el aprendiz NO subió nada (no hay envío que calificar).
+        const noEntrego = est != null && (est.includes("sin_entreg") || est.includes("no_entreg") || est.includes("sin entregar"));
 
         if (!entrega) {
-          cell.value = "SE";                                   // Sin entregar
+          // Sin dato: lo más probable es que la evidencia no se haya escaneado.
+          cell.value = "—";
+          cell.fill = fill(C.nsBg); cell.font = { color: { argb: C.nsTx }, size: 9 };
+        } else if (noEntrego) {
+          // No entregó: gris, SIN link de calificar (no hay nada que calificar).
+          cell.value = "NE";
           cell.fill = fill(C.seBg); cell.font = { color: { argb: C.seTx }, size: 9 };
-        } else if (!tieneNota || (estadoPend && !cual)) {
-          const url = urlCalificar(ev, a.moodleId);            // Por calificar + link
+        } else if (tieneNota) {
+          const aprob = cual === "A" || (num !== null && num >= 70);   // Calificado
+          cell.value = cual !== null ? cual : num;            // número como NÚMERO (para COUNTIF)
+          cell.fill = fill(aprob ? C.okBg : C.malBg);
+          cell.font = { color: { argb: aprob ? C.okTx : C.malTx }, bold: true, size: 9 };
+        } else {
+          // Entregó pero sin nota → por calificar (con link directo al grader).
+          const url = urlCalificar(ev, a.moodleId);
           if (url) {
             cell.value = { text: "PC ▸", hyperlink: url, tooltip: "Ir a calificar en Zajuna" };
             cell.font = { color: { argb: C.pendLink }, underline: true, bold: true, size: 9 };
@@ -316,11 +382,6 @@ async function fichasRoutes(fastify) {
             cell.value = "PC"; cell.font = { color: { argb: C.pendTx }, bold: true, size: 9 };
           }
           cell.fill = fill(C.pendBg);
-        } else {
-          const aprob = cual === "A" || (num !== null && num >= 70);   // Calificado
-          cell.value = cual !== null ? cual : num;            // número como NÚMERO (para COUNTIF)
-          cell.fill = fill(aprob ? C.okBg : C.malBg);
-          cell.font = { color: { argb: aprob ? C.okTx : C.malTx }, bold: true, size: 9 };
         }
       });
 
@@ -339,11 +400,12 @@ async function fichasRoutes(fastify) {
     leg.getColumn(1).width = 14; leg.getColumn(2).width = 48;
     leg.addRow(["Código", "Significado"]).eachCell(c => { c.font = { bold: true, color:{argb:'FFFFFFFF'} }; c.fill = fill(C.rap); c.border = borde; });
     [
-      ["A",    "Aprobado (cualitativa A o nota ≥ 70/100 — umbral SENA)", C.okBg, C.okTx],
-      ["D",    "Deficiente / no aprobado (cualitativa D o nota < 70)",    C.malBg, C.malTx],
-      ["0-100","Nota numérica (verde si ≥70, rojo si <70)",              C.okBg, C.okTx],
-      ["PC ▸", "Por calificar — clic para ir directo al grader de Moodle", C.pendBg, C.pendLink],
-      ["SE",   "Sin entregar",                                            C.seBg, C.seTx],
+      ["A",    "Aprobado (cualitativa A o nota ≥ 70/100 — umbral SENA)",   C.okBg, C.okTx],
+      ["D",    "Deficiente / no aprobado (cualitativa D o nota < 70)",     C.malBg, C.malTx],
+      ["0-100","Nota numérica (verde si ≥70, rojo si <70)",               C.okBg, C.okTx],
+      ["PC ▸", "Por calificar — el aprendiz SÍ entregó; clic para ir al grader de Moodle", C.pendBg, C.pendLink],
+      ["NE",   "No entregó — el aprendiz no subió ninguna evidencia",      C.seBg, C.seTx],
+      ["—",    "Sin escanear — no hay datos; escanea la ficha en Helper",  C.nsBg, C.nsTx],
     ].forEach(([cod, sig, bg, tx]) => {
       const lr = leg.addRow([cod, sig]);
       lr.getCell(1).fill = fill(bg); lr.getCell(1).font = { bold: true, color:{argb:tx} };
@@ -360,7 +422,7 @@ async function fichasRoutes(fastify) {
     const rAct = leg.addRow(["", `Última actualización de los datos: ${fmt(maxScan)}`]);
     rAct.getCell(2).font = { bold: true, color: { argb: C.rap } };
     leg.addRow(["", "Encabezados por tipo: azul = tarea · rosa = cuestionario · verde = foro"]);
-    leg.addRow(["", `Generado por Zajuna App — ${new Date().toLocaleDateString("es-CO")}`]);
+    leg.addRow(["", `Generado por Helper — ${new Date().toLocaleDateString("es-CO")}`]);
 
     const buffer = await workbook.xlsx.writeBuffer();
     const filename = `Reporte_Avanzado_${ficha.codigo}_${new Date().toISOString().slice(0,10)}.xlsx`;
