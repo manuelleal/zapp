@@ -9,6 +9,7 @@ import MatchingIaPage from "@/pages/MatchingIaPage"
 import ActasPage from "@/pages/ActasPage"
 import MensajesPage from "@/pages/MensajesPage"
 import AjustesPage from "@/pages/AjustesPage"
+import AdminPage from "@/pages/AdminPage"
 import ErrorBoundary from "@/components/ErrorBoundary"
 
 function App() {
@@ -27,6 +28,7 @@ function App() {
           <Route path="/mensajes"          element={<MensajesPage />} />
           <Route path="/mensajes/nuevo"    element={<MensajesPage />} />
           <Route path="/ajustes"           element={<AjustesPage />} />
+          <Route path="/admin"             element={<AdminPage />} />
           <Route path="*"                  element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </BrowserRouter>

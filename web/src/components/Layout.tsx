@@ -1,9 +1,11 @@
 import { NavLink, useNavigate } from "react-router-dom"
-import { LogOut, LayoutDashboard, FolderOpen, Settings2, BookOpen, ClipboardList, Mail, Settings, KeyRound, Loader2 } from "lucide-react"
-import { useQuery } from "@tanstack/react-query"
+import { LogOut, LayoutDashboard, FolderOpen, Settings2, BookOpen, ClipboardList, Mail, Settings, KeyRound, Loader2, ShieldCheck } from "lucide-react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Button } from "@/components/ui/button"
 import { useAuthStore } from "@/store/auth"
 import { apiFetch } from "@/api/client"
+import LegalFooter from "@/components/LegalFooter"
+import WelcomeModal from "@/components/WelcomeModal"
 
 function getUserInitials(nombre: string): string {
   return nombre.split(" ").filter(Boolean).map(w => w[0]).slice(0, 2).join("").toUpperCase()
@@ -48,9 +50,28 @@ const navItems = [
   { to: "/ajustes",          label: "Ajustes",         icon: Settings },
 ]
 
+interface Me { id: string; nombre: string; email: string; rol: string; competenciaNombre: string; aceptoTerminosAt: string | null }
+
 export default function Layout({ children }: { children: React.ReactNode }) {
   const navigate  = useNavigate()
+  const qc = useQueryClient()
   const { user, jwt, clearAuth } = useAuthStore()
+
+  // Usuario actual desde el backend (sobrevive reloads y refleja rol/aceptación
+  // actuales — el store solo guarda el user en memoria, se pierde al recargar).
+  const { data: meData } = useQuery<{ user: Me }>({
+    queryKey: ["me"],
+    queryFn:  () => apiFetch("/api/auth/me"),
+    enabled:  !!jwt,
+    staleTime: 60_000,
+  })
+  const esSuperadmin = meData?.user?.rol === "superadmin"
+  const mostrarBienvenida = !!meData?.user && !meData.user.aceptoTerminosAt
+
+  // El item de Admin solo se agrega para el superadmin (el backend igual exige rol).
+  const items = esSuperadmin
+    ? [...navItems, { to: "/admin", label: "Admin", icon: ShieldCheck }]
+    : navItems
 
   // Estado de las credenciales de Zajuna. Si quedaron inválidas (el instructor
   // cambió la clave en Zajuna y la app sigue con la vieja), mostramos un banner
@@ -101,7 +122,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             </div>
 
             <nav className="flex items-center gap-1 overflow-x-auto max-w-[55vw] sm:max-w-none scrollbar-hide">
-              {navItems.map(({ to, label, icon: Icon }) => (
+              {items.map(({ to, label, icon: Icon }) => (
                 <NavLink
                   key={to}
                   to={to}
@@ -183,6 +204,12 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-6">
         {children}
       </main>
+
+      <LegalFooter />
+
+      {/* Aviso de bienvenida / tratamiento de datos (1ª vez). Al aceptar, refresca
+          /me para que aceptoTerminosAt deje de ser null y no se vuelva a mostrar. */}
+      <WelcomeModal open={mostrarBienvenida} onAccepted={() => qc.invalidateQueries({ queryKey: ["me"] })} />
     </div>
   )
 }

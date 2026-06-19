@@ -8,6 +8,8 @@ interface User {
   email: string
   competenciaNombre: string
   competenciaCodigo: string
+  rol?: string
+  aceptoTerminosAt?: string | null
 }
 
 interface AuthState {
