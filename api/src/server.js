@@ -15,9 +15,25 @@
  * Headers de seguridad inyectados en onSend (todos los responses):
  *   X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy.
  *
+ * Monitoreo de errores: Sentry (opcional). Si SENTRY_DSN no está en .env, se
+ *   deshabilita silenciosamente — no rompe nada en dev local sin cuenta de Sentry.
+ *
  * Puerto: 3000 (configurable en el future con PORT env).
  */
 require("dotenv").config({ path: require("path").resolve(__dirname, "../../.env") });
+
+// ─── SENTRY (inicializar ANTES de todo lo demás) ──────────────────────────────
+// Si SENTRY_DSN no está definido, Sentry queda deshabilitado sin error.
+// Para habilitarlo: crear proyecto en sentry.io → copiar el DSN en .env.
+const Sentry = require("@sentry/node");
+if (process.env.SENTRY_DSN) {
+  Sentry.init({
+    dsn:         process.env.SENTRY_DSN,
+    environment: process.env.NODE_ENV || "production",
+    // Captura el 10% de transacciones para performance (ajustar en producción).
+    tracesSampleRate: 0.1,
+  });
+}
 
 const path    = require("path");
 const fastify = require("fastify")({
@@ -77,12 +93,22 @@ fastify.decorate("authenticate", async (req, reply) => {
 // Evita filtrar al cliente stacks/mensajes internos (Prisma, etc.) en errores no
 // controlados. Loguea el error completo del lado servidor; al cliente le devuelve
 // el statusCode original si es un 4xx esperado, o un 500 genérico si no.
+// Los 5xx se reportan a Sentry con el contexto del instructor (userId/email).
 fastify.setErrorHandler((error, req, reply) => {
   const status = error.statusCode && error.statusCode >= 400 && error.statusCode < 500
     ? error.statusCode
     : 500;
   if (status >= 500) {
     req.log.error({ err: error }, "Error no controlado");
+    // Enviar a Sentry con contexto del usuario para saber qué instructor lo disparó.
+    if (process.env.SENTRY_DSN) {
+      Sentry.withScope((scope) => {
+        if (req.user) scope.setUser({ id: req.user.id, email: req.user.email });
+        scope.setExtra("url",    req.url);
+        scope.setExtra("method", req.method);
+        Sentry.captureException(error);
+      });
+    }
     return reply.code(500).send({ error: "Error interno del servidor." });
   }
   // 4xx de validación de Fastify u otros: el mensaje es seguro de mostrar.
