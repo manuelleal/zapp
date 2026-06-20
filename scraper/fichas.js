@@ -89,6 +89,56 @@ async function iterarPaginasCursos(page, extraerFunc) {
   return todos;
 }
 
+// ─── DESCUBRIMIENTO VÍA WEBSERVICE (primario) ────────────────────────────────
+// El bloque "Vista general de cursos" de Moodle pinta la lista llamando al WS
+// core_course_get_enrolled_courses_by_timeline_classification. Lo llamamos igual
+// (classification=all, limit=0) para traer TODOS los cursos matriculados de una,
+// sin depender de la paginación/filtro del DOM de /my/courses.php (que en el
+// servidor sólo cargaba la primera tanda → dejaba fichas afuera, ej. 3186684).
+
+async function obtenerSesskey(page) {
+  let k = await page.evaluate(() => (window.M && window.M.cfg && window.M.cfg.sesskey) || "").catch(() => "");
+  if (!k) {
+    const html = await page.content().catch(() => "");
+    k = (html.match(/"sesskey":"([^"]+)"/) || html.match(/[?&]sesskey=([A-Za-z0-9]+)/) || [])[1] || "";
+  }
+  return k;
+}
+
+async function obtenerCursosViaAjax(page) {
+  try {
+    const sesskey = await obtenerSesskey(page);
+    if (!sesskey) { log("WS cursos: sin sesskey."); return []; }
+    const data = await page.evaluate(async ({ sesskey, base }) => {
+      const body = [{
+        index: 0,
+        methodname: "core_course_get_enrolled_courses_by_timeline_classification",
+        args: { offset: 0, limit: 0, classification: "all", sort: "fullname",
+                customfieldname: "", customfieldvalue: "" },
+      }];
+      const res = await fetch(
+        `${base}/lib/ajax/service.php?sesskey=${encodeURIComponent(sesskey)}&info=core_course_get_enrolled_courses_by_timeline_classification`,
+        { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify(body) }
+      );
+      const json = await res.json();
+      if (!Array.isArray(json) || json[0]?.error) {
+        return { error: json?.[0]?.exception?.message || "WS error", courses: [] };
+      }
+      return { courses: json[0]?.data?.courses || [] };
+    }, { sesskey, base: BASE_URL });
+
+    if (data.error) { log(`WS cursos no disponible: ${data.error}`); return []; }
+    return (data.courses || []).map(c => ({
+      courseId: c.id,
+      nombre:   c.fullname || c.shortname || "",
+      href:     c.viewurl || `${BASE_URL}/course/view.php?id=${c.id}`,
+    }));
+  } catch (e) {
+    log(`WS cursos falló: ${e.message}`);
+    return [];
+  }
+}
+
 // ─── DESCUBRIR FICHAS ─────────────────────────────────────────────────────────
 
 /**
@@ -99,19 +149,24 @@ async function iterarPaginasCursos(page, extraerFunc) {
 async function descubrirFichas(page, competenciaCodigo) {
   const fichasMap = new Map(); // courseId → ficha
 
-  // ── Intento 1: aprovechar URL post-login o navegar a /my/courses.php ───────
-  const urlActual = page.url();
-  if (!urlActual.includes("/my/")) {
-    log("Navegando a /my/courses.php ...");
-    await page.goto(`${BASE_URL}/my/courses.php`, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+  // ── Intento 0 (PRIMARIO): WS de cursos matriculados (todos de una) ─────────
+  let cursos = await obtenerCursosViaAjax(page);
+  if (cursos.length) {
+    log(`Intento 0 (WS timeline): ${cursos.length} cursos matriculados.`);
   } else {
-    log(`Ya en página de cursos: ${urlActual}`);
+    // ── Intento 1 (FALLBACK): DOM de /my/courses.php ─────────────────────────
+    const urlActual = page.url();
+    if (!urlActual.includes("/my/")) {
+      log("Navegando a /my/courses.php ...");
+      await page.goto(`${BASE_URL}/my/courses.php`, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+    } else {
+      log(`Ya en página de cursos: ${urlActual}`);
+    }
+    await cerrarModal(page);
+    await page.waitForTimeout(500);
+    cursos = await iterarPaginasCursos(page, extraerCursosDelDOM);
+    log(`Intento 1 (DOM): ${cursos.length} cursos encontrados.`);
   }
-  await cerrarModal(page);
-  await page.waitForTimeout(500);
-
-  let cursos = await iterarPaginasCursos(page, extraerCursosDelDOM);
-  log(`Intento 1: ${cursos.length} cursos encontrados.`);
   cursos.slice(0, 3).forEach(c => log(`  - ${c.courseId}: ${c.nombre}`));
   if (cursos.length > 3) log(`  ... y ${cursos.length - 3} más`);
 
