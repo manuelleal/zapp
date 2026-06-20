@@ -1,3 +1,44 @@
+/**
+ * api/src/workers/evidenciasWorker.js — Worker BullMQ de scan de evidencias.
+ *
+ * Cola: "evidencias" | Concurrencia: 3 jobs paralelos (1 Chromium por job via browserPool).
+ *
+ * job.data:
+ *   { jobId, userId, fichaId, courseId, competenciaCodigo, zajunaUserEnc, zajunaPassEnc }
+ *
+ * Flujo en dos fases:
+ *
+ *   FASE 1 — DISCOVERY: navega al Gradebook Tree del curso y hace upsert de TODAS las
+ *   evidencias (incluso las ocultas a aprendices: GA4–GA11, etc.). El upsert normaliza
+ *   el href a la forma canónica view.php?id=N para evitar duplicados con grade.php/report.php.
+ *
+ *   FASE 2 — SCAN (solo activas): lee las entregas de cada evidencia marcada como
+ *   `activaParaScan` y actualiza el estado/nota de cada aprendiz.
+ *
+ * Fuentes de datos por tipo de evidencia:
+ *   - assign (tarea): CAPA 2 AJAX (mod_assign_list_participants, batch en 1 POST) si hay
+ *     sesskey y assignId resuelto; fallback al DOM (revisarEntregas) si no.
+ *   - forum: DOM clásico (revisarEntregasForo).
+ *   - quiz:  DOM clásico (revisarEntregasQuiz).
+ *
+ * Fuentes de nota (en orden de prioridad, la más baja pisa las anteriores):
+ *   1. CSV del libro de calificaciones (descargarGradebookCSV) — fuente confiable
+ *      del estado real; el HTML de Moodle puede mostrar "sin calificar" aunque el
+ *      libro ya tenga la nota.
+ *   2. Grader report (cargarGrader) por itemid — determinista y captura A/D
+ *      cualitativa. Gana sobre el CSV porque usa el id de ítem (no coincidencia
+ *      de texto en cabecera). El grader se carga UNA sola vez por scan (no dos
+ *      como antes, ver comentario inline).
+ *
+ * Optimizaciones de DB (CAPA 1 perf):
+ *   - Aprendices pre-cargados en 1 query → Map en memoria (evita N upserts).
+ *   - Entregas previas por evidencia en 1 findMany (evita N findUnique).
+ *   - Creates/updates acumulados → createMany + $transaction (evita ~3 queries/alumno).
+ *
+ * Reglas invariantes:
+ *   - cerradaAt NUNCA se toca aquí: el cierre de evidencias es 100% manual (§5 #3).
+ *   - Multi-tenant: todo se filtra por userId a través de fichaId.
+ */
 require("dotenv").config({ path: require("path").resolve(__dirname, "../../../.env") });
 
 const { Worker } = require("bullmq");
@@ -71,13 +112,18 @@ const worker = new Worker("evidencias", async (job) => {
       console.error(`[evidenciasWorker] Error procesando Gradebook CSV: ${e.message}`);
     }
 
-    // Crear mapa rápido Documento -> Fila del Gradebook
-    // Como el scraper de evidencias extrae matriculados (que tienen documento/ID Number), lo usamos.
-    // También creamos un mapa Nombre -> Fila del Gradebook como fallback.
+    // Dos índices del CSV para cruzar la nota con cada aprendiz:
+    //   csvByDocumento: número de documento (cédula) → fila CSV   — identidad inequívoca.
+    //   csvByNombre:    nombre completo en mayúsculas → fila CSV   — fallback cuando el
+    //                   aprendiz aún no tiene documento en DB (primer scan de la ficha).
+    // Ambos se intentan; documento gana. El nombre es el único dato que el scraper DOM
+    // extrae junto con el estado: no tenemos documento hasta que Moodle lo expone
+    // en el grader report (y ahí ya lo capturamos con extraerMatriculadosDelGrader).
     const csvByDocumento = new Map();
     const csvByNombre = new Map();
-    
-    // Nombres de columnas posibles para Documento y Nombre
+
+    // Detectar los encabezados dinámicamente: el CSV de Moodle varía entre versiones
+    // (español/inglés) y entre configuraciones de la instancia de Zajuna.
     let colDocumento = null;
     let colNombre = null;
     

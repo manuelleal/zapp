@@ -1,5 +1,9 @@
 # Plan unificado para subir HOY (18 jun 2026)
 
+> ✅ **EJECUTADO** — Release pusheado a master el 18 jun (commit `f1e2042`). Merges 001/002/004/007
+> completados. Trabajo de sesión (fix sesión 9 workers, UI fechas) commiteado. Ver `CLAUDE.md §7`
+> y `CHANGELOG.md` para el estado post-release.
+
 > Fusiona los 7 planes del skill `improve` (10-jun, `plans/00X-*.md`) + el `plans/POSTMORTEM_FALLOS.md` (18-jun) + el trabajo de hoy. Objetivo: dejar la app **subible hoy** para que otros instructores la prueben, sin corromper datos ni subir trabajo a medias.
 
 ## 1. Qué ya está HECHO (en worktrees, SIN mergear a master)

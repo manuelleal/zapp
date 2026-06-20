@@ -1,50 +1,36 @@
-# React + TypeScript + Vite
+# Zajuna App — Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Frontend React 18 + Vite 5 + Tailwind 3 + shadcn/ui.
 
-Currently, two official plugins are available:
+Para documentación del proyecto, instrucciones de desarrollo y arquitectura, ver:
+- `DEVELOPER_ONBOARDING.md` — guía para desarrolladores nuevos
+- `CLAUDE.md` — fuente de verdad del proyecto (estado actual, reglas, pendientes)
+- `docs/ARCHITECTURE.md` — arquitectura del sistema
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## Comandos
 
-## Expanding the ESLint configuration
+```bash
+# Desarrollo con HMR (proxy a API en :3000)
+npm run dev       # inicia en http://localhost:5173
 
-If you are developing a production application, we recommend updating the configuration to enable type aware lint rules:
+# Build de producción (sirve desde Fastify en :3000)
+npm run build     # genera web/dist/
 
-- Configure the top-level `parserOptions` property like this:
-
-```js
-export default tseslint.config({
-  languageOptions: {
-    // other options...
-    parserOptions: {
-      project: ['./tsconfig.node.json', './tsconfig.app.json'],
-      tsconfigRootDir: import.meta.dirname,
-    },
-  },
-})
+# Verificación de tipos
+npx tsc --noEmit
 ```
 
-- Replace `tseslint.configs.recommended` to `tseslint.configs.recommendedTypeChecked` or `tseslint.configs.strictTypeChecked`
-- Optionally add `...tseslint.configs.stylisticTypeChecked`
-- Install [eslint-plugin-react](https://github.com/jsx-eslint/eslint-plugin-react) and update the config:
+## Páginas
 
-```js
-// eslint.config.js
-import react from 'eslint-plugin-react'
-
-export default tseslint.config({
-  // Set the react version
-  settings: { react: { version: '18.3' } },
-  plugins: {
-    // Add the react plugin
-    react,
-  },
-  rules: {
-    // other rules...
-    // Enable its recommended rules
-    ...react.configs.recommended.rules,
-    ...react.configs['jsx-runtime'].rules,
-  },
-})
-```
+| Ruta | Componente | Descripción |
+|---|---|---|
+| `/login` | `Login.tsx` | Acceso |
+| `/dashboard` | `Dashboard.tsx` | Vista general del instructor |
+| `/fichas` | `Fichas.tsx` | Listado completo + modal evidencias + Excel |
+| `/evidencias-config` | `EvidenciasConfig.tsx` | Tabla de fechas y config masiva |
+| `/raps` | `RapsPage.tsx` | Gestión curricular RAPs |
+| `/matching-ia` | `MatchingIaPage.tsx` | Revisar propuestas IA de matching |
+| `/actas` | `ActasPage.tsx` | Actas GOR-F-084 + descarga Word |
+| `/mensajes` | `MensajesPage.tsx` | Mensajes masivos + programados |
+| `/ajustes` | `AjustesPage.tsx` | Config SMTP + competencias |
+| `/admin` | `AdminPage.tsx` | Panel superadmin (solo rol superadmin) |

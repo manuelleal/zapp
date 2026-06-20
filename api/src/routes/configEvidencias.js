@@ -1,3 +1,35 @@
+/**
+ * api/src/routes/configEvidencias.js — Leer y guardar fechas/intentos de evidencias en Moodle.
+ *
+ * "Config" = los campos del formulario de edición de una tarea/foro en Moodle:
+ *   abrirFecha/abrirHora, entregaFecha/entregaHora, limiteFecha/limiteHora, intentos.
+ *
+ * Rutas:
+ *   PATCH  /api/evidencias/config/bulk             — guardar config en N evidencias (lote)
+ *   POST   /api/fichas/:fichaId/config/leer-todo   — leer config de toda la ficha en 1 sesión (B1)
+ *   GET    /api/fichas/:fichaId/config             — tabla de evidencias con configCache (B2)
+ *   GET    /api/evidencias/:id/config              — config individual (con cache TTL 4h)
+ *   PATCH  /api/evidencias/:id/config              — guardar config individual
+ *
+ * Colas usadas:
+ *   configQueue      (config)         → leerConfigWorker / cambiarFechaWorker
+ *   leerConfigQueue  (leerConfig)     → leerConfigWorker
+ *   leerConfigLoteQueue (leerConfigLote) → leerConfigLoteWorker (sesión única, todas las evs)
+ *
+ * GOTCHA — dos caches desincronizados (bug diagnosticado 9-jun-2026):
+ *   - EvidenciaConfig (tabla) guarda el `raw` HTML del formulario, usado para auditoría.
+ *   - Evidencia.configCache (columna JSON inline) guarda el `config` parseado, usado por el front.
+ *   Si EvidenciaConfig tiene una fila reciente pero Evidencia.configCache es null (ej. scan
+ *   parcial donde se guardó el raw pero falló el parse), GET /api/evidencias/:id/config
+ *   devolvería fromCache:true + config:null → el front queda vacío sin error ni jobId.
+ *   Fix aplicado (línea ~206): se sirve cache SOLO si AMBOS existen y son recientes.
+ *
+ * GOTCHA — disabledIf de Moodle (ver CLAUDE.md §11.6 y scraper/configEvidenciasFetch.js):
+ *   Moodle deshabilita por JS los selects de fecha cuando el checkbox [enabled] está apagado.
+ *   Al leer el HTML con fetch/cheerio sin ejecutar JS, se obtienen valores stale de esos selects.
+ *   El scraper emula esta regla eliminando los campos de fecha si [enabled] != "1"
+ *   para evitar que Moodle rechace silenciosamente el POST (HTTP 200 sin guardar).
+ */
 const prisma = require("../db/client");
 const { configQueue, leerConfigQueue, leerConfigLoteQueue } = require("../lib/queue");
 const { encrypt } = require("../lib/crypto");

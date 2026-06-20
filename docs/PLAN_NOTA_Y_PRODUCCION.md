@@ -27,6 +27,19 @@
 
 ---
 
+---
+
+> **Estado al 19 jun 2026:**
+> - **Fases 1–4:** ✅ HECHAS y commiteadas (verificadas en vivo: VICTOR → `notaCualitativa="A"`,
+>   `Evidencia.itemid` poblado). Commits: `feat(db): Entrega.notaCualitativa`, `feat(scan): itemid`,
+>   `feat(scraper): obtenerNotasGrader`, `fix(scan): nota numerica/cualitativa`.
+> - **Fase 5 (UI A/D):** 🟡 PENDIENTE. `AprendicesPanel.tsx` aún no muestra el badge de letra.
+> - **Fase 6 (subestado borrador/reabierto):** 🟡 PENDIENTE.
+> - **Fase 7 (auto-vinculación RAPs):** ✅ RESUELTO por otra vía — `matchearCompetenciaIA.js`
+>   generó 2147 vínculos `RapEvidenciaRel` el 9 jun. Las actas ya funcionan.
+
+---
+
 ## FASE 1 — Campo en la DB para la nota cualitativa
 **Objetivo:** tener dónde guardar "A"/"D". Sin cambio de comportamiento.
 - `prisma/schema.prisma`: en `model Entrega` agregar `notaCualitativa String?`.

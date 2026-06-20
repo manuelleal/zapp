@@ -1,5 +1,30 @@
 /**
- * scraper/auth.js — login compartido para todos los scrapers
+ * scraper/auth.js — Login SSO de SENA en Zajuna (Moodle).
+ *
+ * IMPORTANTE — Por qué el login es especial:
+ *   Zajuna NO usa el login nativo de Moodle (/login/index.php + usuario/clave).
+ *   El acceso pasa por el portal raíz (https://zajuna.sena.edu.co) con un SSO
+ *   federado propio del SENA: formulario con `typeDocument` (CC/TI/…), `document`
+ *   (número de cédula) y `password` del SOFIA Plus. El usuario Moodle NO tiene
+ *   contraseña interna, por eso /login/token.php responde `invalidlogin` aunque las
+ *   credenciales sean correctas. No se puede obtener un token WS.
+ *   → Consecuencia: TODO el scraping se hace en sesión Playwright (cookies de
+ *     sesión SSO). Los fetch en Node.js se hacen a partir del storageState de esa
+ *     sesión (ver lib/sessionStore.js). Ver CLAUDE.md §11.2 para el detalle.
+ *
+ * cerrarModal:
+ *   #connection-guard-modal aparece aleatoriamente en cualquier navegación de Zajuna
+ *   (modal de "sesión duplicada / conexión perdida"). Si no se cierra bloquea clicks
+ *   y selectores en la página. Se intenta cerrarlo primero por botón y, si persiste,
+ *   se oculta vía JS directo. Es silencioso (no lanza si no está).
+ *
+ * Detección de credenciales incorrectas:
+ *   SENA NO usa `.loginerrors`/`.alert-danger` de Moodle. Cuando la cédula o la
+ *   clave son inválidas el portal redirige a /index.php?error=Los+datos+de+acceso…
+ *   Sin verificar esa URL, login() reportaría "Sesión iniciada ✓" en falso y el
+ *   scrape devolvería 0 notas silenciosamente (confirmado en log real 18-jun-2026).
+ *
+ * Exporta: { login, cerrarModal, BASE_URL, TIMEOUT, log }
  */
 
 const BASE_URL = "https://zajuna.sena.edu.co/zajuna";

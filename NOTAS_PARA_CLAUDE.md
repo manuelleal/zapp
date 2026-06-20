@@ -1,6 +1,11 @@
 # NOTAS DEL USUARIO PARA CLAUDE (Reporte de Bug)
 
-**Fecha:** 3 de Junio de 2026
+> **RESUELTO** en commit `d6d64a4` (9 jun 2026). Ver `CLAUDE.md §14.4`.
+> El bug era una desincronización entre dos cachés (`EvidenciaConfig.raw` y
+> `Evidencia.configCache`). Ya no se manifiesta. Este archivo queda solo como
+> registro histórico.
+
+**Fecha del reporte original:** 3 de Junio de 2026
 
 ## Problema en la pantalla de Configurar Evidencias
 El usuario reportó un bug visual y funcional en la pantalla de configuración de evidencias (`EvidenciasConfig.tsx`).

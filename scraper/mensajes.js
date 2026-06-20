@@ -1,3 +1,36 @@
+/**
+ * scraper/mensajes.js — Envío de mensajes Moodle y utilidades de contacto.
+ *
+ * Funciones exportadas:
+ *   enviarMensajeMoodle(page, moodleUserId, texto)
+ *     Envía un mensaje interno de Moodle vía el endpoint AJAX
+ *     `core_message_send_instant_messages` con el sesskey de la sesión activa.
+ *     Requiere que `page` esté autenticado (por eso usa page.evaluate con
+ *     `window.M.cfg.sesskey`, no un fetch Node). Devuelve { ok, msgId?, error? }.
+ *
+ *   construirMensaje(params, pendientes, desaprobadas)
+ *     Arma el texto estándar de notificación al aprendiz con listas de evidencias
+ *     pendientes y/o desaprobadas. Es el mismo formato que usa la Extensión Z.
+ *     Usada por mensajeFormativoWorker.js para expandir el token {{evidencias}}.
+ *
+ *   sincronizarParticipantes(page, courseId, opts)
+ *     Extrae la lista de aprendices de un curso desde /user/index.php?perpage=5000.
+ *     Prueba múltiples selectores en cascada (Moodle 3.x/4.x/Zajuna).
+ *     Con profileFallback=true (default) hace un segundo pasada por /user/profile.php
+ *     si más del 50 % de los aprendices carecen de email (lento pero confiable).
+ *
+ *   parseUltimoAcceso(raw)
+ *     Parsea la cadena "Último acceso" de Moodle en español ("hace 2 días",
+ *     "miércoles, 14 de mayo de 2026, 10:30", "Nunca", etc.) → Date|null.
+ *     NUNCA lanza excepción.
+ *
+ *   linkWhatsApp(telefono, mensaje)
+ *     Genera un enlace wa.me para abrir conversación directa.
+ *
+ * Nota de diseño (regla §5 punto 7):
+ *   La interacción con Moodle se hace vía POST/fetch AJAX (core_message_send_instant_messages)
+ *   y no vía clicks de Playwright, que son frágiles ante cambios de layout de la UI de Moodle.
+ */
 const { BASE_URL, log, cerrarModal } = require("./auth");
 
 /**

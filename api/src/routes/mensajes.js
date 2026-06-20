@@ -1,3 +1,41 @@
+/**
+ * api/src/routes/mensajes.js — Envío de mensajes a aprendices (inmediatos y programados).
+ *
+ * Canales soportados: "zajuna" (mensaje interno Moodle) | "email" (SMTP/Gmail vía configCorreo).
+ *
+ * Rutas de envío inmediato:
+ *   POST   /api/mensajes                    — mensaje individual con destinatarios explícitos
+ *   POST   /api/mensajes/enviar-masivo      — mensaje masivo con selector de evidencias y filtros
+ *   GET    /api/mensajes/enviar-masivo/:jobId — estado del job de envío masivo (polling)
+ *
+ * Rutas de mensajes programados (recurrentes):
+ *   POST   /api/mensajes/programados        — crear envío recurrente (filtro, no lista fija)
+ *   GET    /api/mensajes/programados        — listar programados del usuario
+ *   PATCH  /api/mensajes/programados/:id   — pausar/reanudar o cambiar intervalo/hora
+ *   DELETE /api/mensajes/programados/:id   — eliminar
+ *   El tick que los dispara corre en mensajesProgramadosWorker (cola mensajesProgramados,
+ *   cada 10 min), que recalcula los destinatarios EN CADA corrida con el filtro guardado.
+ *
+ * Rutas auxiliares:
+ *   GET    /api/mensajes/aprendices?fichaId — lista de aprendices + resumen de entregas
+ *                                             para que el front calcule filtros (con pendientes,
+ *                                             con desaprobadas, inactivos, etc.) sin otro round-trip.
+ *   POST   /api/mensajes/sync-emails        — encola syncParticipantesWorker para traer emails
+ *   GET    /api/mensajes/sync-emails/:jobId — estado del job de sync (polling)
+ *   GET    /api/mensajes                   — historial de mensajes del usuario (con actaId/fichaId)
+ *   GET    /api/mensajes/:id               — detalle de un mensaje
+ *   GET    /api/mensajes/historial         — historial extendido con datos de ficha
+ *
+ * Lógica compartida con mensajesProgramadosWorker (regla §5.1: no duplicar):
+ *   lib/mensajesMasivos.js contiene esEntregaDesaprobada, resumenEvidenciasPorAprendiz,
+ *   aplanarEvidenciasToken, crearYEncolarEnvio. Ver ese módulo para entender
+ *   qué se considera "pendiente" y "desaprobada" (umbral SENA 70/D).
+ *
+ * Anti-spam:
+ *   - Mensajes programados: intervalo mínimo 1 día, máximo 60 días.
+ *   - El worker aplica idempotencia (optimistic lock claim + un MensajeFormativo por corrida).
+ *   - canal=zajuna requiere moodleId; canal=email requiere email — se valida antes de encolar.
+ */
 const prisma = require("../db/client");
 const { mensajesQueue, syncParticipantesQueue, emailMasivoQueue } = require("../lib/queue");
 const { filtrarAprendicesValidos } = require("../lib/aprendices");

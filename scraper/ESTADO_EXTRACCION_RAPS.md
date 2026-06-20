@@ -1,4 +1,12 @@
-# Estado extracción RAPs — pausado por tokens
+# Estado extracción RAPs — ✅ COMPLETADO
+
+> **Completado en sesión 24 may 2026.** La extracción está hecha:
+> - `scripts/extraerGuiasDesdeZajuna.js` procesó 15/15 guías del courseId 50283.
+> - **19 Competencias y 75 RAPs** persistidos en DB.
+> - Matching IA automático (`scripts/matchearCompetenciaIA.js`) generó
+>   **2147 vínculos `RapEvidenciaRel`** en la sesión del 9 jun 2026.
+>
+> Lo que sigue a continuación es el registro histórico de la sesión pausada.
 
 ## Hallazgo clave
 El link "**Clic aquí para acceder al recurso educativo**" en cada página

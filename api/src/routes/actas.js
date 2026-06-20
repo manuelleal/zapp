@@ -47,7 +47,15 @@ const {
 } = require("./actas.helpers");
 
 // ─── Helpers de autorización (IDOR check multi-tenant) ──────────────────────────
+// Estos helpers centralizan el patrón: buscar recurso → verificar propietario →
+// enviar 404/403 y retornar null. El caller hace `if (!recurso) return;` y listo.
+// Es el único punto donde se valida la pertenencia; el resto de rutas confía en ellos.
 
+/**
+ * Verifica que `fichaId` existe y pertenece a `userId`.
+ * Si falla, envía 404/403 a `reply` y retorna null.
+ * @returns {Promise<Ficha|null>}
+ */
 async function verificarFichaDelUsuario(fichaId, userId, reply) {
   let ficha;
   try { ficha = await prisma.ficha.findUnique({ where: { id: fichaId } }); }
@@ -57,6 +65,11 @@ async function verificarFichaDelUsuario(fichaId, userId, reply) {
   return ficha;
 }
 
+/**
+ * Verifica que `actaId` existe y pertenece a `userId`.
+ * Si falla, envía 404/403 a `reply` y retorna null.
+ * @returns {Promise<ActaSeguimiento|null>}
+ */
 async function verificarActaDelUsuario(actaId, userId, reply) {
   let acta;
   try { acta = await prisma.actaSeguimiento.findUnique({ where: { id: actaId } }); }
@@ -212,7 +225,10 @@ async function actasRoutes(fastify) {
     const { conclusiones, compromisos, hora, lugar, objetivo, rapIds, archivada, notas,
             ciudad, horaInicio, horaFin, direccionRegional, vocera } = req.body || {};
 
-    // archivada toggle works for any estado; other edits require borrador
+    // `archivada` (soft-delete) se puede cambiar en cualquier estado del acta.
+    // Cualquier otro campo solo es editable mientras el acta está en "borrador":
+    // una vez cerrada, los datos son el registro oficial y no se pueden corregir
+    // desde aquí (el instructor debe generar una nueva acta si hay error).
     if (acta.estado !== "borrador" && typeof archivada !== "boolean") {
       return reply.code(422).send({ error: "Solo se pueden editar actas en estado borrador." });
     }
@@ -1301,6 +1317,9 @@ async function actasRoutes(fastify) {
     });
     const aprendicesValidos = filtrarAprendicesValidos(aprendicesRaw);
 
+    // NOTA: la lógica de deduplicación (nucleoPrimerToken, claveNombre) es idéntica
+    // a la de auto-poblar. Está duplicada a propósito para que preview-native sea
+    // autocontenido (no modifica DB), pero si cambia la heurística hay que actualizar ambos.
     function nucleoPrimerToken(nombre) {
       const tok = nombre.split(/\s+/)[0];
       const m = tok.match(/^[A-Z]{2,3}([A-Z].*)$/);

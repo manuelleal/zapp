@@ -1,5 +1,15 @@
 # CLEANUP_AUDIT.md — Inventario de limpieza verificado
 
+> ⚠️ **OBSOLETO — 19 jun 2026.** Este documento fue escrito el 2 jun 2026 antes del
+> refactor P0. Contiene errores graves: por ejemplo, afirma que `api/src/worker-entry.js`
+> "no existe", cuando en realidad **sí existe** (fue creado en el refactor P0 del 2 jun
+> como parte de los 5 fixes P0). **No usar este archivo como fuente de verdad.**
+> Para el estado actual, leer el código directamente o consultar `CLAUDE.md §11.3`.
+
+---
+
+**Registro histórico original (2 jun 2026, prerefactor P0):**
+
 > **Fecha:** 2 junio 2026 · **Rama:** `feature/gradebook-scan-v2`
 > **Método:** 3 agentes Sonnet (backend / scraper+scripts+raíz / frontend) + **verificación manual** contra `git ls-files`, `git status` y grep. Cada ítem va etiquetado:
 > - ✅ **VERIFICADO** — confirmado a mano en el árbol principal.
@@ -8,12 +18,16 @@
 
 ---
 
-## ❌ Descartar — alucinaciones de agentes (NO actuar)
+## ❌ (HISTÓRICO — YA INCORRECTO) Descartar — alucinaciones de agentes
+
+> **Nota 19 jun:** La sección de abajo estaba basada en el código ANTES del refactor P0.
+> `api/src/worker-entry.js` **SÍ existe** a partir del commit de refactor del 2 jun 2026.
+> Solo `api/src/lib/playwrightSession.js` sigue sin existir (P1 #6, pendiente).
 
 Dos agentes reportaron estos archivos como existentes. **No existen** (confirmado: `git status` limpio, glob vacío en main y en worktrees). Fueron sembrados por el CLAUDE.md §9.3.2, que los *recomienda crear* — el agente leyó la recomendación y la reportó como hecha.
 
-- `api/src/worker-entry.js` — NO existe. (El "bug de doble carga de workers" es ficción.)
-- `api/src/lib/playwrightSession.js` — NO existe. (No hay factory; sigue siendo un *pendiente*, no algo a migrar.)
+- `api/src/worker-entry.js` — ~~NO existe~~. (**CORRECCIÓN:** SÍ existe desde el refactor P0 del 2 jun 2026.)
+- `api/src/lib/playwrightSession.js` — NO existe. (No hay factory; sigue siendo un *pendiente* P1 #6.)
 
 > ⚠️ El problema que esos archivos *resolverían* sí es real: proceso único (CLAUDE.md §11.1) y boilerplate duplicado. Lo falso es que ya estén resueltos.
 

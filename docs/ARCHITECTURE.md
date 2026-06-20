@@ -1,376 +1,264 @@
 # Zajuna App — Arquitectura del Sistema
 
+> **Última actualización:** 19 jun 2026. Fuente de verdad operacional: `CLAUDE.md`.
+
 ## Visión general
 
-Plataforma web multitenant para instructores del SENA que combina scraping
-de Zajuna/Moodle con agentes IA para gestión de evidencias, calificación
-asistida y seguimiento de aprendices.
+SaaS multitenant para instructores del SENA que automatiza la gestión de Zajuna (Moodle institucional): escanear evidencias, calificar, generar actas GOR-F-084 en Word, enviar mensajes masivos y configurar entregas, usando scraping Playwright + IA (Claude/Kimi).
 
 ---
 
 ## Stack tecnológico
 
-| Capa | Tecnología | Justificación |
+| Capa | Tecnología | Notas |
 |---|---|---|
-| API | Node.js + Fastify | Más rápido que Express; maneja 200 concurrentes sin clustering manual |
-| Cola de tareas | BullMQ + Redis | Playwright corre async; no bloquea requests HTTP |
-| Base de datos | PostgreSQL | Relacional, historial, multitenant nativo |
-| ORM | Prisma | Migraciones, type-safety, DX excelente |
-| Frontend | React + Vite + Tailwind | Responsive, componentes, build rápido |
-| Auth | JWT + bcrypt | Stateless, escala horizontal |
-| Credenciales Zajuna | AES-256 cifrado en DB | Cada instructor guarda las suyas, nunca en plano |
-| Scraping | Playwright (worker pool) | Ya instalado, funciona en el servidor |
-| Agentes IA | Claude API (Anthropic) | Calificación, retroalimentación, foros |
-| Deployment | Railway | Postgres + Redis + deploy desde Git, 24/7 |
+| API HTTP | Node.js + Fastify 5 | Puerto 3000; sirve también `web/dist` |
+| Cola de tareas | BullMQ + Redis 7 | 16 workers BullMQ en proceso separado |
+| Base de datos | PostgreSQL 16 + Prisma 6 | 21 modelos; multitenant por `userId` |
+| Frontend | React 18 + Vite 5 + Tailwind 3 + shadcn/ui | Build en `web/dist/` |
+| Auth | JWT (`@fastify/jwt`) + bcrypt | Tokens de 7 días |
+| Credenciales Zajuna | AES-256-GCM en DB | `zajunaUserEnc/PassEnc` cifrados con `ENCRYPTION_KEY` |
+| Scraping DOM | Playwright 1.59 | Solo para login SSO + operaciones de escritura en Moodle |
+| Scraping liviano | fetch + cheerio | Lectura de config (formularios modedit) sin abrir Chromium |
+| AJAX Moodle | `mod_assign_list_participants` via sesskey | CAPA 2 — listar entregas sin DOM |
+| IA matching | Claude API / OpenRouter (Kimi K2) | `aiClient.js` agnóstico por env `AI_PROVIDER` |
+| IA actas | Anthropic (Claude Haiku/Sonnet) | Solo saneo de texto; nunca actúa sola (regla #8) |
+| Deployment | VPS (Hetzner CPX31/41) + PM2 | Ver `docs/DEPLOY.md`; NO serverless (Chromium + SSO) |
+
+---
+
+## Procesos en producción
+
+```
+pm2 start ecosystem.config.js
+  ├── app "api"      → node api/src/server.js     (API HTTP :3000; puede ir en cluster)
+  └── app "workers"  → node api/src/worker-entry.js  (16 workers BullMQ; instances:1 fork OBLIGATORIO)
+```
+
+**Por qué dos procesos:** un OOM de cualquier scraper Playwright tumbaba antes la API entera (eran el mismo proceso Node). La separación es P0 #1 del refactor de junio 2026. Ver `CLAUDE.md §11.1`.
+
+**Por qué `workers` debe ser 1 instancia:** Moodle/Zajuna invalida la sesión si detecta dos logins paralelos del mismo usuario. 2 instancias = 2 browsers por usuario = sesión inválida.
+
+---
+
+## Flujo de un request
+
+```
+Browser (React) ──HTTP + JWT──► Fastify :3000
+                                    │
+                          ┌─────────┴──────────┐
+                          │  Route handler      │
+                          │  1. Valida JWT      │
+                          │  2. IDOR check      │
+                          │  3. Prisma (userId) │
+                          └─────────┬──────────┘
+                                    │
+               ┌────────────────────┼────────────────────┐
+               │ Respuesta inmediata │ Tarea pesada       │
+               │ (200/201/4xx)       │ → queue.add(...)   │
+               │                    │   → 202 { jobId }  │
+               └────────────────────┴────────────────────┘
+                                             │
+                                    ┌────────▼────────┐
+                                    │  BullMQ / Redis  │
+                                    └────────┬────────┘
+                                             │
+                                    ┌────────▼────────────────────┐
+                                    │  worker-entry.js (proceso   │
+                                    │  PM2 separado)              │
+                                    │  Playwright / fetch+cheerio  │
+                                    │  → actualiza Job en DB      │
+                                    └─────────────────────────────┘
+                                             │
+                        Frontend polling: GET /api/jobs/:id cada 3s
+```
 
 ---
 
 ## Estructura de carpetas
 
 ```
-zajuna-app/
-├── api/                        ← Fastify backend
-│   ├── src/
-│   │   ├── routes/
-│   │   │   ├── auth.js         # register, login, me
-│   │   │   ├── fichas.js       # GET /fichas, POST /fichas/scan
-│   │   │   ├── evidencias.js   # GET /evidencias, POST /evidencias/scan
-│   │   │   ├── aprendices.js   # GET /aprendices/:id/historial
-│   │   │   └── jobs.js         # GET /jobs/:id (status de scraping)
-│   │   ├── workers/
-│   │   │   ├── fichasWorker.js      # BullMQ: descubre fichas
-│   │   │   └── evidenciasWorker.js  # BullMQ: revisa entregas
-│   │   ├── agents/
-│   │   │   ├── calificador.js       # Claude: sugiere calificación
-│   │   │   ├── retroalimentador.js  # Claude: genera feedback aprendiz
-│   │   │   └── foroResponder.js     # Claude: responde mensajes foros
-│   │   ├── db/
-│   │   │   ├── schema.prisma
-│   │   │   └── client.js
-│   │   ├── lib/
-│   │   │   ├── crypto.js       # encrypt/decrypt credenciales Zajuna
-│   │   │   └── queue.js        # instancia BullMQ
-│   │   └── server.js
-│   └── package.json
+C:\zajuna\
 │
-├── scraper/                    ← Módulos Playwright reutilizables
-│   ├── auth.js                 # login(), cerrarModal()
-│   ├── fichas.js               # descubrirFichas(page, competencia)
-│   └── evidencias.js           # revisarEvidencias(page, ficha, codigo)
+├── api/src/
+│   ├── server.js                ← Fastify + plugins + rutas + estáticos (SIN workers)
+│   ├── worker-entry.js          ← Entrypoint de los 16 workers BullMQ (proceso separado)
+│   │
+│   ├── routes/                  ← Controladores HTTP (1 archivo = 1 dominio)
+│   │   ├── auth.js              POST /api/auth/register|login|me|aceptar-terminos
+│   │   ├── fichas.js            GET/POST/DELETE /api/fichas
+│   │   ├── evidencias.js        GET/PATCH /api/evidencias/*
+│   │   ├── archivar.js          PATCH bulk archivar/cerrar fichas y evidencias
+│   │   ├── configEvidencias.js  GET/PATCH config de evidencia (fetch+cheerio o Playwright)
+│   │   ├── batchConfig.js       POST batch duedate/config (M2+M3)
+│   │   ├── scan.js              POST /api/scan/full + GET /api/scan/progress
+│   │   ├── foroRating.js        PATCH calificar foro + descubrir pendientes
+│   │   ├── raps.js              CRUD /api/raps + vincular/desvincular evidencias (M4+M5)
+│   │   ├── matchingIa.js        POST iniciar matching + PATCH aprobar/rechazar (M6)
+│   │   ├── actas.js             CRUD /api/actas + auto-poblar + preview + DOCX (M7)
+│   │   ├── actasImport.js       POST importar CSV de participantes en acta
+│   │   ├── mensajes.js          POST enviar-masivo + CRUD mensajes programados (M8)
+│   │   ├── ajustes.js           GET/PATCH config SMTP + descubrir/simular competencias
+│   │   ├── jobs.js              GET /api/jobs/:id (polling de estado BullMQ)
+│   │   └── admin.js             /api/admin/* (solo rol superadmin)
+│   │
+│   ├── workers/                 ← Workers BullMQ (proceso worker-entry.js)
+│   │   ├── fichasWorker.js              cola "fichas"            concurrency 3
+│   │   ├── evidenciasWorker.js          cola "evidencias"        concurrency 3
+│   │   ├── configWorker.js              cola "config"            concurrency 1
+│   │   ├── leerConfigEvidenciaWorker.js cola "leerConfig"        concurrency 1
+│   │   ├── leerConfigLoteWorker.js      cola "leerConfigLote"    concurrency 1
+│   │   ├── cambiarFechaWorker.js        cola "cambiarFecha"      concurrency 1
+│   │   ├── cambiarConfigWorker.js       cola "cambiarConfig"     concurrency 1
+│   │   ├── foroRatingWorker.js          cola "foroRating"        concurrency 1
+│   │   ├── foroDescubrirWorker.js       cola "foroDescubrir"     concurrency 2
+│   │   ├── autoScanWorker.js            cola "autoScan" (cron 3h) concurrency 1
+│   │   ├── matchingIaWorker.js          cola "matchingIa"        concurrency 2
+│   │   ├── mensajeFormativoWorker.js    cola "mensajeFormativo"  concurrency 1
+│   │   ├── syncParticipantesWorker.js   cola "syncParticipantes" concurrency 1
+│   │   ├── emailMasivoWorker.js         cola "emailMasivo"       concurrency 2
+│   │   ├── descubrirCompetenciasWorker.js cola "descubrirComp."  concurrency 1
+│   │   └── mensajesProgramadosWorker.js cola "mensajesProgramados" (tick 10 min)
+│   │
+│   ├── lib/
+│   │   ├── queue.js             Instancias BullMQ + conexión Redis
+│   │   ├── browserPool.js       Singleton Chromium compartido + semáforo de contexts
+│   │   ├── crypto.js            AES-256-GCM encrypt/decrypt (credenciales Zajuna)
+│   │   ├── sessionStore.js      Caché Redis de sesiones Playwright (storageState, TTL 2h)
+│   │   ├── fetchWithRetry.js    HTTP helper Node con reintentos exponenciales
+│   │   ├── aiClient.js          Cliente IA agnóstico (OpenRouter/Kimi/Anthropic por env)
+│   │   ├── actaSaneado.js       Saneo de textos para el Word (tildes, ñ, caracteres Moodle)
+│   │   ├── mensajesMasivos.js   Lógica compartida de envío masivo (ruta + worker)
+│   │   └── userLock.js          Mutex por userId — evita sesiones paralelas del mismo instructor
+│   │
+│   ├── assets/
+│   │   └── sena-logo.png        Logo SENA embebido en el DOCX del acta
+│   │
+│   └── db/
+│       └── client.js            Singleton PrismaClient
 │
-├── web/                        ← React + Vite frontend
-│   ├── src/
-│   │   ├── pages/
-│   │   │   ├── Login.jsx
-│   │   │   ├── Dashboard.jsx   # resumen de fichas y pendientes
-│   │   │   ├── Ficha.jsx       # detalle ficha + evidencias
-│   │   │   └── Aprendiz.jsx    # historial individual
-│   │   ├── components/
-│   │   │   ├── FichaCard.jsx
-│   │   │   ├── EvidenciaTable.jsx
-│   │   │   ├── JobStatus.jsx   # progreso de scraping en tiempo real
-│   │   │   └── AIPanel.jsx     # panel de agentes IA
-│   │   ├── hooks/
-│   │   │   └── useJob.js       # polling/websocket de job status
-│   │   └── api/
-│   │       └── client.js       # fetch wrapper con JWT
-│   └── package.json
+├── scraper/                     ← Módulos Playwright/fetch reutilizables (importados por workers)
+│   ├── auth.js                  login() SSO federado, cerrarModal(), BASE_URL
+│   ├── fichas.js                descubrirFichas(page, competenciaCodigo)
+│   ├── evidencias.js            obtenerEvidencias(), revisarEntregas*(), CAPA 2 AJAX, grader report
+│   ├── configEvidencias.js      [PLAYWRIGHT] leerConfigEvidencia(), guardarConfigEvidencia(), FIELD_MAPS
+│   ├── configEvidenciasFetch.js [FETCH+CHEERIO] gemelo liviano — emula disabledIf de Moodle
+│   ├── foroRating.js            calificarPostForo(), descubrirPendientesForo()
+│   └── mensajes.js              enviarMensajeMoodle(), construirMensaje(), sincronizarParticipantes()
 │
-├── zajuna-evidencias.js        ← CLI original (no se toca)
-├── docker-compose.yml          ← local dev: Postgres + Redis
-├── .env.example
-└── package.json                ← scripts raíz
+├── scripts/                     ← Utilidades CLI (no son workers BullMQ)
+│   ├── extraerTodasLasGuias.js  Extrae Competencias+RAPs de un PDF local → DB
+│   ├── extraerGuiasDesdeZajuna.js Crawler: descarga guías del curso y extrae RAPs → DB
+│   ├── vincularEvidenciasRAPs.js  Crea RapEvidenciaRel (inglés auto, IA para el resto)
+│   ├── matchearCompetenciaIA.js   Matching IA automático por competencia (usa aiClient.js)
+│   └── importarMapeoRaps.js       Importa mapeo RAP↔evidencia desde .md curado por IA externa
+│
+├── prisma/
+│   ├── schema.prisma            Fuente de verdad del modelo de datos (21 modelos)
+│   └── migrations/              Historial de migraciones SQL (NO ignorar en git)
+│
+├── web/src/                     ← Frontend React 18 + Vite + Tailwind + shadcn/ui
+│   ├── App.tsx                  Rutas React Router v6
+│   ├── pages/
+│   │   ├── Login.tsx            Acceso
+│   │   ├── Dashboard.tsx        Vista general — fichas, badges, progreso de scan
+│   │   ├── Fichas.tsx           Listado completo de fichas + modal de evidencias + Excel
+│   │   ├── EvidenciasConfig.tsx Tabla de fechas y config masiva (M2+M3)
+│   │   ├── RapsPage.tsx         Gestión curricular de RAPs (M4+M5)
+│   │   ├── MatchingIaPage.tsx   Revisar propuestas IA de matching (M6)
+│   │   ├── ActasPage.tsx        Actas de seguimiento GOR-F-084 + descarga Word (M7)
+│   │   ├── MensajesPage.tsx     Mensajes masivos + programados (M8)
+│   │   ├── AjustesPage.tsx      Config SMTP + descubrir/simular competencias
+│   │   └── AdminPage.tsx        Panel de administración (solo superadmin)
+│   ├── components/              Componentes reutilizables (shadcn/ui + propios)
+│   ├── api/                     Hooks TanStack Query
+│   ├── store/                   Zustand auth store (JWT en localStorage)
+│   └── lib/                     Utilidades (cn, fetch wrapper)
+│
+├── ecosystem.config.js          Config PM2: apps "api" + "workers"
+├── docs/
+│   ├── ARCHITECTURE.md          Este archivo
+│   ├── DEPLOY.md                Runbook de despliegue (VPS, PM2, TLS, secretos)
+│   ├── MOODLE_REFERENCE.md      Endpoints Moodle confirmados, sesskey, ingeniería inversa Extensión Z
+│   └── auditoria-release/       Informes de la auditoría de release (19 jun 2026)
+└── CLAUDE.md                    Fuente de verdad operacional (estado, reglas, pendientes)
 ```
 
 ---
 
-## Diagrama de flujo del sistema
+## Modelo de datos (21 modelos)
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    BROWSER (instructor)                      │
-│  Login → Dashboard → [Scan Fichas] → [Scan Evidencias]      │
-└──────────────────┬──────────────────────────────────────────┘
-                   │ HTTP + JWT
-┌──────────────────▼──────────────────────────────────────────┐
-│                  FASTIFY API  (:3000)                        │
-│  • Valida JWT                                                │
-│  • Desencripta credenciales Zajuna del usuario               │
-│  • Encola job en BullMQ → responde job_id inmediato          │
-└──────┬───────────────────────────────────────┬──────────────┘
-       │                                       │
-       ▼                                       ▼
-┌──────────────┐                    ┌──────────────────────────┐
-│    REDIS     │                    │   POSTGRESQL             │
-│  Job queues  │                    │  users, fichas,          │
-│  Job status  │                    │  evidencias, historial   │
-└──────┬───────┘                    └──────────────────────────┘
-       │
-┌──────▼───────────────────────────────────────────────────────┐
-│              BULLMQ WORKERS (pool Playwright)                 │
-│                                                              │
-│  fichasWorker:                                               │
-│    1. login(user, pass)                                      │
-│    2. descubrirFichas(page, competencia)                     │
-│    3. Guarda fichas en PostgreSQL                            │
-│    4. Actualiza job status → Redis                           │
-│                                                              │
-│  evidenciasWorker:                                           │
-│    1. login(user, pass)                                      │
-│    2. revisarEvidencias(page, ficha, codigo_competencia)     │
-│    3. Guarda estados en PostgreSQL (historial)               │
-│    4. Si hay pendientes → encola en agentQueue               │
-│    5. Actualiza job status → Redis                           │
-└──────────────────────────────┬───────────────────────────────┘
-                               │
-┌──────────────────────────────▼───────────────────────────────┐
-│              AGENTES IA (Claude API)                          │
-│                                                              │
-│  calificador:       lee entrega → sugiere nota + criterios   │
-│  retroalimentador:  genera feedback personalizado aprendiz   │
-│  foroResponder:     lee mensaje foro → draft de respuesta    │
-└──────────────────────────────────────────────────────────────┘
-```
-
----
-
-## Modelo de datos (PostgreSQL)
-
-```prisma
-model User {
-  id               String   @id @default(cuid())
-  nombre           String
-  email            String   @unique
-  passwordHash     String
-  zajunaUserEnc    String   // AES-256
-  zajunaPassEnc    String   // AES-256
-  competenciaCodigo String  // ej: "240202501"
-  competenciaNombre String  // ej: "Inglés"
-  createdAt        DateTime @default(now())
-  fichas           Ficha[]
-  jobs             Job[]
-}
-
-model Ficha {
-  id         String   @id @default(cuid())
-  userId     String
-  codigo     String   // "3186683"
-  programa   String   // "ADSO"
-  courseId   Int      // Moodle course ID
-  guia       Int
-  createdAt  DateTime @default(now())
-  user       User     @relation(fields: [userId], references: [id])
-  evidencias Evidencia[]
-  aprendices Aprendiz[]
-
-  @@unique([userId, codigo])
-}
-
-model Evidencia {
-  id       String @id @default(cuid())
-  fichaId  String
-  nombre   String
-  href     String
-  tipo     String // "assign" | "otro"
-  ficha    Ficha  @relation(fields: [fichaId], references: [id])
-  entregas Entrega[]
-}
-
-model Aprendiz {
-  id       String @id @default(cuid())
-  fichaId  String
-  nombre   String
-  ficha    Ficha  @relation(fields: [fichaId], references: [id])
-  entregas Entrega[]
-
-  @@unique([fichaId, nombre])
-}
-
-model Entrega {
-  id          String   @id @default(cuid())
-  evidenciaId String
-  aprendizId  String
-  estado      String   // "pendiente" | "calificado" | "sin_entregar" | "desconocido"
-  fechaScan   DateTime @default(now())
-  evidencia   Evidencia @relation(fields: [evidenciaId], references: [id])
-  aprendiz    Aprendiz  @relation(fields: [aprendizId], references: [id])
-  historial   HistorialEstado[]
-  aiFeedback  AIFeedback[]
-}
-
-model HistorialEstado {
-  id              String   @id @default(cuid())
-  entregaId       String
-  estadoAnterior  String
-  estadoNuevo     String
-  fecha           DateTime @default(now())
-  entrega         Entrega  @relation(fields: [entregaId], references: [id])
-}
-
-model AIFeedback {
-  id          String   @id @default(cuid())
-  entregaId   String
-  tipo        String   // "calificacion" | "retroalimentacion" | "foro"
-  contenido   String
-  generadoAt  DateTime @default(now())
-  entrega     Entrega  @relation(fields: [entregaId], references: [id])
-}
-
-model Job {
-  id         String   @id @default(cuid())
-  userId     String
-  tipo       String   // "fichas" | "evidencias"
-  fichaId    String?
-  status     String   // "queued" | "running" | "done" | "error"
-  progreso   Int      @default(0) // 0-100
-  errorMsg   String?
-  creadoAt   DateTime @default(now())
-  user       User     @relation(fields: [userId], references: [id])
-}
-```
-
----
-
-## Multitenant: aislamiento de datos
-
-- Cada query a DB siempre filtra por `userId` — nunca hay datos cruzados
-- Las credenciales Zajuna se cifran con `AES-256-GCM` usando `ENCRYPTION_KEY` del `.env` del servidor
-- El instructor nunca ve las credenciales de otro instructor
-
----
-
-## Concurrencia: 200 usuarios simultáneos
-
-| Problema | Solución |
+| Modelo | Propósito |
 |---|---|
-| Playwright bloquea el hilo | Corre en workers separados via BullMQ |
-| 200 scrapers al mismo tiempo | Pool de workers limitado (ej: 20 concurrentes); el resto espera en cola |
-| Estado del job | Redis con TTL; frontend hace polling al endpoint `/jobs/:id` |
-| DB saturada | Prisma connection pool + PostgreSQL aguanta bien |
-
-Configuración de concurrencia recomendada en Railway starter:
-- Workers Playwright: **10-20 concurrentes** (Playwright es pesado en RAM)
-- Redis: instancia compartida
-- Postgres: pool de 20 conexiones
-
----
-
-## Fases de desarrollo
-
-### Fase 1 — MVP (estado mayo 2026)
-- [x] Auth: registro, login, JWT
-- [x] Cifrado AES-256-GCM de credenciales Zajuna por usuario
-- [x] Scraping de fichas + evidencias + entregas + moodleId aprendiz
-- [x] Dashboard con badges (Sin escanear / Al día / N pendientes)
-- [x] Archivar/restaurar fichas
-- [x] Cerrar/reabrir evidencias (100% manual, NO automático)
-- [x] Cache instantáneo + botón Refrescar
-- [x] Panel aprendices con filtros + URL grader directa
-- [ ] **Sprint 1 actual:** migración React+Vite+Tailwind+shadcn + bulk close
-- [ ] **Sprint 2:** bandeja de mensajes
-- [ ] **Sprint 3:** foros
-- [ ] **Sprint 4:** anuncios masivos
-
-### Fase 2 — IA (después del Sprint 4)
-- [ ] Agente calificador (sugiere nota con criterios)
-- [ ] Agente retroalimentador (genera feedback aprendiz)
-- [ ] Agente foros (draft de respuestas)
-
-### Fase 3 — Notificaciones
-- [ ] WhatsApp (Twilio o Meta API)
-- [ ] Resumen diario automático
+| `User` | Instructor. Credenciales Zajuna cifradas. `rol` instructor/superadmin. `suspendedAt` soft-state. |
+| `Ficha` | Grupo de aprendices en Moodle. `archivedAt` soft-state. |
+| `Evidencia` | Actividad (assign/foro/quiz). `cerradaAt` NUNCA la setea un worker (solo el instructor). `itemid`, `assignId`, `contextId` para CAPA 2 y grader. |
+| `EvidenciaConfig` | Config leída de Moodle (raw HTML/JSON). TTL 4h. |
+| `Aprendiz` | Estudiante de la ficha. `moodleId`, `documento`, `email`, `ultimoAcceso`. |
+| `Entrega` | Estado de un aprendiz en una evidencia. `notaActual Float?`, `notaCualitativa String?` (A/D). |
+| `HistorialEstado` | Timeline de cambios de estado por entrega. |
+| `AIFeedback` | Feedback IA generado por entrega y tipo. |
+| `Job` | Estado de cualquier job BullMQ (queued/running/done/error). |
+| `ConfigAudit` | Auditoría de cambios de config (antes/después). |
+| `ConfigChangeJob` | Job de cambio masivo de config (batch M2+M3). Progreso % en DB. |
+| `Competencia` | Competencia SENA con código y nombre. Relaciona con RAP y User. |
+| `RAP` | Resultado de Aprendizaje. Pertenece a Competencia. |
+| `Criterio` | Criterio de evaluación de un RAP. |
+| `RapEvidenciaRel` | Join M↔N entre RAP y Evidencia. Base de las actas. |
+| `MatchingPropuesta` | Propuesta IA de qué RAP evalúa una evidencia (propuesto/aprobado/rechazado). |
+| `ActaSeguimiento` | Acta GOR-F-084 V02. Campos del formato oficial opcionales. |
+| `ActaParticipante` | Juicio (aprobó/no aprobó) de un aprendiz en un acta. |
+| `ConfigCorreo` | Config SMTP por instructor para mensajería email. |
+| `MensajeFormativo` | Registro de mensajes enviados (historial). |
+| `MensajeProgramado` | Mensaje recurrente. Guarda el filtro, no los destinatarios. |
 
 ---
 
-## Deployment en Railway
+## Reglas de oro del proyecto
 
-```
-Railway Project
-├── Service: api          (Node.js — Fastify + BullMQ workers)
-├── Service: web          (Vite build estático o Node serve)
-├── Plugin: PostgreSQL    (Railway managed)
-└── Plugin: Redis         (Railway managed)
-```
-
-Variables de entorno en Railway:
-```
-DATABASE_URL=postgresql://...
-REDIS_URL=redis://...
-JWT_SECRET=...
-ENCRYPTION_KEY=...   # 32 bytes para AES-256
-ANTHROPIC_API_KEY=...
-```
+1. **Multi-tenant obligatorio:** todo query Prisma filtra por `userId`. Sin excepción.
+2. **Workers stateless:** reciben job, ejecutan, retornan. No guardan estado en variables del módulo.
+3. **`cerradaAt` 100% manual:** el worker NUNCA lo setea. Solo el instructor desde la UI.
+4. **Soft-state para fechas:** `archivedAt`, `cerradaAt`, `archivadaAt`, `suspendedAt`, `pausadoAt` son `DateTime?`. `null` = activo.
+5. **IA propone, instructor decide:** matching y actas nunca actúan sin confirmación (regla #8 de `CLAUDE.md`).
+6. **Umbral SENA universal:** 70/100 + cualitativa `A` = aprobado. No configurable por instructor (estándar GOR-F-084).
+7. **Hrefs canónicos:** `${BASE_URL}/mod/{tipo}/view.php?id=${actId}`. El scraper normaliza siempre.
+8. **workers `instances:1`:** jamás escalar el proceso de workers horizontalmente.
 
 ---
 
-## Lo que se reutiliza del CLI actual
+## Login SSO de SENA — por qué Playwright es obligatorio para el login
 
-| Código actual | Destino en nueva arquitectura |
-|---|---|
-| `login()` + `cerrarModal()` | `scraper/auth.js` — sin cambios |
-| lógica de `obtenerEvidencias()` | `scraper/evidencias.js` — refactor a función exportable |
-| lógica de `revisarEntregas()` | `scraper/evidencias.js` — ídem |
-| `zajuna-evidencias.js` completo | Se conserva como CLI de respaldo |
+SENA usa un SSO federado (portal `zajuna.sena.edu.co` con `typeDocument`/`document`/`form_login_user`), no el login nativo de Moodle. Por eso:
+- `/login/token.php` siempre devuelve `invalidlogin` → no hay token WS posible.
+- El login requiere Chromium para ejecutar el JS del portal SSO.
+- Una vez logueado, las cookies se cachean en Redis (`sessionStore.js`) y las lecturas/escrituras posteriores pueden ir por `fetch` Node (más liviano).
 
 ---
 
-## Próximo paso inmediato (mayo 2026)
+## Fases completadas (jun 2026)
 
-**Sprint 1.1** — Setup `web/` con Vite + React 18 + Tailwind + shadcn/ui.
-Ver `HANDOFF.md` para los prompts listos del día.
+- [x] Auth JWT + credenciales cifradas
+- [x] Scraping fichas + evidencias (Gradebook Tree, 199 evidencias vs 48 antes)
+- [x] Dashboard con badges + scan automático cada 3h
+- [x] Archivar/restaurar fichas; cerrar/reabrir evidencias (100% manual)
+- [x] Config de evidencias (fechas/intentos) — Playwright + fetch+cheerio
+- [x] Batch masivo de fechas y config (M2+M3)
+- [x] RAPs locales + asociación a evidencias (M4+M5)
+- [x] Matching IA automático — 2147 vínculos RapEvidenciaRel (M6)
+- [x] Actas GOR-F-084 V02 en Word + descarga (M7)
+- [x] Mensajes masivos Moodle/email + programados + filtros (M8)
+- [x] Refactor P0: procesos separados, browserPool, bloqueo recursos, semáforo
+- [x] CAPA 2 AJAX: `mod_assign_list_participants` — scan de assigns sin DOM
+- [x] Nota cualitativa A/D desde grader report por itemid
+- [x] Panel de administración (superadmin)
+- [x] Auditoría de release con 6 agentes (19 jun 2026)
 
-Rama de trabajo: `feature/archivar-fichas-evidencias` (HEAD: 7141f87).
-Próxima rama: `feature/frontend-react` (se abrirá al iniciar 1.1).
+## Pendientes
 
----
-
-## Directorio de archivos core (actualizado 19 mayo 2026)
-
-### Backend (API Routes) — `api/src/routes/`
-
-1. `actas.js` — CRUD y auto-poblar actas de evaluación.
-2. `actasImport.js` — Importación CSV para actas.
-3. `ajustes.js` — Configuración SMTP (email).
-4. `archivar.js` — Archivar/desarchivar fichas.
-5. `auth.js` — Autenticación y registro.
-6. `batchConfig.js` — Modificaciones masivas de evidencias.
-7. `configEvidencias.js` — Lectura y actualización de ajustes puntuales.
-8. `evidencias.js` — Listado de evidencias.
-9. `fichas.js` — Listado de cursos.
-10. `foroRating.js` — Endpoint para calificar foros vía UI.
-11. `jobs.js` — Estado de la cola BullMQ.
-12. `matchingIa.js` — Endpoint para aceptar/rechazar propuestas de la IA.
-13. `mensajes.js` — Envío masivo de mensajes Moodle/Correo.
-14. `raps.js` — Resultados de aprendizaje.
-15. `scan.js` — Lanzar scraping on-demand.
-
-### Backend (Workers BullMQ) — `api/src/workers/`
-
-| Cola (`Queue`) | Worker (`Archivo`) | Concurrency | Propósito |
-|---|---|---|---|
-| `fichas` | `fichasWorker.js` | 3 | Extraer cursos del dashboard Moodle |
-| `evidencias` | `evidenciasWorker.js` | 3 | Scrapear entregas de estudiantes |
-| `leerConfig` | `leerConfigEvidenciaWorker.js` | 1 | Guardar configuración de evidencia en caché |
-| `config` | `configWorker.js` | 1 | Actualizar 1 evidencia en Moodle |
-| `cambiarFecha` | `cambiarFechaWorker.js` | 1 | Bulk update (duedates) |
-| `cambiarConfig` | `cambiarConfigWorker.js` | 1 | Bulk update general |
-| `foroRating` | `foroRatingWorker.js` | 1 | Calificar posts en foros |
-| `autoScan` | `autoScanWorker.js` | 1 | Re-scraping automático cron (3h) y silencioso (Dashboard >2h) |
-| `matchingIa` | `matchingIaWorker.js` | 2 | Llamar a API Claude para RAPs |
-| `mensajeFormativo` | `mensajeFormativoWorker.js` | 1 | Enviar DM interno en Moodle |
-| `emailMasivo` | `emailMasivoWorker.js` | 2 | Enviar correos por SMTP |
-| `syncParticipantes` | `syncParticipantesWorker.js` | 1 | Extraer correos de estudiantes de Moodle |
-
-> **Nota técnica:** Los workers de configuración/modificación en Moodle tienen `Concurrency: 1` obligatorio porque Zajuna/Moodle invalida las cookies de sesión si detecta logins o envíos de formulario paralelos concurrentes intensivos desde el mismo usuario.
-
-### Frontend (Páginas) — `web/src/pages/`
-
-1. `Login.tsx` — Acceso.
-2. `Dashboard.tsx` — Vista general del instructor.
-3. `Fichas.tsx` — Listado completo de fichas asignadas.
-4. `EvidenciasConfig.tsx` — Operaciones bulk.
-5. `ActasPage.tsx` — Administrador de comités y notas.
-6. `MatchingIaPage.tsx` — Revisión de la IA (tinder de RAPs).
-7. `RapsPage.tsx` — Gestión curricular.
-8. `MensajesPage.tsx` — Panel de comunicación masiva.
-9. `AjustesPage.tsx` — Configuración de credenciales de mensajería externa (SMTP).
+- [ ] Nota A/D en la UI (badge en `AprendicesPanel.tsx`)
+- [ ] Subestado de entrega: borrador/reabierto/enviado en la UI
+- [ ] Migrar lectura DOM restante a Node fetch (P1 #7 de `CLAUDE.md §11.3`)
+- [ ] Rate-limit a Redis (hoy en memoria, no sobrevive reinicios)
+- [ ] `playwrightSession.js` factory — deduplica boilerplate de 9 workers (P1 #6)
+- [ ] Deploy real en VPS (ver `docs/DEPLOY.md`)

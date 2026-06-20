@@ -1,3 +1,38 @@
+/**
+ * scraper/evidencias.js — Extracción de evidencias y entregas desde Moodle/Zajuna.
+ *
+ * Funciones de discovery (FASE 1 del scan):
+ *   obtenerEvidencias(page, courseId)
+ *     Navega al Gradebook Tree (/grade/edit/tree/index.php) y devuelve TODOS los
+ *     ítems calificables del curso, incluidos los ocultos a aprendices (GA4+). El href
+ *     se reescribe a la forma canónica view.php?id=N (el tree devuelve grade.php/report.php
+ *     en algunos ítems, lo que rompía @@unique([fichaId, href]) y generaba duplicados).
+ *
+ * Funciones de entregas por tipo (FASE 2 — DOM clásico):
+ *   revisarEntregas(page, actId)        — assign: lee la tabla de grading (view.php?action=grading)
+ *   revisarEntregasForo(page, ...)      — forum: extrae posts + ratings; cruza con matriculados
+ *   revisarEntregasQuiz(page, ...)      — quiz: lee el reporte de intentos
+ *
+ * Funciones de entregas vía AJAX (FASE 2 — CAPA 2, solo assign):
+ *   obtenerSesskey(page)                — extrae window.M.cfg.sesskey de la página actual
+ *   resolverAssignInfo(page, cmid)      — cmid → { assignId, contextId } leyendo data-* del grader
+ *   estadoDesdeParticipante(p)          — traduce un participante del AJAX al estado interno
+ *   listarParticipantesBatch(page, ...) — 1 POST batch mod_assign_list_participants para N assigns
+ *
+ * Funciones del Grader Report (fuente de nota y matriculados):
+ *   cargarGrader(page, courseId)        — carga el grader UNA vez y devuelve { matriculados, notasPorItem }
+ *   obtenerMatriculados(page, courseId) — solo la lista de alumnos no suspendidos
+ *   obtenerNotasGrader(page, courseId)  — solo las notas { [itemid]: { [moodleUserId]: {numero,letra} } }
+ *   descargarGradebookCSV(page, courseId) — exporta el libro de calificaciones en CSV
+ *
+ * Por qué AJAX en vez de DOM para los assigns (decidido 31-may-2026, ver CLAUDE.md §11.2):
+ *   La API WS (/login/token.php) está bloqueada por el SSO de SENA (no hay contraseña
+ *   interna de Moodle). La única alternativa es reutilizar el sesskey de la sesión
+ *   Playwright, igual que hace la Extensión Z de Chrome. El AJAX es ~5-10x más rápido
+ *   que cargar el HTML de view.php?action=grading por cada assign.
+ *   mod_assign_list_participants y core_grades_get_enrolled_users_for_selector están
+ *   habilitadas. mod_assign_get_submissions y mod_assign_get_grades están capadas en SENA.
+ */
 const { BASE_URL, TIMEOUT, log, cerrarModal } = require("./auth");
 
 async function obtenerEvidencias(page, courseId) {

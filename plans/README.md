@@ -15,13 +15,13 @@ estilo de código §5.1, comandos de dev §3). Commits en español con prefijo
 
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
-| 001 | Eliminar vulnerabilidades críticas de deps (fast-jwt, @fastify/static, tar) | P1 | S | — | DONE (commit `62dff38` en worktree `agent-ad77e6914e8d1db01`, rama `worktree-agent-ad77e6914e8d1db01` — merge a master pendiente, decisión del operador) |
-| 007 | esAprobada lee la cualitativa A/D (60 entregas mal juzgadas en actas) | P1 | S | — (antes de 002) | DONE (commit `5a0c0ce`, rama `worktree-agent-a4b8e9bebc17478cb` — 34/34 tests, 69/69 entregas A validadas contra DB; merge pendiente del operador) |
-| 002 | Baseline de verificación (CI + tests de actas + e2e ejecutable) | P1 | M | — (mejor tras 001 y 007) | DONE (commits `4a9a970`+`b6b96bf`, rama `worktree-agent-a8bcdcab7f5d674f3`, apilada sobre 007 — 46/46 tests, CI yml, e2e cableado; merge pendiente del operador) |
-| 003 | Factory única de sesión Playwright (11 workers) | P2 | M | 002 | TODO |
-| 004 | Idempotencia del envío masivo de mensajes en retry | P2 | S–M | — | DONE (commit `f91940b`, rama `worktree-agent-ae9f964c661738e19`, apilada sobre 002 — 50/50 tests; merge pendiente del operador) |
-| 005 | Higiene: .env.example, fallback superadmin, deps muertas | P3 | S | — | TODO |
-| 006 | SPIKE: migración de lecturas del scan a fetch+cheerio | P3 | M (spike) | 003 | TODO |
+| 001 | Eliminar vulnerabilidades críticas de deps (fast-jwt, @fastify/static, tar) | P1 | S | — | ✅ MERGED A MASTER (release 18 jun, commit `f1e2042`) |
+| 007 | esAprobada lee la cualitativa A/D (60 entregas mal juzgadas en actas) | P1 | S | — (antes de 002) | ✅ MERGED A MASTER (release 18 jun) |
+| 002 | Baseline de verificación (CI + tests de actas + e2e ejecutable) | P1 | M | — (mejor tras 001 y 007) | ✅ MERGED A MASTER (release 18 jun, 50/50 tests) |
+| 003 | Factory única de sesión Playwright (11 workers) | P2 | M | 002 | 🟡 TODO — P1 #6 en CLAUDE.md §11.3. Sería `api/src/lib/playwrightSession.js`. |
+| 004 | Idempotencia del envío masivo de mensajes en retry | P2 | S–M | — | ✅ MERGED A MASTER (release 18 jun) |
+| 005 | Higiene: .env.example, fallback superadmin, deps muertas | P3 | S | — | ✅ PARCIAL — `.env.example` creado (commit `9af3ada`), fallback superadmin removido. Deps muertas pendientes. |
+| 006 | SPIKE: migración de lecturas del scan a fetch+cheerio | P3 | M (spike) | 003 | 🟡 TODO — P1 #7 en CLAUDE.md §11.3. Requiere plan 003 primero. |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (con motivo de una línea) | REJECTED (con justificación de una línea)
 
