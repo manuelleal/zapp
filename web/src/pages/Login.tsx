@@ -30,6 +30,7 @@ export default function Login() {
   const [regNombre, setRegNombre] = useState("")
   const [regEmail, setRegEmail] = useState("")
   const [regPass, setRegPass] = useState("")
+  const [regPass2, setRegPass2] = useState("")
   const [regZajunaUser, setRegZajunaUser] = useState("")
   const [regZajunaPass, setRegZajunaPass] = useState("")
   const [regCompetencia, setRegCompetencia] = useState("")
@@ -70,6 +71,11 @@ export default function Login() {
   async function handleRegister(e: React.FormEvent) {
     e.preventDefault()
     setRegError("")
+    // Validar que las dos contraseñas coincidan antes de enviar.
+    if (regPass !== regPass2) {
+      setRegError("Las contraseñas no coinciden.")
+      return
+    }
     setRegLoading(true)
     try {
       const res = await fetch("/api/auth/register", {
@@ -91,6 +97,7 @@ export default function Login() {
         return
       }
       setRegPass("")
+      setRegPass2("")
       setRegZajunaPass("")
       setAuth(data.token, data.user)
       navigate("/dashboard")
@@ -206,30 +213,48 @@ export default function Login() {
                     onChange={(e) => setRegEmail(e.target.value)}
                   />
                 </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="reg-pass">Contraseña (plataforma)</Label>
-                  <Input
-                    id="reg-pass"
-                    type="password"
-                    placeholder="••••••••"
-                    required
-                    value={regPass}
-                    onChange={(e) => setRegPass(e.target.value)}
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="space-y-1.5">
-                    <Label htmlFor="reg-zajuna-user">Cédula Zajuna</Label>
+                    <Label htmlFor="reg-pass">Contraseña</Label>
+                    <Input
+                      id="reg-pass"
+                      type="password"
+                      placeholder="Mínimo 6 caracteres"
+                      required
+                      autoComplete="new-password"
+                      value={regPass}
+                      onChange={(e) => setRegPass(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="reg-pass2">Repetir contraseña</Label>
+                    <Input
+                      id="reg-pass2"
+                      type="password"
+                      placeholder="••••••••"
+                      required
+                      autoComplete="new-password"
+                      value={regPass2}
+                      onChange={(e) => setRegPass2(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <p className="text-xs text-gray-500 pt-1">
+                  Credenciales de la plataforma SENA (para escanear tus fichas). Se guardan cifradas y no se comparten.
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="reg-zajuna-user">Documento (usuario SENA)</Label>
                     <Input
                       id="reg-zajuna-user"
-                      placeholder="1052499107"
+                      placeholder="Número de documento"
                       required
                       value={regZajunaUser}
                       onChange={(e) => setRegZajunaUser(e.target.value)}
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <Label htmlFor="reg-zajuna-pass">Contraseña Zajuna</Label>
+                    <Label htmlFor="reg-zajuna-pass">Contraseña SENA</Label>
                     <Input
                       id="reg-zajuna-pass"
                       type="password"
