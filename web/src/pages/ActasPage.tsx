@@ -120,6 +120,10 @@ interface PreviewNativeResult {
   participantes: ParticipantePreview[]
   warningsCount: number
   modoPerRap:    boolean
+  // "per-rap" (columnas por RAP) o "global" (acta por evidencias de la competencia,
+  // sin columnas de RAP). El backend lo decide: si no hay RAPs, o los RAPs no tienen
+  // evidencias vinculadas, devuelve "global" con `rapStatus` vacío por participante.
+  modo:          "per-rap" | "global"
 }
 
 // ─── Modal Nueva Acta (flujo nativo) ──────────────────────────────────────────
@@ -142,6 +146,9 @@ function NuevaActaModal({ open, onClose, fichas, raps }: NuevaActaModalProps) {
   const [lugar,    setLugar]    = useState("Videoconferencia / Plataforma Zajuna")
   const [objetivo, setObjetivo] = useState("")
   const [rapIds,   setRapIds]   = useState<string[]>([])
+  // Acta "por evidencias de mi competencia" (sin RAPs). Al activarlo se ignora la
+  // selección de RAPs y el backend devuelve modo global (sin columnas por RAP).
+  const [sinRaps,  setSinRaps]  = useState(false)
   const [errorMsg, setErrorMsg] = useState("")
   // Campos del formato oficial GOR-F-084 V02 (opcionales).
   const [ciudad,            setCiudad]            = useState("")
@@ -159,12 +166,16 @@ function NuevaActaModal({ open, onClose, fichas, raps }: NuevaActaModalProps) {
 
   const navigate = useNavigate()
 
+  // RAPs que se envían al backend: vacío si el instructor marcó "sin RAPs" o si no
+  // hay RAPs disponibles. Determina el modo del acta (per-RAP vs global/evidencias).
+  const rapsEfectivos = sinRaps ? [] : rapIds
+
   useEffect(() => {
     if (!open) {
       setFichaId(""); setNumero(""); setFecha(""); setHora("")
       setLugar("Videoconferencia / Plataforma Zajuna"); setObjetivo("")
       setCiudad(""); setHoraFin(""); setDireccionRegional(""); setVocera("")
-      setRapIds([]); setErrorMsg(""); setPreview(null)
+      setRapIds([]); setSinRaps(false); setErrorMsg(""); setPreview(null)
       setPreviewLoading(false); setShowWarningModal(false); setShowMapeoModal(false); setConfirmLoading(false)
     }
   }, [open])
@@ -180,16 +191,15 @@ function NuevaActaModal({ open, onClose, fichas, raps }: NuevaActaModalProps) {
       setErrorMsg("Completa todos los campos obligatorios antes de previsualizar.")
       return
     }
-    if (rapIds.length === 0) {
-      setErrorMsg("Selecciona al menos un RAP para generar la vista previa.")
-      return
-    }
+    // RAPs OPCIONALES: si no se selecciona ninguno (o se marca "sin RAPs"), el acta
+    // se arma "por evidencias de tu competencia" (modo global). El backend ya no
+    // exige RAPs ni devuelve 422 RAP_SIN_EVIDENCIAS.
     setPreviewLoading(true)
     setPreview(null)
     try {
       const result = await apiFetch<PreviewNativeResult>("/api/actas/preview-native", {
         method: "POST",
-        body: JSON.stringify({ fichaId, rapIds }),
+        body: JSON.stringify({ fichaId, rapIds: rapsEfectivos }),
       })
       setPreview(result)
     } catch (e) {
@@ -217,7 +227,7 @@ function NuevaActaModal({ open, onClose, fichas, raps }: NuevaActaModalProps) {
           hora,
           lugar: lugar.trim(),
           objetivo: objetivo.trim(),
-          rapIds,
+          rapIds: rapsEfectivos,
           participantes: preview.participantes,
           // Campos del formato oficial GOR-F-084 V02 (opcionales).
           ciudad: ciudad.trim() || undefined,
@@ -346,17 +356,40 @@ function NuevaActaModal({ open, onClose, fichas, raps }: NuevaActaModalProps) {
               />
             </div>
 
-            {raps.length > 0 && (
-              <div className="space-y-1.5">
-                <Label>RAPs a evaluar *</Label>
-                <div className="border border-input rounded-md p-3 space-y-2 max-h-36 overflow-y-auto">
+            {/* ── RAPs (OPCIONALES) ──
+                Si el instructor no marca RAPs (o marca "No tengo RAPs"), el acta se
+                arma por las evidencias de su competencia (modo global, sin columnas
+                por RAP). Puede ajustar los juicios a mano después. */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label>RAPs a evaluar <span className="font-normal text-gray-400">(opcional)</span></Label>
+              </div>
+
+              <label className="flex items-start gap-2 cursor-pointer rounded-md border border-input bg-gray-50/60 px-3 py-2">
+                <input
+                  type="checkbox"
+                  checked={sinRaps}
+                  onChange={() => { setSinRaps(v => !v); setPreview(null) }}
+                  disabled={isBusy}
+                  className="mt-0.5 h-4 w-4 rounded border-gray-300 text-sena-green focus:ring-sena-green"
+                />
+                <span className="text-sm text-gray-700">
+                  <span className="font-medium text-gray-900">No tengo RAPs — generar por evidencias de mi competencia</span>
+                  <span className="block text-xs text-gray-500 mt-0.5">
+                    El acta se calcula con las evidencias de tu competencia en la ficha. Podrás ajustar los juicios a mano.
+                  </span>
+                </span>
+              </label>
+
+              {raps.length > 0 && (
+                <div className={`border border-input rounded-md p-3 space-y-2 max-h-36 overflow-y-auto transition-opacity ${sinRaps ? "opacity-40 pointer-events-none" : ""}`}>
                   {raps.map(r => (
                     <label key={r.id} className="flex items-start gap-2 cursor-pointer">
                       <input
                         type="checkbox"
                         checked={rapIds.includes(r.id)}
                         onChange={() => toggleRap(r.id)}
-                        disabled={isBusy}
+                        disabled={isBusy || sinRaps}
                         className="mt-0.5 h-4 w-4 rounded border-gray-300 text-sena-green focus:ring-sena-green"
                       />
                       <span className="text-sm text-gray-700">
@@ -367,8 +400,14 @@ function NuevaActaModal({ open, onClose, fichas, raps }: NuevaActaModalProps) {
                     </label>
                   ))}
                 </div>
-              </div>
-            )}
+              )}
+
+              {raps.length === 0 && !sinRaps && (
+                <p className="text-xs text-gray-500">
+                  No tienes RAPs cargados. El acta se generará por evidencias de tu competencia.
+                </p>
+              )}
+            </div>
 
             {/* ── Resumen de Preview ── */}
             {preview && (
@@ -380,59 +419,81 @@ function NuevaActaModal({ open, onClose, fichas, raps }: NuevaActaModalProps) {
               </div>
             )}
 
-            {/* ── Tabla de Preview ── */}
-            {preview && preview.participantes.length > 0 && (
-              <div className="rounded-md border border-gray-200 overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="text-left px-3 py-2 font-semibold text-gray-500 min-w-[180px]">Aprendiz</th>
-                      {Object.keys(preview.participantes[0].rapStatus).map(codigo => (
-                        <th key={codigo} className="text-center px-2 py-2 font-semibold text-gray-500 whitespace-nowrap">{codigo}</th>
-                      ))}
-                      <th className="text-center px-2 py-2 font-semibold text-gray-500">Juicio</th>
-                      <th className="text-center px-2 py-2 font-semibold text-gray-500 w-8">⚠️</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {preview.participantes.map(p => (
-                      <tr
-                        key={p.aprendizId}
-                        className={p.hasUngraded ? "bg-yellow-50" : "bg-white"}
-                      >
-                        <td className="px-3 py-2 text-gray-700">{p.nombre}</td>
-                        {Object.entries(p.rapStatus).map(([codigo, estado]) => (
-                          <td key={codigo} className="px-2 py-1.5 text-center">
-                            <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-medium ${
-                              estado === "APROBÓ"       ? "bg-green-100 text-green-700" :
-                              estado === "PENDIENTE"    ? "bg-yellow-100 text-yellow-700" :
-                                                          "bg-gray-100 text-gray-500"
-                            }`}>{estado}</span>
-                          </td>
-                        ))}
-                        <td className="px-2 py-1.5 text-center">
-                          <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-semibold ${
-                            p.juicio === "APROBÓ"    ? "bg-green-100 text-green-700" :
-                            p.juicio === "PENDIENTE" ? "bg-yellow-100 text-yellow-700" :
-                                                       "bg-gray-100 text-gray-500"
-                          }`}>{p.juicio}</span>
-                        </td>
-                        <td className="px-2 py-1.5 text-center">
-                          {p.hasUngraded && (
-                            <span title="Tiene entregas sin calificar">
-                              <AlertTriangle className="w-3.5 h-3.5 text-amber-500 mx-auto" />
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            {/* Banner modo global: acta por evidencias de la competencia (sin RAPs). */}
+            {preview && preview.modo === "global" && preview.participantes.length > 0 && (
+              <div className="flex items-start gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                <span>
+                  Acta <strong>por evidencias de tu competencia</strong> (sin RAPs). El juicio se calcula con todas las
+                  evidencias de tu competencia en la ficha. Podrás ajustar los juicios a mano en el detalle del acta.
+                </span>
               </div>
             )}
 
+            {/* ── Tabla de Preview ── */}
+            {/* RAPs (columnas) solo si modo per-rap. En modo global rapStatus={} → sin columnas. */}
+            {(() => {
+              if (!preview || preview.participantes.length === 0) return null
+              const esPerRap = preview.modo === "per-rap"
+              const rapCodigos = esPerRap ? Object.keys(preview.participantes[0].rapStatus) : []
+              return (
+                <div className="rounded-md border border-gray-200 overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="text-left px-3 py-2 font-semibold text-gray-500 min-w-[180px]">Aprendiz</th>
+                        {rapCodigos.map(codigo => (
+                          <th key={codigo} className="text-center px-2 py-2 font-semibold text-gray-500 whitespace-nowrap">{codigo}</th>
+                        ))}
+                        <th className="text-center px-2 py-2 font-semibold text-gray-500">Juicio</th>
+                        <th className="text-center px-2 py-2 font-semibold text-gray-500 w-8">⚠️</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {preview.participantes.map(p => (
+                        <tr
+                          key={p.aprendizId}
+                          className={p.hasUngraded ? "bg-yellow-50" : "bg-white"}
+                        >
+                          <td className="px-3 py-2 text-gray-700">{p.nombre}</td>
+                          {rapCodigos.map(codigo => {
+                            const estado = p.rapStatus[codigo]
+                            return (
+                              <td key={codigo} className="px-2 py-1.5 text-center">
+                                <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-medium ${
+                                  estado === "APROBÓ"       ? "bg-green-100 text-green-700" :
+                                  estado === "PENDIENTE"    ? "bg-yellow-100 text-yellow-700" :
+                                                              "bg-gray-100 text-gray-500"
+                                }`}>{estado}</span>
+                              </td>
+                            )
+                          })}
+                          <td className="px-2 py-1.5 text-center">
+                            <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-semibold ${
+                              p.juicio === "APROBÓ"    ? "bg-green-100 text-green-700" :
+                              p.juicio === "PENDIENTE" ? "bg-yellow-100 text-yellow-700" :
+                                                         "bg-gray-100 text-gray-500"
+                            }`}>{p.juicio}</span>
+                          </td>
+                          <td className="px-2 py-1.5 text-center">
+                            {p.hasUngraded && (
+                              <span title="Tiene entregas sin calificar">
+                                <AlertTriangle className="w-3.5 h-3.5 text-amber-500 mx-auto" />
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )
+            })()}
+
             {preview && preview.participantes.length === 0 && (
-              <div className="text-sm text-gray-400 italic px-1">No se encontraron aprendices para esta ficha y RAPs seleccionados.</div>
+              <div className="text-sm text-gray-400 italic px-1">
+                No se encontraron aprendices para esta ficha{rapsEfectivos.length > 0 ? " y RAPs seleccionados" : ""}.
+              </div>
             )}
 
           </div>
@@ -601,17 +662,19 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
 
   const autoPoblarMutation = useMutation({
     mutationFn: () =>
-      apiFetch<{ poblados: number; aprobaron: number; pendientes: number; noParticiparon: number; warnings: number; evidenciasVinculadas: number; filtrados?: number }>(
+      apiFetch<{ poblados: number; aprobaron: number; pendientes: number; noParticiparon: number; warnings: number; evidenciasVinculadas: number; filtrados?: number; modo?: "per-rap" | "global" }>(
         `/api/actas/${actaId}/auto-poblar`, { method: "POST" }
       ),
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["acta-detalle", actaId] })
-      // Mostrar banner amarillo si todos quedaron sin participar o no hay evidencias vinculadas
+      const esGlobal = result.modo === "global"
+      // Mostrar banner amarillo si todos quedaron sin participar. En modo global,
+      // evidenciasVinculadas=0 es lo NORMAL (no hay RAPs), así que NO lo tratamos como falta de datos.
       const todosSinParticipar = result.poblados > 0 && result.noParticiparon === result.poblados
-      setSinDatosRecientes(todosSinParticipar || result.evidenciasVinculadas === 0)
+      setSinDatosRecientes(todosSinParticipar || (!esGlobal && result.evidenciasVinculadas === 0))
       if (result.poblados === 0) {
         toast.warning("No hay aprendices registrados en esta ficha. Escanea la ficha primero.")
-      } else if (result.evidenciasVinculadas === 0) {
+      } else if (!esGlobal && result.evidenciasVinculadas === 0) {
         toast.warning(
           "No se encontraron RAPs asociados. Asegúrate de haber vinculado evidencias a los RAPs del acta."
         )
@@ -701,7 +764,12 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
     if (!acta) return
     const payload = acta.participantes.map(p => {
       const rs = rapStatusLocales[p.aprendizId] ?? p.rapStatus ?? undefined
-      const juicio: Juicio = rs ? calcularJuicioGlobal(rs) : (juiciosLocales[p.aprendizId] ?? p.juicio)
+      // Acta por RAPs: el juicio se deriva del rapStatus. Acta global (rapStatus vacío):
+      // el juicio es editable a mano → usar juiciosLocales / p.juicio (NO calcular sobre {}).
+      const tieneRaps = rs && Object.keys(rs).length > 0
+      const juicio: Juicio = tieneRaps
+        ? calcularJuicioGlobal(rs as Record<string, Juicio>)
+        : (juiciosLocales[p.aprendizId] ?? p.juicio)
       return { aprendizId: p.aprendizId, juicio, rapStatus: rs }
     })
     juiciosMutation.mutate(payload)
@@ -725,6 +793,11 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
 
   // RAPs del acta (para columnas dinámicas)
   const rapsDelActa = acta.rapsInfo ?? []
+  // Acta "global" (por evidencias de la competencia): no tiene RAPs asociados.
+  // En este modo NO se pintan columnas por RAP; la tabla muestra nombre + juicio
+  // (editable). Si el acta SÍ tiene rapIds pero rapsInfo viene vacío, es otro caso
+  // (RAPs guardados pero sin info cargada) y mantenemos el aviso de "Guardar RAPs".
+  const esActaGlobal = (acta.rapIds ?? []).length === 0
 
   return (
     <div className="border-t border-gray-100 bg-gray-50/40 p-5 space-y-6">
@@ -740,9 +813,9 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
           </div>
           {guiaVisible && (
             <ol className="list-decimal list-inside space-y-0.5 ml-1">
-              <li>Marca los RAPs trabajados en esta sesión → <strong>Guardar RAPs</strong></li>
+              <li>(Opcional) Marca los RAPs trabajados → <strong>Guardar RAPs</strong>. Sin RAPs, el acta se arma por evidencias de tu competencia.</li>
               <li>Haz clic en <strong>Auto-poblar desde evidencias</strong> para cargar los aprendices</li>
-              <li>Ajusta el estado de cada aprendiz por RAP si es necesario → <strong>Guardar juicios</strong></li>
+              <li>Ajusta el estado de cada aprendiz si es necesario → <strong>Guardar juicios</strong></li>
               <li>Descarga el Word cuando el acta esté lista</li>
             </ol>
           )}
@@ -830,7 +903,19 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
           </div>
         )}
 
-        {rapsDelActa.length === 0 && acta.participantes.length > 0 && (
+        {/* Acta por evidencias (global, sin RAPs): banner informativo, NO de error. */}
+        {esActaGlobal && acta.participantes.length > 0 && (
+          <div className="flex items-start gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+            <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+            <span>
+              Acta <strong>por evidencias de tu competencia</strong> (sin RAPs). La tabla muestra el juicio general de cada
+              aprendiz, que puedes ajustar a mano. Si quieres detalle por RAP, marca los RAPs arriba y vuelve a <strong>Auto-poblar desde evidencias</strong>.
+            </span>
+          </div>
+        )}
+
+        {/* Caso distinto: el acta SÍ tiene RAPs guardados pero no cargó su info → aviso de acción. */}
+        {!esActaGlobal && rapsDelActa.length === 0 && acta.participantes.length > 0 && (
           <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
             <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
             <span>
@@ -923,7 +1008,23 @@ function ActaDetailPanel({ actaId, allRaps, userName, competenciaNombre }: ActaD
                         )
                       })}
                       <td className="px-2 py-2 text-center">
-                        <Badge variant={juicioBadgeVariant(juicioGlobal)} className="text-xs whitespace-nowrap">{juicioGlobal}</Badge>
+                        {/* Acta global (sin columnas RAP) + borrador: juicio editable a mano.
+                            Acta por RAPs: juicio derivado de las columnas (read-only). */}
+                        {esBorrador && rapsDelActa.length === 0 ? (
+                          <select
+                            value={juicioGlobal}
+                            onChange={e => setJuiciosLocales(prev => ({ ...prev, [p.aprendizId]: e.target.value as Juicio }))}
+                            className={`h-6 rounded border px-1 text-xs focus:outline-none focus:ring-1 focus:ring-ring ${
+                              juicioGlobal === "APROBÓ"    ? "bg-green-50  border-green-300 text-green-800" :
+                              juicioGlobal === "PENDIENTE" ? "bg-yellow-50 border-yellow-300 text-yellow-800" :
+                                                             "bg-gray-50   border-gray-300  text-gray-500"
+                            }`}
+                          >
+                            {JUICIOS.map(j => <option key={j} value={j}>{j}</option>)}
+                          </select>
+                        ) : (
+                          <Badge variant={juicioBadgeVariant(juicioGlobal)} className="text-xs whitespace-nowrap">{juicioGlobal}</Badge>
+                        )}
                       </td>
                       <td className="px-2 py-2 text-center">
                         {p.hasUngraded && (

@@ -336,10 +336,9 @@ async function actasRoutes(fastify) {
       return reply.code(422).send({ error: "Solo se puede auto-poblar actas en estado borrador." });
     }
 
+    // rapIds vacío = acta "por evidencias" (modo global): se juzga al aprendiz por las
+    // evidencias de la competencia del instructor, no por RAPs. Ya NO se bloquea aquí.
     const rapIds = Array.isArray(acta.rapIds) ? acta.rapIds : [];
-    if (rapIds.length === 0) {
-      return reply.code(422).send({ error: "El acta no tiene RAPs asociados." });
-    }
 
     // ── Obtener RAPs con su código ──────────────────────────────────────────────
     const rapsInfo = await prisma.rAP.findMany({
@@ -420,26 +419,33 @@ async function actasRoutes(fastify) {
     const aprendizIds = aprendices.map(a => a.id);
 
     // ── Validación Mapeo al Vuelo ───────────────────────────────────────────────
-    // Detectar RAPs que no tienen evidencias vinculadas para notificar a la UI
-    // y evitar el fallback silencioso que dejaba a todos en PENDIENTE.
+    // Detectar RAPs que no tienen evidencias vinculadas para decidir el modo.
     // (helper puro en actas.helpers.js)
     const rapsSinEvidencias = detectarRapsSinEvidencias(rapIds, mapaRapEvidencias, rapCodigoPorId);
 
-    if (rapsSinEvidencias.length > 0) {
-      return reply.code(422).send({
-        error: "RAP_SIN_EVIDENCIAS",
-        message: "Hay RAPs seleccionados que no tienen evidencias vinculadas.",
-        rapsSinEvidencias
-      });
-    }
+    // MODO: per-RAP si hay RAPs y TODOS tienen evidencias; si no (sin RAPs, o RAPs sin
+    // evidencias) → GLOBAL "por evidencias de la competencia del instructor". Antes esto
+    // devolvía 422 y bloqueaba el acta; ahora el RAP deja de ser un bloqueador (lo que
+    // importa son las evidencias; el instructor ajusta a mano). Regla #8 intacta: nada
+    // se aplica solo, el instructor revisa/confirma el acta.
+    const modoPerRap = rapIds.length > 0 && rapsSinEvidencias.length === 0;
 
-    // Al pasar la validación, garantizamos que todas las evidencias están mapeadas,
-    // por ende, el modo siempre será per-RAP.
-    const modoPerRap = true;
+    // Modo global: evidencias de la competencia del instructor en ESTA ficha.
+    let competenciaEvidIds = new Set();
+    if (!modoPerRap) {
+      const u = await prisma.user.findUnique({ where: { id: req.user.id }, select: { competenciaCodigo: true } });
+      if (u?.competenciaCodigo) {
+        const evs = await prisma.evidencia.findMany({
+          where:  { fichaId: acta.fichaId, nombre: { contains: u.competenciaCodigo } },
+          select: { id: true },
+        });
+        competenciaEvidIds = new Set(evs.map(e => e.id));
+      }
+    }
 
     // ── Cargar entregas relevantes ──────────────────────────────────────────────
     // En modo per-RAP: solo entregas de evidencias vinculadas a los RAPs.
-    // En modo fallback: todas las entregas del aprendiz en evidencias de la ficha.
+    // En modo global: solo entregas de las evidencias de la competencia del instructor.
     let todasEntregas;
     if (modoPerRap) {
       todasEntregas = await prisma.entrega.findMany({
@@ -451,10 +457,7 @@ async function actasRoutes(fastify) {
       });
     } else {
       todasEntregas = await prisma.entrega.findMany({
-        where: {
-          aprendizId: { in: aprendizIds },
-          evidencia:  { fichaId: acta.fichaId },
-        },
+        where: { aprendizId: { in: aprendizIds }, evidenciaId: { in: [...competenciaEvidIds] } },
         select: { aprendizId: true, evidenciaId: true, estado: true, notaActual: true, notaCualitativa: true },
       });
     }
@@ -476,6 +479,7 @@ async function actasRoutes(fastify) {
       const entregasAprendiz = entregasPorAprendiz.get(aprendiz.id) ?? [];
       const rapStatus = {};
       let hasUngraded = false;
+      let estadoGlobal = null;
 
       if (modoPerRap) {
         // Modo preciso: una columna por RAP basada en sus evidencias vinculadas.
@@ -493,10 +497,13 @@ async function actasRoutes(fastify) {
           if (r.hasUngraded) hasUngraded = true;
         }
       } else {
-        // Fallback: juicio global desde TODAS las entregas del aprendiz en la
-        // ficha. Lo replicamos en cada RAP del acta para que la UI tenga celda
-        // por RAP y el instructor pueda overridear manualmente.
-        const r = calcularEstado(entregasAprendiz);
+        // Modo global "por evidencias de la competencia": juzga por TODAS las evidencias
+        // de la competencia del instructor, inyectando virtuales sin_entregar para las que
+        // el aprendiz no entregó (no-entregó → NO PARTICIPÓ, no PENDIENTE falso).
+        const entregasMap = new Map(entregasAprendiz.map(e => [e.evidenciaId, e]));
+        const entregasGlobal = inyectarVirtualesSinEntregar(competenciaEvidIds, entregasMap);
+        const r = calcularEstado(entregasGlobal);
+        estadoGlobal = r.estado;
         for (const rapId of rapIds) {
           const codigo = rapCodigoPorId.get(rapId) ?? rapId;
           rapStatus[codigo] = r.estado;
@@ -505,7 +512,9 @@ async function actasRoutes(fastify) {
       }
 
       // JUICIO GENERAL — REGLAS ESTRICTAS (ver lib/calificacion).
-      const juicio = calcularJuicio(Object.values(rapStatus));
+      // Si no hay RAPs (acta por evidencias), rapStatus queda {} → usar estadoGlobal.
+      const estadosJuicio = Object.values(rapStatus);
+      const juicio = calcularJuicio(estadosJuicio.length ? estadosJuicio : [estadoGlobal]);
       if      (juicio === "APROBÓ")       nAprobaron++;
       else if (juicio === "NO PARTICIPÓ") nNoParticiparon++;
       else                                nPendientes++;
@@ -529,7 +538,7 @@ async function actasRoutes(fastify) {
       warnings:             nWarnings,
       filtrados:            nFiltrados,
       evidenciasVinculadas: todasEvidenciaIds.length,
-      modo:                 modoPerRap ? "per-rap" : "global-fallback",
+      modo:                 modoPerRap ? "per-rap" : "global",
     };
   });
 
@@ -909,7 +918,7 @@ async function actasRoutes(fastify) {
       programaNombre: ficha.programa || ficha.nombre || "",
       objetivo:       acta.objetivo || "",
       raps:           rapsInfo.map(r => ({ codigo: r.codigo, descripcion: r.descripcion })),
-    });
+    }, { userId: req.user.id });
 
     // Texto final a imprimir (con fallbacks legibles si el saneo deja algo vacío).
     competenciaNombre = saneado.competenciaNombre || ficha.nombre || "la competencia del programa";
@@ -1281,7 +1290,9 @@ async function actasRoutes(fastify) {
   // ── POST /api/actas/preview-native ──────────────────────────────────────────
   fastify.post("/api/actas/preview-native", { preHandler: fastify.authenticate }, async (req, reply) => {
     const { fichaId, rapIds } = req.body || {};
-    if (!fichaId || !Array.isArray(rapIds) || rapIds.length === 0) {
+    // rapIds vacío permitido = acta "por evidencias" (modo global). Solo se exige
+    // fichaId y que rapIds sea un array.
+    if (!fichaId || !Array.isArray(rapIds)) {
       return reply.code(400).send({ error: "fichaId y rapIds son requeridos." });
     }
 
@@ -1356,22 +1367,29 @@ async function actasRoutes(fastify) {
     const aprendizIds = aprendices.map(a => a.id);
 
     // ── Validación Mapeo al Vuelo ───────────────────────────────────────────────
-    // Detectar RAPs que no tienen evidencias vinculadas para notificar a la UI
-    // y evitar el fallback silencioso que dejaba a todos en PENDIENTE.
+    // Detectar RAPs que no tienen evidencias vinculadas para decidir el modo.
     // (helper puro en actas.helpers.js)
     const rapsSinEvidencias = detectarRapsSinEvidencias(rapIds, mapaRapEvidencias, rapCodigoPorId);
 
-    if (rapsSinEvidencias.length > 0) {
-      return reply.code(422).send({
-        error: "RAP_SIN_EVIDENCIAS",
-        message: "Hay RAPs seleccionados que no tienen evidencias vinculadas.",
-        rapsSinEvidencias
-      });
-    }
+    // MODO: per-RAP si hay RAPs y TODOS tienen evidencias; si no (sin RAPs, o RAPs sin
+    // evidencias) → GLOBAL "por evidencias de la competencia del instructor". Antes esto
+    // devolvía 422 y bloqueaba el acta; ahora el RAP deja de ser un bloqueador (lo que
+    // importa son las evidencias; el instructor ajusta a mano). Regla #8 intacta: nada
+    // se aplica solo, el instructor revisa/confirma el acta.
+    const modoPerRap = rapIds.length > 0 && rapsSinEvidencias.length === 0;
 
-    // Al pasar la validación, garantizamos que todas las evidencias están mapeadas,
-    // por ende, el modo siempre será per-RAP.
-    const modoPerRap = true;
+    // Modo global: evidencias de la competencia del instructor en ESTA ficha.
+    let competenciaEvidIds = new Set();
+    if (!modoPerRap) {
+      const u = await prisma.user.findUnique({ where: { id: req.user.id }, select: { competenciaCodigo: true } });
+      if (u?.competenciaCodigo) {
+        const evs = await prisma.evidencia.findMany({
+          where:  { fichaId, nombre: { contains: u.competenciaCodigo } },
+          select: { id: true },
+        });
+        competenciaEvidIds = new Set(evs.map(e => e.id));
+      }
+    }
 
     // 5. Entregas
     let todasEntregas;
@@ -1382,7 +1400,7 @@ async function actasRoutes(fastify) {
       });
     } else {
       todasEntregas = await prisma.entrega.findMany({
-        where: { aprendizId: { in: aprendizIds }, evidencia: { fichaId } },
+        where: { aprendizId: { in: aprendizIds }, evidenciaId: { in: [...competenciaEvidIds] } },
         select: { aprendizId: true, evidenciaId: true, estado: true, notaActual: true, notaCualitativa: true },
       });
     }
@@ -1399,6 +1417,7 @@ async function actasRoutes(fastify) {
       const entregasAprendiz = entregasPorAprendiz.get(aprendiz.id) ?? [];
       const rapStatus = {};
       let hasUngraded = false;
+      let estadoGlobal = null;
 
       if (modoPerRap) {
         const entregasMap = new Map(entregasAprendiz.map(e => [e.evidenciaId, e]));
@@ -1412,7 +1431,13 @@ async function actasRoutes(fastify) {
           if (r.hasUngraded) hasUngraded = true;
         }
       } else {
-        const r = calcularEstado(entregasAprendiz);
+        // Modo global "por evidencias de la competencia": juzga por TODAS las evidencias
+        // de la competencia del instructor, inyectando virtuales sin_entregar para las que
+        // el aprendiz no entregó (no-entregó → NO PARTICIPÓ, no PENDIENTE falso).
+        const entregasMap = new Map(entregasAprendiz.map(e => [e.evidenciaId, e]));
+        const entregasGlobal = inyectarVirtualesSinEntregar(competenciaEvidIds, entregasMap);
+        const r = calcularEstado(entregasGlobal);
+        estadoGlobal = r.estado;
         for (const rapId of rapIds) {
           const codigo = rapCodigoPorId.get(rapId) ?? rapId;
           rapStatus[codigo] = r.estado;
@@ -1421,7 +1446,9 @@ async function actasRoutes(fastify) {
       }
 
       // JUICIO GENERAL — REGLAS ESTRICTAS (ver lib/calificacion).
-      const juicio = calcularJuicio(Object.values(rapStatus));
+      // Si no hay RAPs (acta por evidencias), rapStatus queda {} → usar estadoGlobal.
+      const estadosJuicio = Object.values(rapStatus);
+      const juicio = calcularJuicio(estadosJuicio.length ? estadosJuicio : [estadoGlobal]);
 
       return {
         aprendizId: aprendiz.id,
@@ -1435,7 +1462,7 @@ async function actasRoutes(fastify) {
 
     const warningsCount = participantes.filter(p => p.hasUngraded).length;
 
-    return { participantes, warningsCount, modoPerRap };
+    return { participantes, warningsCount, modoPerRap, modo: modoPerRap ? "per-rap" : "global" };
   });
 
   // ── POST /api/actas/confirm-native ─────────────────────────────────────────

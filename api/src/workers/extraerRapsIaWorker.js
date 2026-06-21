@@ -84,6 +84,19 @@ Responde SOLO con este JSON (sin prosa, sin markdown):
 // Saneamos lo que devuelve el modelo: filtramos RAPs sin código/descripción y
 // normalizamos los criterios a un array de strings (el modelo a veces los devuelve
 // como objetos {descripcion} o como una sola cadena).
+
+// Recorta a la PRIMERA ORACIÓN + tope de longitud. La IA a veces arrastra el texto
+// de la guía DESPUÉS del RAP ("...del programa de formación. • Duración de la guía...
+// 2. PRESENTACIÓN Estimado aprendiz..."). Esto deja solo el RAP. Mismo saneo que
+// scripts/extraerTodasLasGuias.js, que ya resolvía este caso con el extractor por regex.
+function primeraOracion(t, max = 300) {
+  let s = String(t ?? "").replace(/\s+/g, " ").trim();
+  const p = s.search(/\.(?:\s|$)/);          // primer punto seguido de espacio o fin
+  if (p > 20) s = s.slice(0, p + 1).trim();   // >20 para no cortar siglas cortas
+  if (s.length > max) s = s.slice(0, max).trim();
+  return s;
+}
+
 function normalizarPropuesta(parsed, competenciaCodigo) {
   const rapsRaw = Array.isArray(parsed?.raps) ? parsed.raps : null;
   if (!rapsRaw) return null; // sin `raps` → el caller lo trata como error
@@ -91,15 +104,16 @@ function normalizarPropuesta(parsed, competenciaCodigo) {
   const raps = rapsRaw
     .map((r) => {
       const codigo = String(r?.codigo ?? "").trim();
-      const descripcion = String(r?.descripcion ?? "").trim();
+      // Saneo clave: el RAP es UNA oración; recortamos lo que la IA arrastre de la guía.
+      const descripcion = primeraOracion(r?.descripcion, 300);
 
       let criterios = [];
       if (Array.isArray(r?.criterios)) {
         criterios = r.criterios
-          .map((c) => (typeof c === "string" ? c : String(c?.descripcion ?? "")).trim())
+          .map((c) => primeraOracion(typeof c === "string" ? c : c?.descripcion, 300))
           .filter(Boolean);
       } else if (typeof r?.criterios === "string" && r.criterios.trim()) {
-        criterios = [r.criterios.trim()];
+        criterios = [primeraOracion(r.criterios, 300)];
       }
 
       return { codigo, descripcion, criterios };
