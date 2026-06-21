@@ -151,6 +151,13 @@ Generados/puestos en el deploy (NO están en git):
 
 ## 6B. Seguridad — backlog priorizado (al 21 jun)
 
+> **DECISIÓN 21-jun (usuario):** se sigue con **features**; el **piloto queda SOLO entre gente
+> de confianza** por ahora, asumiendo el riesgo a corto plazo. **HTTPS DIFERIDO** pero dejado
+> "listo para hacer" (checklist al final de esta sección).
+> ⚠️ Recordatorio honesto: la confianza de las personas NO mitiga el sniffing de red. Esto es
+> aceptable **solo** mientras sea piloto cerrado y desde redes propias/de casa — **evitar
+> entrar desde WiFi público** (café, etc.) hasta tener HTTPS, porque ahí van las credenciales SENA.
+
 🔴 **Críticos antes de meter más instructores:**
 - **HTTPS + dominio (Caddy):** hoy la app va por `http://IP:3000` → contraseñas y JWT viajan
   **SIN cifrar**. Es el riesgo #1. Pasos en `docs/PLAN_DESPLIEGUE.md` §6A; luego ajustar `ALLOWED_ORIGIN`.
@@ -170,6 +177,23 @@ Generados/puestos en el deploy (NO están en git):
 - `SENTRY_DSN` (visibilidad de errores) + UptimeRobot a `/api/health`.
 - Ownership por-programa de los RAPs (governance a escala — §6.10).
 - Revisar por qué el `rol` del superadmin se reseteó a `instructor` en prod.
+
+### HTTPS — listo para hacer (cuando haya dominio) ✅
+Diferido por decisión del 21-jun, pero estos son los pasos exactos para activarlo en ~15 min:
+1. Conseguir un **dominio** y apuntar un registro **A** a `167.233.61.39` (ej. `helper.tudominio.com`).
+2. En el VPS: `apt install caddy`.
+3. `/etc/caddy/Caddyfile`:
+   ```
+   helper.tudominio.com {
+       reverse_proxy localhost:3000
+   }
+   ```
+   → `systemctl reload caddy` (Caddy saca el certificado TLS de Let's Encrypt solo).
+4. En `/opt/helper/.env`: `ALLOWED_ORIGIN=https://helper.tudominio.com` → `pm2 delete all && pm2 start ecosystem.config.js`.
+5. (Opcional) cerrar el puerto 3000 al exterior (firewall `ufw`) para forzar el paso por Caddy.
+> Detalle ampliado en `docs/PLAN_DESPLIEGUE.md §6A`.
+
+---
 
 > Auditoría previa más amplia en `docs/auditoria-release/` (release 19 jun: P0 IDOR cerrado, etc.).
 > Se puede correr `/security-review` sobre el diff antes de un release.
