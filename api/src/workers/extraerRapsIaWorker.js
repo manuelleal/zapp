@@ -191,7 +191,10 @@ const worker = new Worker("extraerRapsIa", async (job) => {
   });
 
   console.log(`[extraerRapsIa] job ${jobId}: ${propuesta.raps.length} RAP(s) propuestos para ${competenciaCodigo}.`);
-}, { connection, concurrency: 1 });
+}, { connection, concurrency: Number(process.env.EXTRAER_RAPS_CONCURRENCY) || 4 });
+// concurrency 4: la extracción es I/O-bound (espera a OpenRouter), así que varias
+// corren en paralelo sin saturar CPU/RAM — soporta ráfagas de varios instructores
+// subiendo guías a la vez. Ajustable por env si hace falta bajarle por rate-limit de IA.
 
 // ─── Error handler ────────────────────────────────────────────────────────────
 // Red de seguridad: cualquier error no atrapado arriba deja el Job en "error".

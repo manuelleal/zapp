@@ -412,7 +412,11 @@ export default function RapsPage() {
         )}
       </div>
 
-      <CargarRapsIaModal open={iaModalOpen} onOpenChange={setIaModalOpen} />
+      <CargarRapsIaModal
+        open={iaModalOpen}
+        onOpenChange={setIaModalOpen}
+        rapsExistentes={rapsList.length}
+      />
     </Layout>
   )
 }

@@ -65,9 +65,14 @@ const MAX_PDF_MB = 15
 export default function CargarRapsIaModal({
   open,
   onOpenChange,
+  rapsExistentes = 0,
 }: {
   open: boolean
   onOpenChange: (v: boolean) => void
+  // Nº de RAPs que la competencia del instructor YA tiene cargados. Sirve para
+  // avisar que la IA solo AGREGA los que falten (el backend protege los existentes:
+  // un instructor no los sobrescribe, solo el superadmin los cura). Default 0.
+  rapsExistentes?: number
 }) {
   const queryClient = useQueryClient()
   const poll = usePollJob()
@@ -189,6 +194,14 @@ export default function CargarRapsIaModal({
     } catch (e) {
       setSubiendo(false)
       setPaso("subir")
+      // 429 = rate-limit (5 extracciones / 15 min). El body trae `{ error }` con el
+      // mensaje exacto; lo mostramos en toast (además del aviso inline) para que el
+      // instructor entienda que debe esperar, no que el PDF esté mal.
+      if (e instanceof ApiError && e.status === 429) {
+        toast.error(e.message)
+        setError(e.message)
+        return
+      }
       setError(e instanceof ApiError ? e.message : "No se pudo iniciar la extracción con IA.")
     }
   }
@@ -246,15 +259,35 @@ export default function CargarRapsIaModal({
 
     setGuardando(true)
     try {
-      const r = await apiFetch<{ created: number; updated: number; skipped: number }>(
+      // El backend BLINDA los RAPs compartidos: solo AGREGA los que falten.
+      //   created    = RAPs nuevos agregados.
+      //   protegidos = ya existían y NO se tocaron (el instructor no los pisa).
+      //   updated    = > 0 solo si el usuario es superadmin (curó existentes).
+      const r = await apiFetch<{
+        created:    number
+        updated:    number
+        protegidos: number
+        skipped:    unknown[]
+      }>(
         "/api/raps/import",
         { method: "POST", body: JSON.stringify({ raps: aGuardar }) },
       )
-      const partes: string[] = []
-      if (r.created) partes.push(`${r.created} nuevo${r.created !== 1 ? "s" : ""}`)
-      if (r.updated) partes.push(`${r.updated} actualizado${r.updated !== 1 ? "s" : ""}`)
-      const detalle = partes.length ? ` (${partes.join(", ")})` : ""
-      toast.success(`RAPs guardados${detalle}.`)
+
+      const created    = r.created    ?? 0
+      const updated    = r.updated    ?? 0
+      const protegidos = r.protegidos ?? 0
+
+      // Nada nuevo y había existentes → no es error, es que ya estaban cargados.
+      if (created === 0 && updated === 0 && protegidos > 0) {
+        toast.success("Tus RAPs ya estaban cargados — no había nada nuevo que agregar.")
+      } else {
+        const partes: string[] = []
+        if (created) partes.push(`✓ ${created} RAP${created !== 1 ? "s" : ""} agregado${created !== 1 ? "s" : ""}`)
+        if (updated) partes.push(`${updated} actualizado${updated !== 1 ? "s" : ""}`)
+        if (protegidos) partes.push(`· ${protegidos} ya existía${protegidos !== 1 ? "n" : ""} (protegido${protegidos !== 1 ? "s" : ""})`)
+        toast.success(partes.length ? partes.join(" ") : "RAPs guardados.")
+      }
+
       queryClient.invalidateQueries({ queryKey: ["raps"] })
       onOpenChange(false)
     } catch (e) {
@@ -316,6 +349,19 @@ export default function CargarRapsIaModal({
                 onChange={elegirArchivo}
               />
             </label>
+
+            {/* Aviso de RAPs compartidos: si la competencia ya tiene RAPs, la IA solo
+                agrega los que falten; los existentes están protegidos (no se pisan). */}
+            {rapsExistentes > 0 && (
+              <div className="flex items-start gap-2 text-sm text-blue-800 bg-blue-50 border border-blue-200 rounded-md px-3 py-2">
+                <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5 text-blue-500" />
+                <span>
+                  Tu programa ya tiene <strong>{rapsExistentes}</strong> RAP{rapsExistentes !== 1 ? "s" : ""} cargado{rapsExistentes !== 1 ? "s" : ""}.
+                  {" "}La IA solo agregará los que falten; los existentes no se sobrescriben
+                  {" "}(solo el administrador puede actualizarlos).
+                </span>
+              </div>
+            )}
 
             {error && (
               <div className="flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2">

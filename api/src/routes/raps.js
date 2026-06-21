@@ -2,6 +2,24 @@ const prisma = require("../db/client");
 const { resolverCompetenciaId } = require("../lib/competencia");
 const { extraerRapsIaQueue } = require("../lib/queue");
 
+// ─── Rate-limit en memoria para extracción IA (anti-abuso / costo de tokens) ──
+// Máx IA_MAX extracciones por usuario en la ventana (default 5 / 15 min). In-memory
+// (suficiente con 1 instancia API; migrar a Redis si se escala — como el de auth.js).
+const IA_WINDOW_MS = 15 * 60 * 1000;
+const IA_MAX = Number(process.env.RATE_IA_MAX) || 5;
+const iaRateMap = new Map(); // userId → { count, resetAt }
+function checkIaRate(userId) {
+  const now = Date.now();
+  const e = iaRateMap.get(userId);
+  if (e && now < e.resetAt) {
+    if (e.count >= IA_MAX) return false;
+    e.count++;
+  } else {
+    iaRateMap.set(userId, { count: 1, resetAt: now + IA_WINDOW_MS });
+  }
+  return true;
+}
+
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 
 /**
@@ -301,8 +319,16 @@ async function rapsRoutes(fastify) {
     const competenciaId = await getCompetenciaId(fastify, req, reply);
     if (!competenciaId) return;
 
+    // BLINDAJE de datos compartidos: los RAPs son compartidos por código. Un RAP YA
+    // cargado solo lo puede sobrescribir el SUPERADMIN (curar). Un instructor solo
+    // AGREGA los que falten; los existentes quedan "protegidos" (no los pisa), así la
+    // carga de otro instructor no se traga el trabajo ya hecho.
+    const actor = await prisma.user.findUnique({ where: { id: req.user.id }, select: { rol: true } });
+    const esSuperadmin = actor?.rol === "superadmin";
+
     let created = 0;
     let updated = 0;
+    let protegidos = 0;
     const skipped = [];
 
     for (const r of body.raps) {
@@ -316,7 +342,10 @@ async function rapsRoutes(fastify) {
         });
 
         if (existing) {
-          // Reemplazar criterios y actualizar descripcion
+          // RAP ya existe (dato compartido): solo el superadmin lo sobrescribe.
+          // Un instructor NO pisa lo existente → queda protegido.
+          if (!esSuperadmin) { protegidos++; continue; }
+          // Superadmin → curar: reemplazar criterios y actualizar descripcion
           await prisma.$transaction([
             prisma.criterio.deleteMany({ where: { rapId: existing.id } }),
             prisma.rAP.update({
@@ -354,7 +383,7 @@ async function rapsRoutes(fastify) {
       }
     }
 
-    return { created, updated, skipped };
+    return { created, updated, protegidos, skipped };
   });
 
   // ── M6: Cargar mis RAPs con IA — Fase 1 (PROPONER, no guardar) ───────────────
@@ -368,6 +397,11 @@ async function rapsRoutes(fastify) {
   //   o por temp files entre procesos es frágil; el TEXTO limpio es lo único que
   //   la IA necesita. Así el job.data queda liviano.
   fastify.post("/api/raps/extraer-ia", { preHandler: fastify.authenticate }, async (req, reply) => {
+    // Rate-limit por usuario (anti-abuso / costo de tokens IA).
+    if (!checkIaRate(req.user.id)) {
+      return reply.code(429).send({ error: "Demasiadas extracciones con IA. Espera unos minutos e intenta de nuevo." });
+    }
+
     // 1. Leer el archivo subido (campo multipart "guia").
     const data = await req.file();
     if (!data) {
