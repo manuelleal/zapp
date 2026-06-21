@@ -316,7 +316,14 @@ export default function RapsPage() {
             variant="outline"
             size="sm"
             className="gap-1.5 text-xs"
-            onClick={() => refetch().then(() => toast.success("RAPs actualizados"))}
+            onClick={() =>
+              refetch().then((r) => {
+                // refetch() resuelve incluso en error → hay que mirar r.error,
+                // si no el toast verde aparecería con la página vacía (confunde).
+                if (r.error) toast.error(r.error instanceof ApiError ? r.error.message : "No se pudieron cargar los RAPs.")
+                else toast.success("RAPs actualizados")
+              })
+            }
             disabled={isFetching}
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isFetching ? "animate-spin" : ""}`} />

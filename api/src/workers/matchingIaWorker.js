@@ -3,6 +3,7 @@ require("dotenv").config({ path: require("path").resolve(__dirname, "../../../.e
 const { Worker } = require("bullmq");
 const { connection } = require("../lib/queue");
 const { chatJSON, proveedorActivo } = require("../lib/aiClient");
+const { resolverCompetenciaId } = require("../lib/competencia");
 const prisma = require("../db/client");
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -40,13 +41,12 @@ const worker = new Worker("matchingIa", async (job) => {
   console.log(`[matchingIa] proveedor IA activo: ${proveedorActivo()}`);
   await prisma.job.update({ where: { id: jobId }, data: { status: "running", progreso: 5 } });
 
-  // 1. Fetch the user + competencia
-  const user = await prisma.user.findUnique({
-    where:   { id: userId },
-    select:  { competenciaId: true },
-  });
+  // 1. Resolver la competencia del usuario. Usa el código estable y auto-sana el FK
+  //    (lib/competencia.js): si el instructor se registró antes de cargar los RAPs o
+  //    las competencias se re-sembraron, igual resuelve. null = no hay forma.
+  const competenciaId = await resolverCompetenciaId(userId);
 
-  if (!user?.competenciaId) {
+  if (!competenciaId) {
     await prisma.job.update({
       where: { id: jobId },
       data:  { status: "error", errorMsg: "El usuario no tiene competencia asignada." },
@@ -56,7 +56,7 @@ const worker = new Worker("matchingIa", async (job) => {
 
   // 2. Fetch all RAPs for the user's competencia (with criterios)
   const raps = await prisma.rAP.findMany({
-    where:   { competenciaId: user.competenciaId },
+    where:   { competenciaId },
     include: { criterios: { orderBy: { orden: "asc" } } },
     orderBy: { codigo: "asc" },
   });

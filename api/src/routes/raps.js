@@ -1,21 +1,23 @@
 const prisma = require("../db/client");
+const { resolverCompetenciaId } = require("../lib/competencia");
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 
 /**
  * Obtiene la competenciaId del usuario autenticado.
  * Lanza 422 si el usuario no tiene competencia asignada.
+ *
+ * Resuelve por código estable y auto-sana el FK (ver lib/competencia.js): así, si
+ * el instructor se registró antes de que se cargaran sus RAPs (competenciaId=null)
+ * o las competencias se re-sembraron (cuid obsoleto), igual ve sus RAPs.
  */
 async function getCompetenciaId(fastify, req, reply) {
-  const user = await prisma.user.findUnique({
-    where:  { id: req.user.id },
-    select: { competenciaId: true },
-  });
-  if (!user?.competenciaId) {
+  const competenciaId = await resolverCompetenciaId(req.user.id);
+  if (!competenciaId) {
     reply.code(422).send({ error: "El usuario no tiene una competencia asignada." });
     return null;
   }
-  return user.competenciaId;
+  return competenciaId;
 }
 
 /**
