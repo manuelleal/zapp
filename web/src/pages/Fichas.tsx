@@ -252,6 +252,28 @@ export default function Fichas() {
         a.comp.localeCompare(b.comp));
     }, [data])
 
+    // Buscador: filtra la lista por código de competencia, guía (GA/Guía N) o
+    // nombre de evidencia. Si el término coincide con la competencia o la guía se
+    // muestra el grupo completo; si no, se filtra evidencia por evidencia. Es solo
+    // un filtro de VISTA — no toca la selección guardada en `sel`.
+    const [q, setQ] = useState("")
+    const gruposFiltrados = useMemo(() => {
+      const term = q.trim().toLowerCase()
+      if (!term) return grupos
+      const out: typeof grupos = []
+      for (const g of grupos) {
+        const compMatch = g.comp.toLowerCase().includes(term)
+        const guiaMatch = `guia ${g.ga}`.includes(term) || `guía ${g.ga}`.includes(term) || `ga${g.ga}`.includes(term)
+        if (compMatch || guiaMatch) { out.push(g); continue }
+        const evs = g.evs.filter(e => e.nombre.toLowerCase().includes(term))
+        if (evs.length) out.push({ ...g, evs })
+      }
+      return out
+    }, [grupos, q])
+    // Ids visibles según el filtro activo (para que "Seleccionar todas" opere
+    // sobre lo que se ve, no sobre evidencias ocultas por el buscador).
+    const visibleIds = useMemo(() => gruposFiltrados.flatMap(g => g.evs.map(e => e.id)), [gruposFiltrados])
+
     const [sel, setSel] = useState<Set<string>>(new Set())   // evidenciaIds
     const [downloading, setDownloading] = useState(false)
     // Por defecto pre-marca TU competencia (si la hay); si no, todas.
@@ -267,9 +289,15 @@ export default function Fichas() {
       const n = new Set(p); const all = g.evs.every(e => n.has(e.id));
       g.evs.forEach(e => all ? n.delete(e.id) : n.add(e.id)); return n;
     })
-    const allIds = todas.map(e => e.id)
-    const allSel = allIds.length > 0 && sel.size === allIds.length
-    const toggleAll = () => setSel(allSel ? new Set() : new Set(allIds))
+    // "Seleccionar todas" opera sobre las evidencias VISIBLES (las que pasan el
+    // buscador). Sin término de búsqueda, visibleIds == todas → comportamiento igual.
+    const allSel = visibleIds.length > 0 && visibleIds.every(id => sel.has(id))
+    const toggleAll = () => setSel(p => {
+      const n = new Set(p)
+      if (allSel) visibleIds.forEach(id => n.delete(id))
+      else visibleIds.forEach(id => n.add(id))
+      return n
+    })
 
     async function descargar() {
       setDownloading(true)
@@ -290,15 +318,28 @@ export default function Fichas() {
           ) : grupos.length === 0 ? (
             <div className="py-8 text-center text-sm text-gray-500">Esta ficha no tiene evidencias escaneadas todavía.</div>
           ) : (
-            <div className="max-h-[55vh] overflow-y-auto space-y-2 pr-1">
-              <button onClick={toggleAll} className="flex items-center gap-2 text-sm font-medium text-sena-green mb-1">
-                {allSel ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />} Seleccionar todas
+            <div className="space-y-2">
+              {/* Buscador: filtra por código de competencia o nombre de evidencia */}
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                <Input
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                  placeholder="Buscar por código de competencia o nombre de evidencia…"
+                  className="pl-8 h-9"
+                />
+              </div>
+              <button onClick={toggleAll} className="flex items-center gap-2 text-sm font-medium text-sena-green">
+                {allSel ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />} {q.trim() ? "Seleccionar todas las visibles" : "Seleccionar todas"}
               </button>
-              <p className="text-xs text-gray-400 mb-1">Marca las evidencias que quieras incluir (las de tu competencia vienen premarcadas).</p>
-              {grupos.map((g, i) => (
+              <p className="text-xs text-gray-400">Marca las evidencias que quieras incluir (las de tu competencia vienen premarcadas).</p>
+            <div className="max-h-[50vh] overflow-y-auto space-y-2 pr-1">
+              {gruposFiltrados.length === 0 ? (
+                <div className="py-6 text-center text-sm text-gray-500">No hay evidencias que coincidan con «{q.trim()}».</div>
+              ) : gruposFiltrados.map((g, i) => (
                 <div key={`${g.comp}-${g.ga}`}>
                   {/* Encabezado de competencia cuando cambia el código */}
-                  {(i === 0 || grupos[i - 1].comp !== g.comp) && (
+                  {(i === 0 || gruposFiltrados[i - 1].comp !== g.comp) && (
                     <div className="mt-3 mb-1 px-1 text-xs font-semibold text-gray-500 uppercase tracking-wide">
                       Competencia {g.comp}{g.comp === miComp ? " · tuya" : ""}
                     </div>
@@ -322,6 +363,7 @@ export default function Fichas() {
                   </div>
                 </div>
               ))}
+            </div>
             </div>
           )}
           <DialogFooter>
