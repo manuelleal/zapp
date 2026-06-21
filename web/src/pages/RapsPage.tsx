@@ -2,7 +2,7 @@ import { useState, useEffect } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   ChevronDown, ChevronRight, Link2, Unlink,
-  Search, X, Loader2, BookOpen, RefreshCw,
+  Search, X, Loader2, BookOpen, RefreshCw, Sparkles,
 } from "lucide-react"
 import Layout from "@/components/Layout"
 import { Button } from "@/components/ui/button"
@@ -12,6 +12,7 @@ import { apiFetch, ApiError } from "@/api/client"
 import { toast } from "sonner"
 import { useAuthStore } from "@/store/auth"
 import { useNavigate } from "react-router-dom"
+import CargarRapsIaModal from "@/components/CargarRapsIaModal"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -275,6 +276,7 @@ export default function RapsPage() {
   }, [])
 
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [iaModalOpen, setIaModalOpen] = useState(false)
 
   const { data: raps, isLoading, isFetching, refetch } = useQuery<RapSummary[]>({
     queryKey: ["raps"],
@@ -316,6 +318,15 @@ export default function RapsPage() {
             variant="outline"
             size="sm"
             className="gap-1.5 text-xs"
+            onClick={() => setIaModalOpen(true)}
+          >
+            <Sparkles className="w-3.5 h-3.5 text-sena-green" />
+            <span className="hidden sm:inline">Cargar con IA</span>
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5 text-xs"
             onClick={() =>
               refetch().then((r) => {
                 // refetch() resuelve incluso en error → hay que mirar r.error,
@@ -337,14 +348,31 @@ export default function RapsPage() {
             Cargando RAPs...
           </div>
         ) : rapsList.length === 0 ? (
-          <div className="bg-white rounded-lg border p-12 text-center space-y-3">
-            <BookOpen className="w-10 h-10 text-gray-300 mx-auto" />
-            <p className="text-gray-600 text-sm font-medium">No hay RAPs para tu competencia.</p>
-            <p className="text-gray-400 text-xs">Contacta al administrador para cargar los RAPs de tu programa.</p>
-            <Button variant="outline" size="sm" className="gap-1.5 text-xs mx-auto" onClick={() => refetch()} disabled={isFetching}>
-              <RefreshCw className={`w-3.5 h-3.5 ${isFetching ? "animate-spin" : ""}`} />
-              Reintentar
+          <div className="bg-white rounded-lg border p-12 text-center space-y-4">
+            <div className="w-12 h-12 rounded-full bg-sena-green/10 flex items-center justify-center mx-auto">
+              <Sparkles className="w-6 h-6 text-sena-green" />
+            </div>
+            <div className="space-y-1">
+              <p className="text-gray-700 text-sm font-medium">Aún no tienes RAPs cargados</p>
+              <p className="text-gray-400 text-xs max-w-sm mx-auto">
+                Sube tu guía de aprendizaje en PDF y la IA extraerá tus Resultados de Aprendizaje.
+                Tú los revisas y confirmas antes de guardar.
+              </p>
+            </div>
+            <Button
+              size="sm"
+              className="bg-sena-green hover:bg-sena-green/90 gap-1.5 text-xs mx-auto"
+              onClick={() => setIaModalOpen(true)}
+            >
+              <Sparkles className="w-4 h-4" />
+              Cargar mis RAPs con IA
             </Button>
+            <div>
+              <Button variant="ghost" size="sm" className="gap-1.5 text-xs mx-auto text-gray-400" onClick={() => refetch()} disabled={isFetching}>
+                <RefreshCw className={`w-3.5 h-3.5 ${isFetching ? "animate-spin" : ""}`} />
+                Reintentar
+              </Button>
+            </div>
           </div>
         ) : (
           <div className="space-y-2">
@@ -384,6 +412,7 @@ export default function RapsPage() {
         )}
       </div>
 
+      <CargarRapsIaModal open={iaModalOpen} onOpenChange={setIaModalOpen} />
     </Layout>
   )
 }

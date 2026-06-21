@@ -1,7 +1,38 @@
 const prisma = require("../db/client");
 const { resolverCompetenciaId } = require("../lib/competencia");
+const { extraerRapsIaQueue } = require("../lib/queue");
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
+
+/**
+ * Limpia el texto bruto de un PDF de guía SENA: quita artefactos de paginación y
+ * las cabeceras de plantilla (GFPI-F-NNN VNN) que ensucian el contexto de la IA.
+ * Misma lógica que `scripts/extraerTodasLasGuias.js` (mantener en sync si cambia).
+ */
+function limpiarTexto(t) {
+  return (t || "")
+    .replace(/--\s*\d+\s+of\s+\d+\s*--/gi, " ")   // "-- 1 of 5 --"
+    .replace(/GFPI-F-\d+\s+V\.?\s*\d+/gi, " ")      // cabeceras de plantilla SENA
+    .replace(/\r\n/g, "\n");
+}
+
+/**
+ * Extrae el texto de un PDF (Buffer) usando pdf-parse.
+ *
+ * GOTCHA: pdf-parse 2.x expone una API ATÍPICA (no la documentada del paquete viejo):
+ * `new PDFParse({ data }).getText()`. Está pineada en package.json a 2.4.5; si se
+ * actualiza, esto se rompe. Mismo patrón que `scripts/extraerTodasLasGuias.js`.
+ */
+async function pdfABuffer(buffer) {
+  const { PDFParse } = require("pdf-parse");
+  const parser = new PDFParse({ data: new Uint8Array(buffer) });
+  try {
+    const data = await parser.getText();
+    return data.text || "";
+  } finally {
+    await parser.destroy().catch(() => {});
+  }
+}
 
 /**
  * Obtiene la competenciaId del usuario autenticado.
@@ -324,6 +355,79 @@ async function rapsRoutes(fastify) {
     }
 
     return { created, updated, skipped };
+  });
+
+  // ── M6: Cargar mis RAPs con IA — Fase 1 (PROPONER, no guardar) ───────────────
+  // POST /api/raps/extraer-ia — el instructor sube su guía de aprendizaje en PDF;
+  // se extrae el texto aquí (síncrono, barato) y se encola un job IA que PROPONE
+  // los RAPs + criterios para que el instructor los confirme luego con
+  // POST /api/raps/import (REGLA #8: la IA propone, el instructor decide).
+  //
+  // POR QUÉ extraer el texto en la ruta y NO mandar el PDF a la cola:
+  //   la cola corre en OTRO proceso (worker-entry.js). Pasar el binario por Redis
+  //   o por temp files entre procesos es frágil; el TEXTO limpio es lo único que
+  //   la IA necesita. Así el job.data queda liviano.
+  fastify.post("/api/raps/extraer-ia", { preHandler: fastify.authenticate }, async (req, reply) => {
+    // 1. Leer el archivo subido (campo multipart "guia").
+    const data = await req.file();
+    if (!data) {
+      return reply.code(400).send({ error: "Falta el archivo de la guía en el campo 'guia'." });
+    }
+
+    // Validar que sea un PDF (por mimetype o por extensión, lo que esté disponible).
+    const mimetype = data.mimetype || "";
+    const filename = data.filename || "";
+    const esPdf = mimetype === "application/pdf" || /\.pdf$/i.test(filename);
+    if (!esPdf) {
+      return reply.code(400).send({ error: "El archivo debe ser un PDF (.pdf)." });
+    }
+
+    // 2. Convertir a Buffer. @fastify/multipart lanza si el archivo supera el
+    //    límite (15MB) — se traduce a un 400 claro en vez de un 500 genérico.
+    let buffer;
+    try {
+      buffer = await data.toBuffer();
+    } catch (err) {
+      return reply.code(400).send({ error: `No se pudo leer el archivo (¿supera 15MB?): ${err.message}` });
+    }
+
+    // 3. Extraer y limpiar el texto. Si sale prácticamente vacío, el PDF es una
+    //    imagen escaneada (sin capa de texto) o está corrupto → 422 claro.
+    let guiaTexto;
+    try {
+      guiaTexto = limpiarTexto(await pdfABuffer(buffer));
+    } catch (err) {
+      return reply.code(422).send({ error: `No se pudo leer texto del PDF: ${err.message}` });
+    }
+    if (guiaTexto.trim().length < 200) {
+      return reply.code(422).send({ error: "No se pudo leer texto del PDF (¿es un escaneo sin texto?)." });
+    }
+
+    // 4. Competencia objetivo: el código ESTABLE del usuario (ver lib/competencia.js).
+    //    La IA usará este código para que los RAPs propuestos empiecen por él.
+    const user = await prisma.user.findUnique({
+      where:  { id: req.user.id },
+      select: { competenciaCodigo: true },
+    });
+    const competenciaCodigo = (user?.competenciaCodigo || "").trim();
+    if (!competenciaCodigo) {
+      return reply.code(422).send({ error: "Tu usuario no tiene un código de competencia asignado." });
+    }
+
+    // 5. Crear el Job de seguimiento (el front lo sondea con GET /api/jobs/:id) y
+    //    encolar. Pasamos el TEXTO ya extraído, no el binario (ver nota arriba).
+    const job = await prisma.job.create({
+      data: { userId: req.user.id, tipo: "extraerRapsIa", status: "queued", progreso: 0 },
+    });
+
+    await extraerRapsIaQueue.add("extraerRapsIa", {
+      jobId:  job.id,
+      userId: req.user.id,
+      guiaTexto,
+      competenciaCodigo,
+    });
+
+    return reply.code(201).send({ jobId: job.id });
   });
 }
 

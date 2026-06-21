@@ -22,13 +22,14 @@ require("./workers/foroRatingWorker");
 require("./workers/foroDescubrirWorker");
 require("./workers/autoScanWorker");
 require("./workers/matchingIaWorker");
+require("./workers/extraerRapsIaWorker");
 require("./workers/mensajeFormativoWorker");
 require("./workers/syncParticipantesWorker");
 require("./workers/emailMasivoWorker");
 require("./workers/descubrirCompetenciasWorker");
 require("./workers/mensajesProgramadosWorker");
 
-console.log("[worker-entry] 16 workers BullMQ registrados y escuchando colas.");
+console.log("[worker-entry] 17 workers BullMQ registrados y escuchando colas.");
 
 // Sin server HTTP: este proceso solo procesa jobs. Mantenerlo vivo lo hacen
 // los Workers de BullMQ (tienen listeners de Redis abiertos).

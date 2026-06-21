@@ -27,6 +27,9 @@ const foroRatingQueue    = new Queue("foroRating",    { connection, defaultJobOp
 const foroDescubrirQueue = new Queue("foroDescubrir", { connection, defaultJobOptions: { attempts: 1, removeOnComplete: 30, removeOnFail: 10 } });
 const autoScanQueue     = new Queue("autoScan",   { connection, defaultJobOptions: { removeOnComplete: 20, removeOnFail: 10 } });
 const matchingIaQueue   = new Queue("matchingIa",  { connection, defaultJobOptions: { attempts: 1,  removeOnComplete: 50 } });
+// attempts:1 — una sola llamada IA por job; reintentar gastaría tokens sin garantía
+// de mejor resultado (la propuesta es para que el instructor confirme, no definitiva).
+const extraerRapsIaQueue = new Queue("extraerRapsIa", { connection, defaultJobOptions: { attempts: 1, removeOnComplete: 50, removeOnFail: 20 } });
 const mensajesQueue     = new Queue("mensajes",    { connection, defaultJobOptions: { attempts: 2,  removeOnComplete: 50, removeOnFail: 20 } });
 const syncParticipantesQueue = new Queue("syncParticipantes", { connection, defaultJobOptions: { attempts: 1, removeOnComplete: 20, removeOnFail: 10 } });
 const emailMasivoQueue            = new Queue("emailMasivo",            { connection, defaultJobOptions: { attempts: 1, removeOnComplete: 50, removeOnFail: 20 } });
@@ -49,4 +52,4 @@ mensajesProgramadosQueue.add("tick", {}, {
 }).then(() => console.log("[mensajesProgramados] repeatable tick registered (cada 10 min)"))
   .catch(e => console.error("[mensajesProgramados] no se pudo registrar repeatable tick:", e.message));
 
-module.exports = { fichasQueue, evidenciasQueue, configQueue, leerConfigQueue, leerConfigLoteQueue, cambiarFechaQueue, cambiarConfigQueue, foroRatingQueue, foroDescubrirQueue, autoScanQueue, matchingIaQueue, mensajesQueue, syncParticipantesQueue, emailMasivoQueue, descubrirCompetenciasQueue, mensajesProgramadosQueue, connection };
+module.exports = { fichasQueue, evidenciasQueue, configQueue, leerConfigQueue, leerConfigLoteQueue, cambiarFechaQueue, cambiarConfigQueue, foroRatingQueue, foroDescubrirQueue, autoScanQueue, matchingIaQueue, extraerRapsIaQueue, mensajesQueue, syncParticipantesQueue, emailMasivoQueue, descubrirCompetenciasQueue, mensajesProgramadosQueue, connection };

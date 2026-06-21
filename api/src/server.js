@@ -9,6 +9,7 @@
  * Plugins registrados:
  *   - @fastify/cors      → ALLOWED_ORIGIN (.env) o localhost:5173 (dev)
  *   - @fastify/jwt       → JWT_SECRET (.env); token expira en 7d
+ *   - @fastify/multipart → subida de archivos (PDF de guías, CSV de actas); límite 15MB
  *   - @fastify/static    → sirve web/dist/ (build de React/Vite)
  *   - SPA fallback       → cualquier GET no-API sin match devuelve index.html
  *
@@ -53,6 +54,13 @@ fastify.register(require("@fastify/cors"), {
 });
 
 fastify.register(require("@fastify/jwt"), { secret: process.env.JWT_SECRET });
+
+// Subida de archivos (PDF de guías para extraer RAPs con IA; CSV de actas).
+// Límite 15MB: una guía de aprendizaje en PDF rara vez pesa más. Sin esto,
+// `req.file()` / `req.parts()` no existen y las rutas multipart fallan en runtime.
+fastify.register(require("@fastify/multipart"), {
+  limits: { fileSize: 15 * 1024 * 1024 },
+});
 
 fastify.register(require("@fastify/static"), {
   root:   path.join(__dirname, "../../web/dist"),
