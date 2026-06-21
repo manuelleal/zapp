@@ -1,8 +1,30 @@
 # ESTADO ACTUAL — Helper (bitácora de despliegue y pendientes)
 
-> **Última actualización:** 20 junio 2026 (madrugada). **La app está DESPLEGADA Y VIVA**
-> en producción. Este documento es el "punto de control": qué está hecho, dónde vive,
-> cómo se opera y qué falta. Para retomar, ver la sección final **"Cómo seguir"**.
+> **Última actualización:** 21 junio 2026. **La app está DESPLEGADA Y VIVA** en producción.
+> Este documento es el "punto de control": qué está hecho, dónde vive, cómo se opera y qué
+> falta. Para retomar, ver la sección final **"Cómo seguir"**.
+>
+> **Sesión 21 jun (resumen de lo nuevo, todo desplegado salvo donde se indique):**
+> 1. **RAPs vacíos RESUELTOS** — `GET /api/raps` filtraba por `competenciaId` (cuid volátil);
+>    ahora `lib/competencia.js` resuelve por **código estable** y auto-vincula. + **biblioteca
+>    de RAPs sembrada en prod** (19 competencias / 75 RAPs) con `scripts/seedRaps.js` +
+>    `scripts/exportRapsSeed.js` + `scripts/data/raps-seed.json`.
+> 2. **Nueva feature "Cargar mis RAPs con IA" (Fase 1):** el instructor **sube su guía PDF** →
+>    la IA (OpenRouter/Kimi K2) extrae RAPs+criterios → **PROPONE** → el instructor revisa y
+>    confirma (regla #8). Ruta `POST /api/raps/extraer-ia` + cola/worker `extraerRapsIa` +
+>    `web/src/components/CargarRapsIaModal.tsx`. Confirmar reusa `POST /api/raps/import`.
+> 3. **Acta SIN RAPs:** se genera "por evidencias de la competencia del instructor" cuando no
+>    hay RAPs mapeados (antes daba 422). `actas.js` auto-poblar + preview-native.
+> 4. **BLINDAJE de datos compartidos:** los RAPs son compartidos por código (cualquiera LEE);
+>    al cargar, un instructor solo **AGREGA los que falten** — solo el **superadmin sobrescribe**
+>    (cura). Así "la competencia no se traga tu trabajo". + rate-limit IA (5/15min) + worker
+>    concurrency 4. `scripts/hacer-superadmin.js <email>`.
+> 5. **Saneo:** las descripciones de RAP ya no arrastran el texto de la guía (primera oración).
+>
+> ⚠️ **OJO operativo:** PM2 NO recarga el `.env` con un `pm2 restart` normal (mantiene env viejo).
+> Si cambias un secreto en `/opt/helper/.env`, recrea: `pm2 delete all && pm2 start ecosystem.config.js`.
+> ⚠️ **Trabajo en curso de OTRA sesión** (sin commitear por esta): "AI usage tracking + panel admin
+> + last login" (`aiClient.js`, `admin.js`, `schema.prisma`, migración `add_ai_usage_and_last_login`).
 
 ---
 
@@ -99,13 +121,58 @@ Generados/puestos en el deploy (NO están en git):
    Pasos en `docs/PLAN_DESPLIEGUE.md` §6A. Luego cambiar `ALLOWED_ORIGIN` al dominio.
 2. **Recuperar contraseña por correo** — feature nueva (tokens + email). Necesita el correo
    activo (contraseña de aplicación de Gmail en Ajustes).
-3. **Rotar `OPENROUTER_API_KEY`** + poner `SENTRY_DSN` (monitoreo de errores) y un monitor
+3. 🔴 **ROTAR `OPENROUTER_API_KEY` YA** — la key actual quedó EXPUESTA (se pegó en un chat y en
+   el historial bash del server). Genera una nueva en OpenRouter, ponla en `/opt/helper/.env` y
+   recrea PM2 (`pm2 delete all && pm2 start ecosystem.config.js`). + poner `SENTRY_DSN` y monitor
    UptimeRobot a `/api/health`.
 4. **Branding**: cambiar "Zajuna" → "SENA" en toda la app (nav, "Buscar en Zajuna", Ajustes),
    no solo en el login.
-5. **Revisar** por qué 12 fichas quedan en "Archivadas" tras el descubrimiento.
+5. **Revisar** por qué 12 fichas quedan en "Archivadas" tras el descubrimiento (el agente dejó
+   diagnóstico + fix listo: filtrar cursos `hidden` en `scraper/fichas.js`; sin aplicar).
 6. **Invitar 1-2 colegas** al piloto y recoger feedback.
 7. Pulido visual de la app (retoques de diseño de bajo riesgo) — ver `docs/auditoria-release/04-design-mobile.md`.
+
+### Seguimiento de la feature de RAPs con IA
+8. **Fase 2 — auto-traer la guía DESDE Zajuna** (sin subir PDF): reusa el mismo núcleo IA; el
+   punto frágil es localizar/descargar la guía del curso (hay prior art: `extraerGuiasDesdeZajuna.js`,
+   `probeGuiaRecurso.js`). Cae al upload (Fase 1) si no la encuentra.
+9. **Criterios de los RAPs sembrados**: el seed casi no trae criterios. Para llenarlos, el
+   superadmin sube la guía por "Cargar con IA" (extrae criterios) y confirma (sobrescribe).
+10. **Ownership por-programa** (para 200 instructores): hoy el blindaje es por rol (solo superadmin
+    cura). A futuro, dueño por competencia (requiere migración — coordinar con la migración pendiente
+    de la otra sesión).
+11. **App se cierra a las ~2h de inactividad** — reportado por el usuario; por diagnosticar.
+
+### Seguridad — backlog (ver §nuevo abajo)
+12. **HTTPS (#1)**, rotar key (#3), `npm audit` (1 high en front), rate-limit a Redis, confirmar
+    secretos fuertes en prod, gate del panel admin. Detalle en la sección "Seguridad" más abajo.
+
+---
+
+## 6B. Seguridad — backlog priorizado (al 21 jun)
+
+🔴 **Críticos antes de meter más instructores:**
+- **HTTPS + dominio (Caddy):** hoy la app va por `http://IP:3000` → contraseñas y JWT viajan
+  **SIN cifrar**. Es el riesgo #1. Pasos en `docs/PLAN_DESPLIEGUE.md` §6A; luego ajustar `ALLOWED_ORIGIN`.
+- **Rotar `OPENROUTER_API_KEY`** (quedó expuesta — ver §6.3).
+
+🟠 **Importantes:**
+- **Recuperar contraseña por correo** (no existe; si alguien la olvida, queda fuera).
+- **`npm audit`**: 1 high + 4 moderate (frontend), 2 moderate (backend) — revisar, sobre todo el high.
+- **Rate-limit a Redis**: login/registro y extracción IA usan limitador in-memory (se reinicia con
+  el proceso y no se comparte entre instancias).
+- **Secretos en prod**: confirmar `JWT_SECRET` / `ENCRYPTION_KEY` fuertes y únicos (no placeholders).
+  `.env` NO está en git ✓. Evitar pegar secretos en chat/terminal (quedan en el historial).
+- **Panel admin** (feature de la otra sesión): asegurar que TODAS las rutas `/api/admin/*` exigen
+  `rol=superadmin` antes de exponerlo.
+
+🟡 **Higiene / a futuro:**
+- `SENTRY_DSN` (visibilidad de errores) + UptimeRobot a `/api/health`.
+- Ownership por-programa de los RAPs (governance a escala — §6.10).
+- Revisar por qué el `rol` del superadmin se reseteó a `instructor` en prod.
+
+> Auditoría previa más amplia en `docs/auditoria-release/` (release 19 jun: P0 IDOR cerrado, etc.).
+> Se puede correr `/security-review` sobre el diff antes de un release.
 
 ---
 
