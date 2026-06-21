@@ -1,0 +1,519 @@
+{
+  "exportedAt": "2026-06-21T12:19:12.944Z",
+  "competencias": [
+    {
+      "codigo": "210201501",
+      "nombre": "[Sin nombre — Guía de aprendizaje 11 Página]",
+      "raps": [
+        {
+          "codigo": "210201501-01",
+          "descripcion": "Reconocer el trabajo como factor de movilidad social y transformación vital con referencia a la fenomenología y a los derechos fundamentales en el trabajo. o",
+          "criterios": []
+        },
+        {
+          "codigo": "210201501-02",
+          "descripcion": "Valorar la importancia de la ciudadanía laboral con base en el estudio de los derechos humanos y fundamentales en el trabajo.",
+          "criterios": []
+        },
+        {
+          "codigo": "210201501-03",
+          "descripcion": "Practicar los derechos fundamentales en el trabajo de acuerdo con la Constitución Política y los Convenios Internacionales. o",
+          "criterios": []
+        },
+        {
+          "codigo": "210201501-04",
+          "descripcion": "Participar en acciones solidarias teniendo en cuenta el ejercicio de los derechos humanos, de los pueblos y de la naturaleza. • Duración de la guía: 192 horas. Técnica: 144 horas. Transversal: 48 horas. 2. PRESENTACIÓN Estimado aprendiz, el SENA le extiende una cordial bienvenida a la guía once de aprendizaje que comprende la competencia, controlar la calidad del servicio de software de acuerdo co",
+          "criterios": []
+        }
+      ]
+    },
+    {
+      "codigo": "220201501",
+      "nombre": "[Sin nombre — Guía de aprendizaje 3 Página]",
+      "raps": [
+        {
+          "codigo": "220201501-01",
+          "descripcion": "Identificar los principios y leyes de la física en la solución de problemas de acuerdo al contexto productivo. o",
+          "criterios": []
+        },
+        {
+          "codigo": "220201501-02",
+          "descripcion": "Solucionar problemas asociados con el sector productivo con base en los principios y leyes de la física. o",
+          "criterios": []
+        },
+        {
+          "codigo": "220201501-03",
+          "descripcion": "Verificar las transformaciones físicas de la materia utilizando herramientas.",
+          "criterios": []
+        },
+        {
+          "codigo": "220201501-04",
+          "descripcion": "Proponer acciones de mejora en los procesos productivos de acuerdo con los principios y leyes de la física. o",
+          "criterios": []
+        }
+      ]
+    },
+    {
+      "codigo": "220501046",
+      "nombre": "[Sin nombre — Guía de aprendizaje 1 Página]",
+      "raps": [
+        {
+          "codigo": "220501046-01",
+          "descripcion": "Alistar herramientas de tecnologías de la información y la comunicación (TIC), de acuerdo con las necesidades de procesamiento de información y comunicación. o",
+          "criterios": []
+        },
+        {
+          "codigo": "220501046-02",
+          "descripcion": "Aplicar funcionalidades de herramientas y servicios TIC, de acuerdo con manuales de uso, procedimientos establecidos y buenas prácticas. o",
+          "criterios": []
+        },
+        {
+          "codigo": "220501046-03",
+          "descripcion": "Evaluar los resultados, de acuerdo con los requerimientos. o",
+          "criterios": []
+        },
+        {
+          "codigo": "220501046-04",
+          "descripcion": "Optimizar los resultados, de acuerdo con la verificación. o",
+          "criterios": []
+        }
+      ]
+    },
+    {
+      "codigo": "220501092",
+      "nombre": "Establecer requisitos de la solución de software de acuerdo con estándares y procedimiento técnico. o 220501093 - Evaluar requisitos de la solución de software de acuerdo con metodologías de análisis y estándares. Claves: o 220501046 - Utilizar herra",
+      "raps": [
+        {
+          "codigo": "220501092-01",
+          "descripcion": "Caracterizar los procesos de la organización de acuerdo con el software a construir. o",
+          "criterios": [
+            {
+              "descripcion": "Identifica procesos de la organización de acuerdo con la estructura organizacional de la empresa y los requerimientos del cliente. Aplica técnicas de análisis de procesos, siguiendo la metodología establecida. Elabora diagrama de procesos identificando áreas de incidencia directa con el sistema de información a construir. Reconoce las fronteras y el contexto del sistema de acuerdo con el alcance.",
+              "orden": 0
+            }
+          ]
+        },
+        {
+          "codigo": "220501092-02",
+          "descripcion": "Recolectar información del software a construir de acuerdo con las necesidades del cliente.",
+          "criterios": [
+            {
+              "descripcion": "Reconoce las fuentes de requisitos de acuerdo con el proyecto. Diferencia los tipos de requisitos según sus características particulares. Identifica requisitos. Diseña instrumentos para recolección de información siguiendo normas y procedimientos técnicos. Utiliza las técnicas de captura de requisitos de acuerdo con las fuentes identificadas. Organiza la información recolectada para analizarla.",
+              "orden": 0
+            }
+          ]
+        },
+        {
+          "codigo": "220501092-03",
+          "descripcion": "Establecer los requisitos del software de acuerdo con la información recolectada. o",
+          "criterios": [
+            {
+              "descripcion": "Genera la documentación de la especificación de requisitos de acuerdo con normatividad y estándares relacionados. Presenta el informe de requisitos de acuerdo con estándares establecidos.",
+              "orden": 0
+            }
+          ]
+        },
+        {
+          "codigo": "220501092-04",
+          "descripcion": "Validar el informe de requisitos de acuerdo con las necesidades del cliente. o",
+          "criterios": [
+            {
+              "descripcion": "Evalúa el informe de requisitos con el cliente según las necesidades establecidas. Realiza cambios a la documentación de especificación de requisitos a partir de los hallazgos encontrados.",
+              "orden": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "codigo": "220501093",
+      "nombre": "Evaluar requisitos de la solución de software de acuerdo con metodologías de análisis y estándares. Claves: o 220201501 - Aplicación de conocimientos de las ciencias naturales de acuerdo con situaciones del contexto productivo y social. o 240202501 -",
+      "raps": [
+        {
+          "codigo": "220501093-01",
+          "descripcion": "Planear actividades de análisis de acuerdo con la metodología seleccionada. Claves: o",
+          "criterios": [
+            {
+              "descripcion": "Identifica metodologías de desarrollo de software de acuerdo con las características del software a desarrollar. Establece las actividades de análisis de acuerdo con la metodología seleccionada.",
+              "orden": 0
+            }
+          ]
+        },
+        {
+          "codigo": "220501093-03",
+          "descripcion": "Desarrollar procesos lógicos a través de la implementación de algoritmos. Claves: o",
+          "criterios": []
+        },
+        {
+          "codigo": "220501093-04",
+          "descripcion": "Verificar los modelos realizados en la fase de análisis de acuerdo con lo establecido en el informe de requisitos. o",
+          "criterios": []
+        }
+      ]
+    },
+    {
+      "codigo": "220501094",
+      "nombre": "[Sin nombre — Guía de aprendizaje 2 Página]",
+      "raps": [
+        {
+          "codigo": "220501094-01",
+          "descripcion": "Definir especificaciones técnicas del software de acuerdo con las características del software a construir.",
+          "criterios": []
+        },
+        {
+          "codigo": "220501094-02",
+          "descripcion": "Elaborar propuesta técnica del software de acuerdo con las especificaciones técnicas definidas. o",
+          "criterios": []
+        },
+        {
+          "codigo": "220501094-03",
+          "descripcion": "Validar las condiciones de la propuesta técnica del software de acuerdo con los intereses de las partes. Claves: o",
+          "criterios": []
+        }
+      ]
+    },
+    {
+      "codigo": "220501095",
+      "nombre": "Diseñar la solución de software de acuerdo con procedimientos y requisitos técnicos. Transversal: o 240201064 - Orientar investigación formativa según referentes técnicos. Clave: o 240202501 - Interactuar en lengua inglesa de forma oral y escrita den",
+      "raps": [
+        {
+          "codigo": "220501095-01",
+          "descripcion": "Elaborar los artefactos de diseño del software siguiendo las prácticas de la metodología seleccionada. o",
+          "criterios": []
+        },
+        {
+          "codigo": "220501095-02",
+          "descripcion": "Estructurar el modelo de datos del software de acuerdo con las especificaciones del análisis. o",
+          "criterios": []
+        },
+        {
+          "codigo": "220501095-03",
+          "descripcion": "Determinar las características técnicas de la interfaz gráfica del software adoptando estándares. Transversales: o",
+          "criterios": []
+        },
+        {
+          "codigo": "220501095-04",
+          "descripcion": "Verificar los entregables de la fase de diseño del software de acuerdo con lo establecido en el informe de análisis.",
+          "criterios": []
+        }
+      ]
+    },
+    {
+      "codigo": "220501096",
+      "nombre": "Desarrollar la solución de software de acuerdo con el diseño y metodologías de desarrollo. Transversal: o 240201526 - Enrique Low Murtra-Interactuar en el contexto productivo y social de acuerdo con principios éticos para la construcción de una cultu",
+      "raps": [
+        {
+          "codigo": "220501096-01",
+          "descripcion": "Planear actividades de construcción del software de acuerdo con el diseño establecido. o",
+          "criterios": []
+        },
+        {
+          "codigo": "220501096-02",
+          "descripcion": "Construir la base de datos para el software a partir del modelo de datos. o",
+          "criterios": []
+        },
+        {
+          "codigo": "220501096-03",
+          "descripcion": "Crear componentes front-end del software de acuerdo con el diseño. Transversales: o",
+          "criterios": []
+        },
+        {
+          "codigo": "220501096-04",
+          "descripcion": "Codificar el software de acuerdo con el diseño establecido. Transversales: o",
+          "criterios": []
+        },
+        {
+          "codigo": "220501096-05",
+          "descripcion": "Realizar pruebas al software para verificar su funcionalidad. Transversales: o",
+          "criterios": []
+        }
+      ]
+    },
+    {
+      "codigo": "220501097",
+      "nombre": "Implementar la solución de software de acuerdo con los requisitos de operación y modelos de referencia. Transversal: o 240201529 - Gestionar procesos propios de la cultura emprendedora y empresarial de acuerdo con el perfil personal y los requerimien",
+      "raps": [
+        {
+          "codigo": "220501097-01",
+          "descripcion": "Planear actividades de implantación del software de acuerdo con las condiciones del sistema. o",
+          "criterios": []
+        },
+        {
+          "codigo": "220501097-02",
+          "descripcion": "Desplegar el software de acuerdo con la arquitectura y las políticas establecidas. o",
+          "criterios": []
+        },
+        {
+          "codigo": "220501097-03",
+          "descripcion": "Documentar el proceso de implantación de software siguiendo estándares de calidad. o",
+          "criterios": []
+        },
+        {
+          "codigo": "220501097-04",
+          "descripcion": "Implantar el software de acuerdo con los niveles de servicio establecidos con el cliente.",
+          "criterios": []
+        }
+      ]
+    },
+    {
+      "codigo": "220501098",
+      "nombre": "Controlar la calidad del servicio de software de acuerdo con los estándares técnicos. Transversal: o 210201501 - Ejercer derechos fundamentales del trabajo en el marco de la constitución política y los convenios internacionales. • Resultados de apren",
+      "raps": [
+        {
+          "codigo": "220501098-01",
+          "descripcion": "Incorporar actividades de aseguramiento de la calidad del software de acuerdo con estándares de la industria. o",
+          "criterios": []
+        },
+        {
+          "codigo": "220501098-02",
+          "descripcion": "Verificar la calidad del software de acuerdo con las prácticas asociadas en los procesos de desarrollo. o",
+          "criterios": []
+        },
+        {
+          "codigo": "220501098-03",
+          "descripcion": "Realizar actividades de mejora de la calidad del software a partir de los resultados de la verificación. Transversales: o",
+          "criterios": []
+        }
+      ]
+    },
+    {
+      "codigo": "220601501",
+      "nombre": "[Sin nombre — Guía de aprendizaje 8 Página]",
+      "raps": [
+        {
+          "codigo": "220601501-01",
+          "descripcion": "Analizar las estrategias para la prevención y control de los impactos ambientales y de accidentes y enfermedades laborales (ATEL) de acuerdo con las políticas organizacionales y el entorno social. o",
+          "criterios": []
+        },
+        {
+          "codigo": "220601501-02",
+          "descripcion": "Implementar estrategias para el control de los impactos ambientales y de los accidentes y enfermedades de acuerdo con los planes y programas establecidos por la organización. o",
+          "criterios": []
+        },
+        {
+          "codigo": "220601501-03",
+          "descripcion": "Realizar seguimiento y acompañamiento al desarrollo de los planes y programas ambientales y SST, según el área de desempeño.",
+          "criterios": []
+        },
+        {
+          "codigo": "220601501-04",
+          "descripcion": "Proponer acciones de mejora para el manejo ambiental y el control de la SST, de acuerdo con estrategias de trabajo, colaborativo, cooperativo y coordinado en el contexto productivo y social. • Duración de la guía: 288 horas. Técnica: 240 horas. Transversal: 48 horas. 2. PRESENTACIÓN Estimado aprendiz, el SENA extiende una cordial bienvenida a la octava guía de aprendizaje que comprende la competen",
+          "criterios": []
+        }
+      ]
+    },
+    {
+      "codigo": "230101507",
+      "nombre": "[Sin nombre — Guía de aprendizaje 6 Página]",
+      "raps": [
+        {
+          "codigo": "230101507-01",
+          "descripcion": "Desarrollar habilidades psicomotrices en el contexto productivo y social. o",
+          "criterios": []
+        },
+        {
+          "codigo": "230101507-02",
+          "descripcion": "Practicar hábitos saludables mediante la aplicación de fundamentos de nutrición e higiene.",
+          "criterios": []
+        },
+        {
+          "codigo": "230101507-03",
+          "descripcion": "Ejecutar actividades de acondicionamiento físico orientadas hacia el mejoramiento de la condición física en los contextos productivo y social. o",
+          "criterios": []
+        },
+        {
+          "codigo": "230101507-04",
+          "descripcion": "Implementar un plan de ergonomía y pausas activas según las características de la función productiva. Clave: o",
+          "criterios": []
+        }
+      ]
+    },
+    {
+      "codigo": "240201064",
+      "nombre": "[Sin nombre — Guía de aprendizaje 5 Página]",
+      "raps": [
+        {
+          "codigo": "240201064-01",
+          "descripcion": "Analizar el contexto productivo según sus características y necesidades. o",
+          "criterios": []
+        },
+        {
+          "codigo": "240201064-02",
+          "descripcion": "Estructurar el proyecto de acuerdo a criterios de la investigación. o",
+          "criterios": []
+        },
+        {
+          "codigo": "240201064-03",
+          "descripcion": "Argumentar aspectos teóricos del proyecto según referentes nacionales e internacionales.",
+          "criterios": []
+        },
+        {
+          "codigo": "240201064-04",
+          "descripcion": "Proponer soluciones a las necesidades del contexto según resultados de la investigación. Clave: o",
+          "criterios": []
+        }
+      ]
+    },
+    {
+      "codigo": "240201524",
+      "nombre": "[Sin nombre — Guía de aprendizaje 4 Página]",
+      "raps": [
+        {
+          "codigo": "240201524-01",
+          "descripcion": "Analizar los componentes de la comunicación según sus características, intencionalidad y contexto. o",
+          "criterios": []
+        },
+        {
+          "codigo": "240201524-02",
+          "descripcion": "Argumentar en forma oral y escrita atendiendo las exigencias y particularidades de las diversas situaciones comunicativas mediante los distintos sistemas de representación. o",
+          "criterios": []
+        },
+        {
+          "codigo": "240201524-03",
+          "descripcion": "Relacionar los procesos comunicativos teniendo en cuenta criterios de lógica y racionalidad. o",
+          "criterios": []
+        },
+        {
+          "codigo": "240201524-04",
+          "descripcion": "Establecer procesos de enriquecimiento lexical y acciones de mejoramiento en el desarrollo de procesos comunicativos según requerimientos del contexto. o",
+          "criterios": []
+        }
+      ]
+    },
+    {
+      "codigo": "240201526",
+      "nombre": "[Sin nombre — Guía de aprendizaje 9 Página]",
+      "raps": [
+        {
+          "codigo": "240201526-01",
+          "descripcion": "Promover mi dignidad y la del otro a partir de los principios y valores éticos como aporte en la instauración de una cultura de paz. o",
+          "criterios": []
+        },
+        {
+          "codigo": "240201526-02",
+          "descripcion": "Establecer relaciones de crecimiento personal y comunitario a partir del bien común como aporte para el desarrollo social. o",
+          "criterios": []
+        },
+        {
+          "codigo": "240201526-03",
+          "descripcion": "Promover el uso racional de los recursos naturales a partir de criterios de sostenibilidad y sustentabilidad ética y normativa vigente. o",
+          "criterios": []
+        },
+        {
+          "codigo": "240201526-04",
+          "descripcion": "Contribuir con el fortalecimiento de la cultura de paz a partir de la dignidad humana y las estrategias para la transformación de conflictos.",
+          "criterios": []
+        }
+      ]
+    },
+    {
+      "codigo": "240201528",
+      "nombre": "[Sin nombre — Guía de aprendizaje 2 Página]",
+      "raps": [
+        {
+          "codigo": "240201528-01",
+          "descripcion": "Identificar modelos matemáticos de acuerdo con los requerimientos del problema planteado en contextos sociales y productivo. o",
+          "criterios": []
+        },
+        {
+          "codigo": "240201528-02",
+          "descripcion": "Plantear problemas matemáticos a partir de situaciones generadas en el contexto social y productivo. o",
+          "criterios": []
+        },
+        {
+          "codigo": "240201528-03",
+          "descripcion": "Resolver problemas matemáticos a partir de situaciones generadas en el contexto social y productivo. o",
+          "criterios": []
+        },
+        {
+          "codigo": "240201528-04",
+          "descripcion": "Proponer acciones de mejora frente a los resultados de los procedimientos matemáticos de acuerdo con el problema planteado. o",
+          "criterios": []
+        }
+      ]
+    },
+    {
+      "codigo": "240201529",
+      "nombre": "[Sin nombre — Guía de aprendizaje 10 Página]",
+      "raps": [
+        {
+          "codigo": "240201529-01",
+          "descripcion": "Integrar elementos de la cultura emprendedora teniendo en cuenta el perfil personal y el contexto de desarrollo social. o",
+          "criterios": []
+        },
+        {
+          "codigo": "240201529-02",
+          "descripcion": "Caracterizar la idea de negocio teniendo en cuenta las oportunidades y necesidades del sector productivo y social. o",
+          "criterios": []
+        },
+        {
+          "codigo": "240201529-03",
+          "descripcion": "Estructurar el plan de negocio de acuerdo con las características empresariales y tendencias de mercado. o",
+          "criterios": []
+        },
+        {
+          "codigo": "240201529-04",
+          "descripcion": "Valorar la propuesta de negocio conforme con su estructura y necesidades del sector productivo y social. • Duración de la guía: 192 horas Técnica: 144 horas Transversal: 48 horas 2. PRESENTACIÓN Estimado aprendiz, el SENA le extiende una cordial bienvenida a la décima guía de aprendizaje que comprende la competencia implementar la solución de software de acuerdo con los requisitos de operación y m",
+          "criterios": []
+        }
+      ]
+    },
+    {
+      "codigo": "240201530",
+      "nombre": "Infografía. AA1-EV01. Foro temático. AA2-EV01. Crucigrama. AA3-EV01. Cuadro sinóptico. AA4-EV01. Taller. AA4-EV02. Horas por evidencia 12 12 12 6 6 • Actividad de reflexión inicial En este primer momento se le invita a participar en una actividad que",
+      "raps": [
+        {
+          "codigo": "240201530-01",
+          "descripcion": ". Apropiar la dinámica institucional del SENA según la misión, objetivos y funciones. o",
+          "criterios": []
+        },
+        {
+          "codigo": "240201530-02",
+          "descripcion": ". Analizar características, componentes técnicos, tecnológicos y metodológicos del SENA, en el marco de la formación profesional integral. o",
+          "criterios": []
+        },
+        {
+          "codigo": "240201530-03",
+          "descripcion": ". Incorporar en el proyecto de vida los principios y valores institucionales de acuerdo con los fundamentos de la FPI. • Duración de la guía: 48 horas. 2. PRESENTACIÓN Apreciado aprendiz esta guía de aprendizaje mediante sus distintas actividades tiene un propósito fundamental, darle la bienvenida al SENA. Se trata de la institución formadora, en la que a través del programa y del proyecto formati",
+          "criterios": []
+        }
+      ]
+    },
+    {
+      "codigo": "240202501",
+      "nombre": "[Sin nombre — Guía de aprendizaje 1 Página]",
+      "raps": [
+        {
+          "codigo": "240202501-01",
+          "descripcion": "Comprender información sobre situaciones cotidianas y laborales actuales y futuras a través de interacciones sociales de forma oral y escrita. • Duración de la guía: 336 horas Técnicas: 240 horas Claves: 96 horas 2. PRESENTACIÓN Estimado aprendiz, el SENA extiende una cordial bienvenida a la primera guía de aprendizaje que comprende las competencias técnicas de establecer requisitos de la solución",
+          "criterios": []
+        },
+        {
+          "codigo": "240202501-02",
+          "descripcion": "Intercambiar opiniones sobre situaciones cotidianas y laborales actuales, pasadas y futuras en contextos sociales orales y escritos. • Duración de la guía: 384 horas Técnicas: 240 horas Claves: 144 horas 2. PRESENTACIÓN Estimado aprendiz, el SENA extiende una cordial bienvenida a la segunda guía de aprendizaje que comprende las competencias técnicas de: evaluar requisitos de la solución de softwar",
+          "criterios": []
+        },
+        {
+          "codigo": "240202501-03",
+          "descripcion": "Discutir sobre posibles soluciones a problemas dentro de un rango variado de contextos sociales y laborales. • Duración de la guía: 240 horas Técnica: 96 horas Claves: 144 horas 2. PRESENTACIÓN Estimado aprendiz, el SENA extiende una cordial bienvenida a la tercera guía de aprendizaje que comprende la competencia técnica Evaluar requisitos de la solución de software de acuerdo con metodologías de ",
+          "criterios": []
+        },
+        {
+          "codigo": "240202501-04",
+          "descripcion": "Implementar acciones de mejora relacionadas con el uso de expresiones, estructuras y desempeño según los resultados de aprendizaje formulados para el programa. • Duración de la guía: 296 horas Técnica: 200 horas Claves: 96 horas 2. PRESENTACIÓN Estimado aprendiz, el SENA extiende una cordial bienvenida a la cuarta guía de aprendizaje que comprende la competencia técnica diseñar la solución de soft",
+          "criterios": []
+        },
+        {
+          "codigo": "240202501-05",
+          "descripcion": "Presentar un proceso para la realización de una actividad en su quehacer laboral de acuerdo con los procedimientos establecidos desde su programa de formación. • Duración de la guía: 232 horas Técnica: 136 horas Transversal: 48 horas Clave: 48 horas 2. PRESENTACIÓN Estimado aprendiz, el SENA le extiende una cordial bienvenida a la quinta guía de aprendizaje que comprende la competencia técnica dis",
+          "criterios": []
+        },
+        {
+          "codigo": "240202501-06",
+          "descripcion": "Explicar las funciones de su ocupación laboral usando expresiones de acuerdo al nivel requerido por el programa de formación. • Duración de la guía: 288 horas Técnica: 192 horas Transversal: 48 horas Clave: 48 horas 2. PRESENTACIÓN Estimado aprendiz, el SENA le extiende una cordial bienvenida a la sexta guía de aprendizaje que comprende la competencia técnica desarrollar la solución de software de",
+          "criterios": []
+        }
+      ]
+    }
+  ]
+}
