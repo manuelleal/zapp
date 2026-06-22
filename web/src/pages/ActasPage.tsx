@@ -143,7 +143,7 @@ function NuevaActaModal({ open, onClose, fichas, raps }: NuevaActaModalProps) {
   const [numero,   setNumero]   = useState("")
   const [fecha,    setFecha]    = useState("")
   const [hora,     setHora]     = useState("")
-  const [lugar,    setLugar]    = useState("Videoconferencia / Plataforma Zajuna")
+  const [lugar,    setLugar]    = useState("Videoconferencia / Plataforma virtual")
   const [objetivo, setObjetivo] = useState("")
   const [rapIds,   setRapIds]   = useState<string[]>([])
   // Acta "por evidencias de mi competencia" (sin RAPs). Al activarlo se ignora la
@@ -173,7 +173,7 @@ function NuevaActaModal({ open, onClose, fichas, raps }: NuevaActaModalProps) {
   useEffect(() => {
     if (!open) {
       setFichaId(""); setNumero(""); setFecha(""); setHora("")
-      setLugar("Videoconferencia / Plataforma Zajuna"); setObjetivo("")
+      setLugar("Videoconferencia / Plataforma virtual"); setObjetivo("")
       setCiudad(""); setHoraFin(""); setDireccionRegional(""); setVocera("")
       setRapIds([]); setSinRaps(false); setErrorMsg(""); setPreview(null)
       setPreviewLoading(false); setShowWarningModal(false); setShowMapeoModal(false); setConfirmLoading(false)

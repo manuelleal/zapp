@@ -187,8 +187,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           <div className="max-w-6xl mx-auto px-4 sm:px-6 py-2.5 flex items-center gap-3">
             <KeyRound className="w-4 h-4 text-red-600 flex-shrink-0" />
             <p className="text-sm text-red-800 flex-1">
-              <span className="font-semibold">Tu contraseña de Zajuna cambió.</span>{" "}
-              Las consultas a Zajuna están fallando con la clave guardada. Actualízala para reanudar los escaneos.
+              <span className="font-semibold">Tu contraseña institucional cambió.</span>{" "}
+              Las consultas a la plataforma están fallando con la clave guardada. Actualízala para reanudar los escaneos.
             </p>
             <Button
               size="sm"

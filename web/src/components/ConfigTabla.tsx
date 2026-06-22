@@ -217,7 +217,7 @@ export default function ConfigTabla({ fichaId, preselectIds = [] }: { fichaId: s
           if (r && (r.fallidas ?? 0) > 0 && (r.leidas ?? 0) === 0) {
             const primerError = r.detalle?.find(d => !d.ok && d.error)?.error
             setLoadPhase("error")
-            setLoadMsg(`No se pudo leer ninguna evidencia${primerError ? ` — ${primerError}` : ""}. Reintenta (la sesión de Zajuna pudo haber expirado).`)
+            setLoadMsg(`No se pudo leer ninguna evidencia${primerError ? ` — ${primerError}` : ""}. Reintenta (la sesión con la plataforma pudo haber expirado).`)
             return
           }
           setLoadPhase("idle"); setLoadMsg("")

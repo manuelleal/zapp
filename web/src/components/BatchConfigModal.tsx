@@ -154,7 +154,7 @@ export default function BatchConfigModal({ open, onClose, evidenciaCount, onSubm
               ))}
             </ul>
             <p className="text-xs text-amber-700 bg-amber-50 px-3 py-2 rounded-md">
-              Esta acción modifica Zajuna directamente y no se puede deshacer fácilmente.
+              Esta acción modifica la plataforma directamente y no se puede deshacer fácilmente.
             </p>
           </div>
         )}

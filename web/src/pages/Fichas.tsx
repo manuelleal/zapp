@@ -88,7 +88,7 @@ export default function Fichas() {
 
   async function handleScanFichas() {
     setScanLoading(true)
-    setScanStatus("Buscando fichas en Zajuna...")
+    setScanStatus("Buscando fichas...")
     try {
       const res = await apiFetch<{ jobId: string }>("/api/fichas/scan", { method: "POST", body: "{}" })
       pollJob(res.jobId)
@@ -389,7 +389,7 @@ export default function Fichas() {
           </Button>
           <Button onClick={handleScanFichas} disabled={scanLoading} variant="outline" className="gap-2">
             <Search className="w-4 h-4" />
-            {scanLoading ? "Buscando..." : "Buscar en Zajuna"}
+            {scanLoading ? "Buscando..." : "Buscar fichas"}
           </Button>
           {scanStatus && <span className="text-sm text-gray-600">{scanStatus}</span>}
         </div>
@@ -400,7 +400,7 @@ export default function Fichas() {
         ) : activas.length === 0 && archivadas.length === 0 ? (
           <div className="bg-white rounded-lg border p-12 text-center">
             <div className="text-4xl mb-3">📭</div>
-            <p className="text-gray-600 text-sm">No hay fichas. Crea una o búscalas en Zajuna.</p>
+            <p className="text-gray-600 text-sm">No hay fichas. Crea una o búscalas en la plataforma.</p>
           </div>
         ) : (
           <>

@@ -84,7 +84,7 @@ const TEMPLATES = {
     asunto: "Te extrañamos en tu formación — Ficha {{ficha}}",
     cuerpo: `Hola {{nombre}},
 
-Notamos que llevas varios días sin ingresar a la plataforma Zajuna y queremos acompañarte para que no te atrases en tu proceso de formación de la ficha {{ficha}}.
+Notamos que llevas varios días sin ingresar a la plataforma y queremos acompañarte para que no te atrases en tu proceso de formación de la ficha {{ficha}}.
 
 Ingresa lo antes posible para revisar tus actividades y evidencias pendientes. Si tienes alguna dificultad para conectarte o avanzar, respóndeme este mensaje y lo resolvemos juntos.
 
@@ -92,7 +92,7 @@ Ingresa lo antes posible para revisar tus actividades y evidencias pendientes. S
 
 Cordialmente,
 {{instructor}}
-Instructor(a) SENA`,
+Instructor(a)`,
   },
   pendientes: {
     label: "Evidencias pendientes",
@@ -107,7 +107,7 @@ Te invito a entregarlas lo antes posible para mantener al día tu proceso de eva
 
 Cordialmente,
 {{instructor}}
-Instructor(a) SENA`,
+Instructor(a)`,
   },
   recordatorio: {
     label: "Recordatorio general",
@@ -120,7 +120,7 @@ Recuerda que tu constancia es clave para certificarte. Si tienes dudas o inconve
 
 Cordialmente,
 {{instructor}}
-Instructor(a) SENA`,
+Instructor(a)`,
   },
 } as const
 
@@ -620,7 +620,7 @@ export default function MensajesPage() {
                     <Button size="sm" variant="outline" className="text-xs gap-1.5"
                       onClick={() => syncMutation.mutate()} disabled={!!syncJobId || syncMutation.isPending}>
                       {syncJobId ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-                      {syncJobId ? "Sincronizando..." : "Sincronizar emails desde Zajuna"}
+                      {syncJobId ? "Sincronizando..." : "Sincronizar emails desde la plataforma"}
                     </Button>
                     <Button size="sm" variant="outline" className="text-xs" onClick={toggleAll}>
                       {seleccionados.size === aprendices.length ? "Deseleccionar todos" : "Seleccionar todos"}
@@ -675,7 +675,7 @@ export default function MensajesPage() {
                                 <td className="px-2 py-1.5 text-gray-700">{a.nombre}</td>
                                 <td className="px-2 py-1.5 text-gray-600">
                                   {a.email || (
-                                    <span className="text-amber-600 inline-flex items-center gap-1" title="Sin email — sincroniza desde Zajuna">
+                                    <span className="text-amber-600 inline-flex items-center gap-1" title="Sin email — sincroniza desde la plataforma">
                                       <AlertCircle className="w-3 h-3" /> sin email
                                     </span>
                                   )}
@@ -726,7 +726,7 @@ export default function MensajesPage() {
                   </label>
                   <label className="flex items-center gap-1.5 text-sm cursor-pointer">
                     <input type="radio" checked={canal === "zajuna"} onChange={() => setCanal("zajuna")} className="h-3.5 w-3.5" />
-                    Mensaje interno Zajuna
+                    Mensaje interno de la plataforma
                   </label>
                 </div>
               </div>
@@ -895,7 +895,7 @@ export default function MensajesPage() {
             <div className="space-y-3">
               <div className="rounded-md bg-gray-50 border border-gray-200 p-2 text-xs text-gray-600 space-y-0.5">
                 <p><span className="font-semibold">Ficha:</span> {fichas.find(f => f.id === fichaId)?.codigo ?? "—"}</p>
-                <p><span className="font-semibold">Canal:</span> {canal === "email" ? "Correo electrónico" : "Mensaje interno Zajuna"}</p>
+                <p><span className="font-semibold">Canal:</span> {canal === "email" ? "Correo electrónico" : "Mensaje interno de la plataforma"}</p>
                 <p className="truncate"><span className="font-semibold">Asunto:</span> {asunto || <em className="text-gray-400">sin asunto</em>}</p>
               </div>
 

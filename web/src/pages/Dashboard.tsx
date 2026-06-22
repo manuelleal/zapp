@@ -182,7 +182,7 @@ export default function Dashboard() {
                     }}
                   />
                 </div>
-                <p className="text-xs text-gray-400">Esto puede demorar debido a Zajuna.</p>
+                <p className="text-xs text-gray-400">Esto puede demorar.</p>
               </div>
             ) : scanStatus_?.lastAutoScanAt ? (
               <span className="text-sm text-gray-600">
@@ -304,7 +304,7 @@ export default function Dashboard() {
                                   href={ev.href}
                                   target="_blank"
                                   rel="noreferrer"
-                                  title="Ir al foro en Zajuna para calificar manualmente"
+                                  title="Ir al foro en la plataforma para calificar manualmente"
                                   className="inline-flex items-center gap-1 h-7 px-2.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700 hover:bg-blue-200 transition-colors whitespace-nowrap"
                                 >
                                   💬 {ev.pendientes} comentario{ev.pendientes !== 1 ? "s" : ""} sin calificar
@@ -328,7 +328,7 @@ export default function Dashboard() {
                                   size="sm"
                                   className="h-7 text-xs px-2.5 text-gray-600 border-gray-300 hover:bg-gray-100 flex items-center gap-1.5"
                                   onClick={() => calificandoMutation.mutate({ id: ev.id, calificando: false })}
-                                  title="Forzar estado a 'Al día' si ya terminaste de calificar en Zajuna y quedan pendientes"
+                                  title="Forzar estado a 'Al día' si ya terminaste de calificar en la plataforma y quedan pendientes"
                                 >
                                   <span>Forzar Al día</span>
                                   <span className="text-gray-400 font-bold">✕</span>

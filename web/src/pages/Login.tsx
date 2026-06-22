@@ -123,7 +123,7 @@ export default function Login() {
           </div>
           <div>
             <div className="font-bold text-lg text-gray-900">Helper</div>
-            <div className="text-sm text-gray-500">Gestión de fichas SENA</div>
+            <div className="text-sm text-gray-500">Gestión de fichas de formación</div>
           </div>
         </div>
 
@@ -240,11 +240,11 @@ export default function Login() {
                   </div>
                 </div>
                 <p className="text-xs text-gray-500 pt-1">
-                  Credenciales de la plataforma SENA (para escanear tus fichas). Se guardan cifradas y no se comparten.
+                  Credenciales de tu plataforma institucional (para escanear tus fichas). Se guardan cifradas y no se comparten.
                 </p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="space-y-1.5">
-                    <Label htmlFor="reg-zajuna-user">Documento (usuario SENA)</Label>
+                    <Label htmlFor="reg-zajuna-user">Documento (usuario institucional)</Label>
                     <Input
                       id="reg-zajuna-user"
                       placeholder="Número de documento"

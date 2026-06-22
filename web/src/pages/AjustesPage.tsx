@@ -37,7 +37,7 @@ interface ConfigCorreo {
 }
 
 const PROVEEDORES = [
-  { label: "Outlook / Office 365 (SENA)",  host: "smtp.office365.com", port: 587 },
+  { label: "Outlook / Office 365",  host: "smtp.office365.com", port: 587 },
   { label: "Gmail",                         host: "smtp.gmail.com",     port: 587 },
   { label: "Otro (avanzado)",               host: "",                   port: 587 },
 ] as const
@@ -140,13 +140,13 @@ export default function AjustesPage() {
       queryClient.invalidateQueries({ queryKey: ["ajustes-zajuna"] })
       queryClient.invalidateQueries({ queryKey: ["zajuna-estado"] }) // banner del Layout
       setZajunaPassInput("")
-      toast.success("Contraseña de Zajuna actualizada. Los próximos escaneos usarán la nueva clave.")
+      toast.success("Contraseña institucional actualizada. Los próximos escaneos usarán la nueva clave.")
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "Error al guardar las credenciales."),
   })
 
   function handleGuardarZajuna() {
-    if (!zajunaPassInput.trim()) { toast.error("Ingresa tu nueva contraseña de Zajuna."); return }
+    if (!zajunaPassInput.trim()) { toast.error("Ingresa tu nueva contraseña institucional."); return }
     guardarZajunaMutation.mutate()
   }
 
@@ -239,7 +239,7 @@ export default function AjustesPage() {
 
   // Nota de ayuda según proveedor
   const notaProveedor = proveedorIdx === 0
-    ? "Usa tu correo y contraseña normales del SENA. Si no funciona, es probable que tu cuenta tenga verificación en dos pasos — contacta al área de sistemas del SENA."
+    ? "Usa tu correo y contraseña institucionales. Si no funciona, es probable que tu cuenta tenga verificación en dos pasos — contacta al área de sistemas de tu institución."
     : proveedorIdx === 1
     ? "Gmail requiere una contraseña de aplicación, no tu contraseña normal. Activa la verificación en 2 pasos en myaccount.google.com y luego genera una contraseña de aplicación."
     : "Consulta con tu proveedor de correo el servidor SMTP y el puerto correctos."
@@ -256,7 +256,7 @@ export default function AjustesPage() {
         <div className={`bg-white rounded-lg border p-5 space-y-4 ${credsInvalidas ? "border-red-300" : "border-gray-200"}`}>
           <div className="flex items-center gap-2 border-b border-gray-100 pb-3">
             <KeyRound className="w-4 h-4 text-sena-green" />
-            <h2 className="text-sm font-semibold text-gray-900">Contraseña de Zajuna</h2>
+            <h2 className="text-sm font-semibold text-gray-900">Contraseña de la plataforma</h2>
             {credsInvalidas && (
               <span className="ml-auto inline-flex items-center gap-1 text-xs text-red-700 bg-red-50 border border-red-200 px-2 py-0.5 rounded">
                 <AlertTriangle className="w-3 h-3" /> Requiere actualización
@@ -266,7 +266,7 @@ export default function AjustesPage() {
 
           {credsInvalidas && (
             <p className="text-xs text-red-800 bg-red-50 border border-red-200 rounded-md px-3 py-2">
-              Detectamos que tu contraseña de Zajuna cambió. Los escaneos están fallando con la clave guardada.
+              Detectamos que tu contraseña institucional cambió. Los escaneos están fallando con la clave guardada.
               Ingresa tu nueva contraseña para reanudarlos.
             </p>
           )}
@@ -278,7 +278,7 @@ export default function AjustesPage() {
           ) : (
             <div className="space-y-4">
               <div className="space-y-1.5">
-                <Label htmlFor="zajuna-user">Documento (usuario de Zajuna)</Label>
+                <Label htmlFor="zajuna-user">Documento (usuario institucional)</Label>
                 <Input id="zajuna-user" value={zajunaUserInput}
                   onChange={e => setZajunaUserInput(e.target.value)}
                   placeholder="Número de documento" />
@@ -288,11 +288,11 @@ export default function AjustesPage() {
                 <Label htmlFor="zajuna-pass">Nueva contraseña *</Label>
                 <Input id="zajuna-pass" type="password" value={zajunaPassInput}
                   onChange={e => setZajunaPassInput(e.target.value)}
-                  placeholder="Tu contraseña actual de Zajuna" />
+                  placeholder="Tu contraseña institucional actual" />
               </div>
 
               <p className="text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-md px-3 py-2">
-                Cuando el SENA te pida cambiar la contraseña de Zajuna, actualízala también aquí.
+                Cuando tu institución te pida cambiar la contraseña, actualízala también aquí.
                 Así la app puede seguir escaneando evidencias y enviando mensajes en tu nombre.
               </p>
 
@@ -347,7 +347,7 @@ export default function AjustesPage() {
               {/* Advertencia específica para Outlook/SENA */}
               {proveedorIdx === 0 && (
                 <p className="text-xs text-amber-800 bg-amber-50 border border-amber-300 rounded-md px-3 py-2">
-                  &#9888; Si tu cuenta es del SENA (@sena.edu.co), es posible que Microsoft haya deshabilitado el acceso SMTP. En ese caso usa Gmail.
+                  &#9888; Si tu cuenta es institucional (Outlook / Office 365), es posible que Microsoft haya deshabilitado el acceso SMTP. En ese caso usa Gmail.
                 </p>
               )}
 
@@ -372,7 +372,7 @@ export default function AjustesPage() {
                 <Label htmlFor="smtp-user">Tu correo electrónico *</Label>
                 <Input id="smtp-user" type="email" value={smtpUser}
                   onChange={e => setSmtpUser(e.target.value)}
-                  placeholder="instructor@sena.edu.co" />
+                  placeholder="tucorreo@institucion.edu.co" />
               </div>
 
               <div className="space-y-1.5">
@@ -388,7 +388,7 @@ export default function AjustesPage() {
                 <Label htmlFor="from-nombre">Tu nombre (aparece en los correos enviados)</Label>
                 <Input id="from-nombre" value={fromNombre}
                   onChange={e => setFromNombre(e.target.value)}
-                  placeholder="Christiam Puentes — Instructor SENA" />
+                  placeholder="Christiam Puentes — Instructor" />
               </div>
 
               {/* Nota contextual */}
@@ -445,7 +445,7 @@ export default function AjustesPage() {
               >
                 {(descubrirMutation.isPending || (!!scanJobId && !scanDone))
                   ? <><Loader2 className="w-3 h-3 mr-1.5 animate-spin" /> Escaneando...</>
-                  : "Escanear Zajuna para descubrir competencias"}
+                  : "Escanear la plataforma para descubrir competencias"}
               </Button>
 
               {/* Barra de progreso */}

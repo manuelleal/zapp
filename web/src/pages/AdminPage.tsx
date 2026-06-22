@@ -266,7 +266,7 @@ export default function AdminPage() {
             onSubmit={(e) => { e.preventDefault(); if (adminNombre && adminEmail && adminPass.length >= 6) crearAdmin.mutate() }}
           >
             <p className="text-xs text-gray-500">
-              Cuenta de administrador (no instructor): entra al panel y ve todo, sin necesidad de credenciales de Zajuna ni competencia.
+              Cuenta de administrador (no instructor): entra al panel y ve todo, sin necesidad de credenciales de la plataforma ni competencia.
             </p>
             <div className="space-y-1.5">
               <Label htmlFor="admin-nombre">Nombre</Label>
