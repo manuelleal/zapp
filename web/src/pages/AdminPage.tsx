@@ -19,7 +19,7 @@ import { Users, FolderOpen, FileText, ClipboardList, Mail, Activity, Loader2, Ba
 import { toast } from "sonner"
 
 interface Metricas {
-  instructores: { total: number; suspendidos: number; activos: number }
+  instructores: { total: number; suspendidos: number; activos: number; pendientes: number }
   fichas: number; evidencias: number; entregas: number; aprendices: number; actas: number
   mensajes: { total: number; porEstado: Record<string, number> }
   actividad30d: { jobs: number; scans: number }
@@ -28,7 +28,7 @@ interface Metricas {
 interface Instructor {
   id: string; nombre: string; email: string; rol: string; competencia: string
   createdAt: string; lastAutoScanAt: string | null; lastLoginAt: string | null
-  suspendido: boolean; aceptoTerminos: boolean
+  suspendido: boolean; aprobado: boolean; aceptoTerminos: boolean
   fichas: number; actas: number; mensajes: number; evidencias: number; aprendices: number; tokens: number
 }
 
@@ -94,6 +94,13 @@ export default function AdminPage() {
     onError: (e) => toast.error(e instanceof ApiError ? e.message : "No se pudo actualizar."),
   })
 
+  const aprobar = useMutation({
+    mutationFn: (id: string) =>
+      apiFetch(`/api/admin/instructores/${id}`, { method: "PATCH", body: JSON.stringify({ aprobar: true }) }),
+    onSuccess: () => { toast.success("Instructor aprobado. Ya puede ingresar."); qc.invalidateQueries({ queryKey: ["admin-instructores"] }); qc.invalidateQueries({ queryKey: ["admin-metricas"] }) },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "No se pudo aprobar."),
+  })
+
   const eliminar = useMutation({
     mutationFn: (id: string) => apiFetch(`/api/admin/instructores/${id}`, { method: "DELETE" }),
     onSuccess: () => { toast.success("Instructor eliminado."); qc.invalidateQueries({ queryKey: ["admin-instructores"] }); qc.invalidateQueries({ queryKey: ["admin-metricas"] }) },
@@ -135,7 +142,7 @@ export default function AdminPage() {
           <div className="text-sm text-red-600 py-4">No se pudieron cargar las métricas (¿tienes rol de administrador?).</div>
         ) : m && (
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-            <Tarjeta icon={Users} label="Instructores" valor={m.instructores.total} sub={`${m.instructores.activos} activos · ${m.instructores.suspendidos} suspendidos`} />
+            <Tarjeta icon={Users} label="Instructores" valor={m.instructores.total} sub={`${m.instructores.activos} activos · ${m.instructores.pendientes} pendientes · ${m.instructores.suspendidos} suspendidos`} />
             <Tarjeta icon={FolderOpen} label="Fichas" valor={m.fichas} />
             <Tarjeta icon={FileText} label="Evidencias" valor={m.evidencias} sub={`${m.entregas} entregas · ${m.aprendices} aprendices`} />
             <Tarjeta icon={ClipboardList} label="Actas generadas" valor={m.actas} />
@@ -191,15 +198,25 @@ export default function AdminPage() {
                     <td className="px-3 py-2 text-center">
                       {i.rol === "superadmin"
                         ? <Badge variant="gray" className="text-xs">admin</Badge>
-                        : i.suspendido
-                          ? <Badge variant="destructive" className="text-xs">suspendido</Badge>
-                          : <Badge variant="green" className="text-xs">activo</Badge>}
+                        : !i.aprobado
+                          ? <span className="inline-flex items-center rounded px-2 py-0.5 text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200">pendiente</span>
+                          : i.suspendido
+                            ? <Badge variant="destructive" className="text-xs">suspendido</Badge>
+                            : <Badge variant="green" className="text-xs">activo</Badge>}
                     </td>
                     <td className="px-3 py-2">
                       {i.rol === "superadmin" ? (
                         <span className="text-gray-300">—</span>
                       ) : (
                         <div className="flex items-center justify-center gap-1">
+                          {!i.aprobado && (
+                            <Button variant="ghost" size="sm" className="h-7 px-2"
+                              title="Aprobar el acceso de este instructor"
+                              disabled={aprobar.isPending}
+                              onClick={() => aprobar.mutate(i.id)}>
+                              <CheckCircle2 className="w-3.5 h-3.5 text-sena-green" />
+                            </Button>
+                          )}
                           <Button variant="ghost" size="sm" className="h-7 px-2"
                             title="Restablecer contraseña"
                             disabled={resetPassword.isPending}

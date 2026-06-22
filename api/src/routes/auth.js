@@ -76,13 +76,28 @@ async function authRoutes(fastify) {
     // vincula después vía descubrir-competencias / extractor de guías.
     const competencia = await prisma.competencia.findUnique({ where: { codigo: competenciaCodigo } });
 
+    // Registro CERRADO: las cuentas nuevas quedan PENDIENTES de aprobación del
+    // superadmin (aprobadoAt = null por defecto). Excepción: si el correo es el del
+    // dueño (SUPERADMIN_EMAIL), se aprueba y se promueve a superadmin de una.
+    const esDueno = esSuperadmin({ email });
+
     const user = await prisma.user.create({
       data: {
         nombre, email, passwordHash, zajunaUserEnc, zajunaPassEnc, competenciaCodigo,
         competenciaNombre: competenciaNombre || competencia?.nombre || "",
         competenciaId:     competencia?.id ?? null,
+        ...(esDueno ? { aprobadoAt: new Date(), rol: "superadmin" } : {}),
       },
     });
+
+    // No se inicia sesión automáticamente si la cuenta quedó pendiente: el instructor
+    // debe esperar a que el administrador la apruebe en el panel.
+    if (!user.aprobadoAt) {
+      return reply.code(201).send({
+        pendiente: true,
+        message: "Tu cuenta fue creada y está pendiente de aprobación por el administrador. Te avisaremos cuando puedas ingresar.",
+      });
+    }
 
     const token = fastify.jwt.sign({ id: user.id, email: user.email, nombre: user.nombre, rol: user.rol }, { expiresIn: "7d" });
     return { token, user: { id: user.id, email: user.email, nombre: user.nombre, rol: user.rol, competenciaNombre: user.competenciaNombre, aceptoTerminosAt: user.aceptoTerminosAt } };
@@ -104,6 +119,12 @@ async function authRoutes(fastify) {
 
     // Cuenta suspendida por el superadmin (soft-state): no puede iniciar sesión.
     if (user.suspendedAt) return reply.code(403).send({ error: "Tu cuenta está suspendida. Contacta al administrador." });
+
+    // Registro CERRADO: la cuenta debe estar aprobada por el administrador. El dueño
+    // (superadmin / SUPERADMIN_EMAIL) entra siempre, sin necesidad de aprobación.
+    if (!user.aprobadoAt && !esSuperadmin(user)) {
+      return reply.code(403).send({ error: "Tu cuenta está pendiente de aprobación por el administrador. Te avisaremos cuando puedas ingresar." });
+    }
 
     // Registrar último acceso (lo usa el panel del superadmin para ver actividad).
     // Auto-sanado del dueño: si su correo es el SUPERADMIN_EMAIL pero el rol quedó en

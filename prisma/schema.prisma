@@ -60,6 +60,11 @@ model User {
   suspendedAt       DateTime?
   // Cuándo aceptó el aviso de uso/tratamiento de datos (modal de bienvenida).
   aceptoTerminosAt  DateTime?
+  // Registro CERRADO: la cuenta debe ser aprobada por el superadmin antes de poder
+  // iniciar sesión. null = pendiente de aprobación; fecha = aprobada. Las cuentas que
+  // ya existían cuando se introdujo el gate quedan aprobadas (backfill en la migración)
+  // para no bloquear a nadie. El superadmin (rol o SUPERADMIN_EMAIL) entra siempre.
+  aprobadoAt        DateTime?
   // Marca cuándo un worker detectó que las credenciales de Zajuna guardadas
   // quedaron inválidas (el instructor cambió la clave en Zajuna y la app sigue
   // con la vieja). Se setea en el login fallido y se limpia al actualizar la

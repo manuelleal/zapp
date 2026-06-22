@@ -36,6 +36,7 @@ export default function Login() {
   const [regCompetencia, setRegCompetencia] = useState("")
   const [regCodigoManual, setRegCodigoManual] = useState("")
   const [regError, setRegError] = useState("")
+  const [regOk, setRegOk]       = useState("")
   const [regLoading, setRegLoading] = useState(false)
 
   const competenciaEsOtra = regCompetencia === "otra"
@@ -71,6 +72,7 @@ export default function Login() {
   async function handleRegister(e: React.FormEvent) {
     e.preventDefault()
     setRegError("")
+    setRegOk("")
     // Validar que las dos contraseñas coincidan antes de enviar.
     if (regPass !== regPass2) {
       setRegError("Las contraseñas no coinciden.")
@@ -99,6 +101,12 @@ export default function Login() {
       setRegPass("")
       setRegPass2("")
       setRegZajunaPass("")
+      // Registro cerrado: si la cuenta quedó pendiente de aprobación, NO se inicia
+      // sesión; se muestra el aviso y el instructor espera a que el admin lo apruebe.
+      if (data.pendiente) {
+        setRegOk(data.message || "Tu cuenta fue creada y está pendiente de aprobación por el administrador.")
+        return
+      }
       setAuth(data.token, data.user)
       navigate("/dashboard")
     } catch {
@@ -133,7 +141,7 @@ export default function Login() {
             <div className="flex gap-1 border-b">
               <button
                 type="button"
-                onClick={() => { setTab("login"); setLoginError(""); setRegError("") }}
+                onClick={() => { setTab("login"); setLoginError(""); setRegError(""); setRegOk("") }}
                 className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
                   tab === "login"
                     ? "border-sena-green text-sena-green"
@@ -144,7 +152,7 @@ export default function Login() {
               </button>
               <button
                 type="button"
-                onClick={() => { setTab("register"); setLoginError(""); setRegError("") }}
+                onClick={() => { setTab("register"); setLoginError(""); setRegError(""); setRegOk("") }}
                 className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
                   tab === "register"
                     ? "border-sena-green text-sena-green"
@@ -292,6 +300,9 @@ export default function Login() {
                     />
                   )}
                 </div>
+                {regOk && (
+                  <p className="text-sm text-green-700 bg-green-50 border border-green-200 px-3 py-2 rounded-md">{regOk}</p>
+                )}
                 {regError && (
                   <p className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded-md">{regError}</p>
                 )}

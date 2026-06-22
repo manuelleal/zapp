@@ -58,12 +58,14 @@ async function adminRoutes(fastify) {
     const hace30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
     const [
-      instructores, suspendidos, fichas, evidencias, entregas, aprendices,
+      instructores, suspendidos, pendientes, fichas, evidencias, entregas, aprendices,
       actas, mensajes, mensajesPorEstado, jobs30d, scans30d,
       aiTotal, ai30d, aiPorProveedor,
     ] = await Promise.all([
       prisma.user.count({ where: { rol: "instructor" } }),
       prisma.user.count({ where: { rol: "instructor", suspendedAt: { not: null } } }),
+      // Pendientes de aprobación (registro cerrado): instructores que aún no pueden entrar.
+      prisma.user.count({ where: { rol: "instructor", aprobadoAt: null } }),
       prisma.ficha.count(),
       prisma.evidencia.count(),
       prisma.entrega.count(),
@@ -89,7 +91,7 @@ async function adminRoutes(fastify) {
     for (const p of aiPorProveedor) iaPorProveedor[p.provider] = p._sum.totalTokens || 0;
 
     return {
-      instructores: { total: instructores, suspendidos, activos: instructores - suspendidos },
+      instructores: { total: instructores, suspendidos, activos: instructores - suspendidos, pendientes },
       fichas, evidencias, entregas, aprendices, actas,
       mensajes: { total: mensajes, porEstado: mensajesEstados },
       actividad30d: { jobs: jobs30d, scans: scans30d },
@@ -110,7 +112,7 @@ async function adminRoutes(fastify) {
       select: {
         id: true, nombre: true, email: true, rol: true,
         competenciaNombre: true, competenciaCodigo: true,
-        createdAt: true, lastAutoScanAt: true, lastLoginAt: true, suspendedAt: true, aceptoTerminosAt: true,
+        createdAt: true, lastAutoScanAt: true, lastLoginAt: true, suspendedAt: true, aceptoTerminosAt: true, aprobadoAt: true,
         _count: { select: { fichas: true, actas: true, mensajesFormativos: true } },
       },
     });
@@ -136,6 +138,7 @@ async function adminRoutes(fastify) {
       competencia: u.competenciaNombre || u.competenciaCodigo || "—",
       createdAt: u.createdAt, lastAutoScanAt: u.lastAutoScanAt, lastLoginAt: u.lastLoginAt,
       suspendido: u.suspendedAt != null,
+      aprobado: u.aprobadoAt != null,
       aceptoTerminos: u.aceptoTerminosAt != null,
       fichas: u._count.fichas, actas: u._count.actas, mensajes: u._count.mensajesFormativos,
       evidencias: evPorUser.get(u.id) || 0,
@@ -172,17 +175,29 @@ async function adminRoutes(fastify) {
   fastify.patch("/api/admin/instructores/:id", { preHandler: fastify.authenticate }, async (req, reply) => {
     if (!(await exigirSuperadmin(req, reply))) return;
 
-    const { suspender } = req.body || {};
+    const { suspender, aprobar } = req.body || {};
     const objetivo = await prisma.user.findUnique({ where: { id: req.params.id }, select: { id: true, rol: true } });
     if (!objetivo) return reply.code(404).send({ error: "Instructor no encontrado." });
-    if (objetivo.rol === "superadmin") return reply.code(403).send({ error: "No se puede suspender a un administrador." });
+
+    const data = {};
+    if (typeof suspender === "boolean") {
+      if (objetivo.rol === "superadmin") return reply.code(403).send({ error: "No se puede suspender a un administrador." });
+      data.suspendedAt = suspender ? new Date() : null;
+    }
+    if (typeof aprobar === "boolean") {
+      // Aprobar/revocar el acceso (registro cerrado). aprobadoAt null = pendiente.
+      data.aprobadoAt = aprobar ? new Date() : null;
+    }
+    if (Object.keys(data).length === 0) {
+      return reply.code(400).send({ error: "Nada que actualizar (envía 'suspender' o 'aprobar')." });
+    }
 
     const updated = await prisma.user.update({
-      where: { id: req.params.id },
-      data:  { suspendedAt: suspender ? new Date() : null },
-      select: { id: true, suspendedAt: true },
+      where:  { id: req.params.id },
+      data,
+      select: { id: true, suspendedAt: true, aprobadoAt: true },
     });
-    return { id: updated.id, suspendido: updated.suspendedAt != null };
+    return { id: updated.id, suspendido: updated.suspendedAt != null, aprobado: updated.aprobadoAt != null };
   });
 
   // ── POST /api/admin/administradores ────────────────────────────────────────
