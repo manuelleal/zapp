@@ -1,8 +1,24 @@
 # ESTADO ACTUAL — Helper (bitácora de despliegue y pendientes)
 
-> **Última actualización:** 21 junio 2026. **La app está DESPLEGADA Y VIVA** en producción.
+> **Última actualización:** 21 junio 2026 (noche). **La app está DESPLEGADA Y VIVA** en producción.
 > Este documento es el "punto de control": qué está hecho, dónde vive, cómo se opera y qué
 > falta. Para retomar, ver la sección final **"Cómo seguir"**.
+>
+> ## 🔥 SESIÓN 21 jun (NOCHE) — 4 commits en master, FALTA DESPLEGAR
+> **Mañana, primer paso:** `cd /opt/helper && bash scripts/actualizar.sh` (baja los 4 commits,
+> corre 2 migraciones — AiUsage + aprobación con backfill — recompila y reinicia). Luego Ctrl+Shift+R.
+>
+> Commits nuevos (sobre `cd60330`):
+> - `f91a0c2` feat(admin): panel superadmin + tracking de consumo de IA + `lastLoginAt` (trabajo de otra sesión, integrado).
+> - `de58691` fix(seguridad): criterio único de superadmin (`lib/roles.js`: rol="superadmin" **O** email===SUPERADMIN_EMAIL) + **auto-sanado en login**. Resuelve el reseteo del rol al recrear la DB. Tests `roles.test.js` 6/6.
+> - `ff4a708` refactor(ui): "Zajuna"/"SENA" fuera del texto visible (app = **"Helper"**); se CONSERVÓ el aviso legal ("SENA = Responsable del Tratamiento") y el badge del acta oficial GOR-F-084.
+> - `c916f0e` feat(auth): **REGISTRO CERRADO** — las cuentas nuevas quedan *pendientes* y el superadmin las aprueba en `/admin` (badge "pendiente" + botón Aprobar + contador). El dueño (SUPERADMIN_EMAIL) entra siempre; los usuarios previos quedaron aprobados por backfill.
+>
+> **IA en prod:** quedó FUNCIONANDO. La causa de la falla era `OPENROUTER_API_KEY` **DUPLICADA** en el `.env` del server (ganaba la vacía → caía a Anthropic). Ahora una sola línea + `pm2 delete all && pm2 start`. Prueba: `node scripts/verificar-ia.js`. 🔴 **Pendiente del dueño: rotar la key expuesta (mañana).**
+>
+> **Investigaciones (MD):** anuncios programados por ficha → `docs/INVESTIGACION_ANUNCIOS.md`; cómo evalúa la Extensión en SOFIA → `docs/INVESTIGACION_EXTENSION_SOFIA.md`.
+>
+> **Decisión:** dominio/HTTPS **sin pagar** → usar **DuckDNS** (subdominio gratis + Caddy saca el SSL) cuando se retome.
 >
 > **Sesión 21 jun (resumen de lo nuevo, todo desplegado salvo donde se indique):**
 > 1. **RAPs vacíos RESUELTOS** — `GET /api/raps` filtraba por `competenciaId` (cuid volátil);
@@ -131,6 +147,10 @@ Generados/puestos en el deploy (NO están en git):
    diagnóstico + fix listo: filtrar cursos `hidden` en `scraper/fichas.js`; sin aplicar).
 6. **Invitar 1-2 colegas** al piloto y recoger feedback.
 7. Pulido visual de la app (retoques de diseño de bajo riesgo) — ver `docs/auditoria-release/04-design-mobile.md`.
+
+### Features nuevas pedidas (21-jun noche)
+- **Anuncios programados por ficha** — el instructor define anuncios y *cuándo* se publican; se reusa la infra de `MensajeProgramado` + el worker de tick. Diseño, prior art y pendientes (cómo publicar en el foro de novedades) en `docs/INVESTIGACION_ANUNCIOS.md`.
+- **Evaluación "en SOFIA" estilo Extensión** — entender cómo la Extensión Z registra los juicios evaluativos en SOFIA Plus (distinto de Zajuna) para replicarlo. Investigación en `docs/INVESTIGACION_EXTENSION_SOFIA.md`.
 
 ### Seguimiento de la feature de RAPs con IA
 8. **Fase 2 — auto-traer la guía DESDE Zajuna** (sin subir PDF): reusa el mismo núcleo IA; el
