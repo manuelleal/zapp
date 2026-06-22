@@ -40,6 +40,7 @@ async function borrarUsuarioCompleto(prisma, userId) {
     r.aprendices     = await tx.aprendiz.deleteMany({ where: { fichaId: { in: fichaIds } } });
     r.jobs           = await tx.job.deleteMany({ where: { userId } });
     r.configCorreo   = await tx.configCorreo.deleteMany({ where: { userId } });
+    r.aiUsage        = await tx.aiUsage.deleteMany({ where: { userId } });
     r.fichas         = await tx.ficha.deleteMany({ where: { userId } });
     r.user           = await tx.user.delete({ where: { id: userId } });
   }, { timeout: 60000 });

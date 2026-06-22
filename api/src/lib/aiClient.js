@@ -22,11 +22,50 @@
  *   ANTHROPIC_API_KEY    clave de Claude
  *   ANTHROPIC_MODEL      default claude-haiku-4-5
  *
- * API: chatJSON({ system, user, maxTokens }) → objeto JSON parseado de la respuesta.
+ * API: chatJSON({ system, user, maxTokens, userId, feature }) → objeto JSON parseado.
  *   Lanza si la respuesta no contiene JSON válido (el caller decide cómo manejarlo).
+ *   `userId`/`feature` son opcionales: si vienen, se registra el consumo de tokens
+ *   en la tabla AiUsage (best-effort) para el panel del superadmin. Las llamadas de
+ *   scripts CLI sin sesión pueden omitir userId (queda null).
  */
 
 const ANTHROPIC_VERSION = "2023-06-01";
+
+// ─── Registro de consumo de tokens (best-effort) ──────────────────────────────
+// Normaliza el bloque `usage` de cada proveedor a { promptTokens, completionTokens,
+// totalTokens }. OpenAI-compatible usa prompt/completion/total; Anthropic usa
+// input/output (sin total → se suma).
+function normalizarUsageOpenAI(u) {
+  if (!u) return null;
+  const p = u.prompt_tokens ?? 0, c = u.completion_tokens ?? 0;
+  return { promptTokens: p, completionTokens: c, totalTokens: u.total_tokens ?? (p + c) };
+}
+function normalizarUsageAnthropic(u) {
+  if (!u) return null;
+  const p = u.input_tokens ?? 0, c = u.output_tokens ?? 0;
+  return { promptTokens: p, completionTokens: c, totalTokens: p + c };
+}
+
+// Persiste una fila de uso. NUNCA lanza: si la DB falla, el matching/acta sigue.
+async function registrarUso({ userId, feature, provider, model, usage }) {
+  if (!usage) return;
+  try {
+    const prisma = require("../db/client");
+    await prisma.aiUsage.create({
+      data: {
+        userId:           userId || null,
+        feature:          feature || "desconocido",
+        provider,
+        model:            model || "",
+        promptTokens:     usage.promptTokens     || 0,
+        completionTokens: usage.completionTokens || 0,
+        totalTokens:      usage.totalTokens      || 0,
+      },
+    });
+  } catch (e) {
+    console.error("[aiClient] no se pudo registrar el consumo de tokens:", e.message);
+  }
+}
 
 function elegirProveedor() {
   const forzado = (process.env.AI_PROVIDER || "auto").toLowerCase();
@@ -75,7 +114,7 @@ async function chatOpenAICompatible({ apiKey, baseURL, model, extraHeaders = {},
   }
   const data = await res.json();
   const texto = data?.choices?.[0]?.message?.content ?? "";
-  return extraerJSON(texto);
+  return { json: extraerJSON(texto), usage: normalizarUsageOpenAI(data?.usage), model };
 }
 
 async function chatOpenRouter(opts) {
@@ -130,20 +169,25 @@ async function chatAnthropic({ system, user, maxTokens }) {
   }
   const data = await res.json();
   const texto = data?.content?.[0]?.text ?? "";
-  return extraerJSON(texto);
+  return { json: extraerJSON(texto), usage: normalizarUsageAnthropic(data?.usage), model };
 }
 
 // ─── API pública ──────────────────────────────────────────────────────────────
 
 /**
  * Envía un prompt y devuelve el JSON parseado de la respuesta.
- * @param {{ system?: string, user: string, maxTokens?: number }} opts
+ * @param {{ system?: string, user: string, maxTokens?: number, userId?: string|null, feature?: string }} opts
  */
-async function chatJSON({ system, user, maxTokens = 512 }) {
+async function chatJSON({ system, user, maxTokens = 512, userId = null, feature = "matching" }) {
   const proveedor = elegirProveedor();
-  if (proveedor === "openrouter") return chatOpenRouter({ system, user, maxTokens });
-  if (proveedor === "kimi")       return chatKimi({ system, user, maxTokens });
-  return chatAnthropic({ system, user, maxTokens });
+  let resultado;
+  if (proveedor === "openrouter")    resultado = await chatOpenRouter({ system, user, maxTokens });
+  else if (proveedor === "kimi")     resultado = await chatKimi({ system, user, maxTokens });
+  else                               resultado = await chatAnthropic({ system, user, maxTokens });
+
+  // Registra el consumo de tokens para el panel del superadmin (no bloquea ni falla).
+  await registrarUso({ userId, feature, provider: proveedor, model: resultado.model, usage: resultado.usage });
+  return resultado.json;
 }
 
 function proveedorActivo() { return elegirProveedor(); }

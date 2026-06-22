@@ -216,10 +216,11 @@ function _reconciliarRaps(rapsIA, rapsDet) {
  * Sanea el acta con la capa determinista y, si está habilitado, con una pasada de IA.
  * NUNCA lanza: ante cualquier fallo devuelve el resultado determinista.
  *
+ * @param {object} [opts] - { userId } para atribuir el consumo de tokens al instructor.
  * @returns {Promise<{competenciaNombre, programaNombre, objetivo, raps, fuente}>}
  *   `fuente` = "ia" | "determinista" (útil para log/UI).
  */
-async function sanearActa(campos) {
+async function sanearActa(campos, opts = {}) {
   const det = sanearDeterminista(campos);
 
   // Kill-switch o sin proveedor → solo determinista.
@@ -248,6 +249,8 @@ async function sanearActa(campos) {
         system:    SYSTEM_PROMPT,
         user:      _construirPromptUsuario(entradaIA),
         maxTokens: 1200,
+        userId:    opts.userId || null,
+        feature:   "acta-saneado",
       }),
       new Promise((_, reject) =>
         setTimeout(() => reject(new Error(`timeout ${timeoutMs}ms`)), timeoutMs)),

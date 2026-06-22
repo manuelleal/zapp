@@ -89,7 +89,7 @@ async function matchearUna(compCodigo) {
   // 1 llamada IA
   let resp;
   try {
-    resp = await chatJSON({ system: SYSTEM, user: construirPrompt(comp, comp.raps, unicas), maxTokens: 4000 });
+    resp = await chatJSON({ system: SYSTEM, user: construirPrompt(comp, comp.raps, unicas), maxTokens: 4000, feature: "matching-script" });
   } catch (e) { console.log(`  ❌ IA falló: ${e.message}`); return; }
 
   const mapeos = Array.isArray(resp?.mapeos) ? resp.mapeos : [];

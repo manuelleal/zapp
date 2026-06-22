@@ -106,7 +106,7 @@ const worker = new Worker("matchingIa", async (job) => {
 
     try {
       const prompt = buildPrompt(ev, raps);
-      const parsed = await chatJSON({ system: SYSTEM_PROMPT, user: prompt, maxTokens: 256 });
+      const parsed = await chatJSON({ system: SYSTEM_PROMPT, user: prompt, maxTokens: 256, userId, feature: "matching" });
 
       const { rapId, confianza, razon } = parsed;
 
