@@ -20,6 +20,7 @@
 const bcrypt = require("bcrypt");
 const prisma = require("../db/client");
 const { encrypt } = require("../lib/crypto");
+const { esSuperadmin } = require("../lib/roles");
 
 // ─── RATE LIMITER EN MEMORIA (login/register) ─────────────────────────────────
 // Máximo RATE_MAX intentos por IP dentro de la ventana (default 10 / 15 min).
@@ -103,6 +104,17 @@ async function authRoutes(fastify) {
 
     // Cuenta suspendida por el superadmin (soft-state): no puede iniciar sesión.
     if (user.suspendedAt) return reply.code(403).send({ error: "Tu cuenta está suspendida. Contacta al administrador." });
+
+    // Registrar último acceso (lo usa el panel del superadmin para ver actividad).
+    // Auto-sanado del dueño: si su correo es el SUPERADMIN_EMAIL pero el rol quedó en
+    // "instructor" (p.ej. la DB de prod se recreó con el default), se corrige aquí para
+    // que el panel /admin —que lee `rol` de la DB— lo reconozca sin intervención manual.
+    const datosLogin = { lastLoginAt: new Date() };
+    if (esSuperadmin(user) && user.rol !== "superadmin") {
+      datosLogin.rol = "superadmin";
+      user.rol = "superadmin"; // refleja el cambio en el token que se firma abajo
+    }
+    await prisma.user.update({ where: { id: user.id }, data: datosLogin });
 
     const token = fastify.jwt.sign({ id: user.id, email: user.email, nombre: user.nombre, rol: user.rol }, { expiresIn: "7d" });
     return { token, user: { id: user.id, email: user.email, nombre: user.nombre, rol: user.rol, competenciaNombre: user.competenciaNombre, aceptoTerminosAt: user.aceptoTerminosAt } };

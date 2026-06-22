@@ -4,10 +4,9 @@ const { encrypt, decrypt } = require("../lib/crypto");
 const { descubrirCompetenciasQueue } = require("../lib/queue");
 const { saveSession } = require("../lib/sessionStore");
 const { humanizarErrorSMTP } = require("../lib/smtpErrors");
-
-// Superadmin definido SOLO por env (sin fallback hardcodeado). Si no está seteada,
-// nadie es superadmin → los endpoints restringidos quedan cerrados (ver guardas abajo).
-const SUPERADMIN = process.env.SUPERADMIN_EMAIL || null;
+// Criterio único de superadmin (rol="superadmin" O email===SUPERADMIN_EMAIL).
+// Mismo helper que usa admin.js para que ambos módulos decidan igual (ver lib/roles.js).
+const { esSuperadmin } = require("../lib/roles");
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
@@ -164,7 +163,7 @@ async function ajustesRoutes(fastify) {
 
   // ── GET /api/competencias ────────────────────────────────────────────────────
   fastify.get("/api/competencias", { preHandler: fastify.authenticate }, async (req, reply) => {
-    if (!SUPERADMIN || req.user.email !== SUPERADMIN) return reply.code(403).send({ error: "Acceso restringido." });
+    if (!esSuperadmin(req.user)) return reply.code(403).send({ error: "Acceso restringido." });
     const competencias = await prisma.competencia.findMany({ orderBy: { codigo: "asc" } });
     return competencias;
   });
@@ -172,7 +171,7 @@ async function ajustesRoutes(fastify) {
   // ── POST /api/ajustes/descubrir-competencias ─────────────────────────────────
   // Encola un job que escanea las evidencias en DB y extrae códigos de competencia.
   fastify.post("/api/ajustes/descubrir-competencias", { preHandler: fastify.authenticate }, async (req, reply) => {
-    if (!SUPERADMIN || req.user.email !== SUPERADMIN) return reply.code(403).send({ error: "Acceso restringido." });
+    if (!esSuperadmin(req.user)) return reply.code(403).send({ error: "Acceso restringido." });
 
     const job = await prisma.job.create({
       data: { userId: req.user.id, tipo: "descubrirCompetencias", status: "queued", progreso: 0 },
@@ -195,7 +194,7 @@ async function ajustesRoutes(fastify) {
       },
     },
   }, async (req, reply) => {
-    if (!SUPERADMIN || req.user.email !== SUPERADMIN) return reply.code(403).send({ error: "Acceso restringido." });
+    if (!esSuperadmin(req.user)) return reply.code(403).send({ error: "Acceso restringido." });
 
     const { competenciaCodigo } = req.body;
     const competencia = await prisma.competencia.findUnique({ where: { codigo: competenciaCodigo } });
