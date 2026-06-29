@@ -256,6 +256,10 @@ async function evidenciasRoutes(fastify) {
         // cursos califican con letra y notaActual queda null; la UI la muestra
         // junto al estado ("Calificado · A") cuando no hay nota numérica.
         notaCualitativa: e.notaCualitativa ?? null,
+        // subestado (plan 009): submissionstatus crudo de Moodle (draft/reopened/
+        // submitted/new/""). La UI pinta "Borrador" cuando ="draft". NO afecta
+        // `estado` ni el acta (es solo una etiqueta fina de presentación).
+        subestado:    e.subestado ?? null,
         aprendiz: {
           id:       e.aprendiz.id,
           nombre:   e.aprendiz.nombre,

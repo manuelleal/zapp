@@ -256,6 +256,10 @@ const worker = new Worker("evidencias", async (job) => {
               nombre:           (p.fullname || `Aprendiz ${p.id}`).substring(0, 70),
               aprendizMoodleId: p.id != null ? String(p.id) : null,
               estado:           estadoDesdeParticipante(p),
+              // subestado (plan 009): submissionstatus crudo de Moodle
+              // (draft/reopened/submitted/new/""). Informativo para la UI
+              // (badge "Borrador"); NO altera `estado` ni el acta.
+              subestado:        p.submissionstatus || null,
             })));
           }
         }
@@ -460,6 +464,8 @@ const worker = new Worker("evidencias", async (job) => {
               moodlePostId:    entrega.moodlePostId || null,
               notaActual:      entrega.notaActual ?? null,
               notaCualitativa: entrega.notaCualitativa ?? null,
+              // subestado (plan 009): informativo para la UI; convive con la nota.
+              subestado:       entrega.subestado ?? null,
             });
           }
         } else {
@@ -467,6 +473,11 @@ const worker = new Worker("evidencias", async (job) => {
           // notaCambio: la nota del CSV difiere de lo que ya tenemos en DB
           const notaCambio = entrega.notaActual != null && entregaExistente.notaActual !== entrega.notaActual;
           const cualiCambio = entrega.notaCualitativa != null && entregaExistente.notaCualitativa !== entrega.notaCualitativa;
+          // subestadoCambio (plan 009): el submissionstatus crudo cambió (ej. de
+          // "new" a "draft"). Se normaliza con ?? null en ambos lados para no
+          // disparar un write espurio cuando ambos son nulos/undefined. NO refresca
+          // fechaScan (es informativo, no cuenta como avance de estado/nota).
+          const subestadoCambio = (entrega.subestado ?? null) !== (entregaExistente.subestado ?? null);
           if (estadoCambio) {
             historialCreates.push({
               entregaId:      entregaExistente.id,
@@ -474,7 +485,7 @@ const worker = new Worker("evidencias", async (job) => {
               estadoNuevo:    entrega.estado,
             });
           }
-          if (estadoCambio || notaCambio || cualiCambio || entrega.moodlePostId) {
+          if (estadoCambio || notaCambio || cualiCambio || subestadoCambio || entrega.moodlePostId) {
             entregaUpdates.push(
               prisma.entrega.update({
                 where: { id: entregaExistente.id },
@@ -485,6 +496,7 @@ const worker = new Worker("evidencias", async (job) => {
                   ...(entrega.moodlePostId ? { moodlePostId: entrega.moodlePostId } : {}),
                   ...(notaCambio ? { notaActual: entrega.notaActual } : {}),
                   ...(cualiCambio ? { notaCualitativa: entrega.notaCualitativa } : {}),
+                  ...(subestadoCambio ? { subestado: entrega.subestado ?? null } : {}),
                 },
               })
             );

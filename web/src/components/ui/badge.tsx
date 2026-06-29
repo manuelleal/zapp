@@ -16,6 +16,9 @@ const badgeVariants = cva(
         gray: "border-transparent bg-gray-100 text-gray-600",
         blue: "border-transparent bg-blue-100 text-blue-800",
         purple: "border-transparent bg-purple-100 text-purple-800",
+        // Ámbar/naranja — distinto del amarillo de "pendiente". Lo usa el badge
+        // "Borrador" (subestado="draft", plan 009) para que destaque sobre el estado base.
+        orange: "border-transparent bg-orange-100 text-orange-800",
       },
     },
     defaultVariants: {

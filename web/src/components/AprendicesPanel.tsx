@@ -16,6 +16,8 @@ interface Aprendiz {
 
 interface Entrega {
   id: string
+  // El union de `estado` sigue CERRADO a los 3 valores de negocio: el subestado
+  // fino (borrador) viaja aparte en `subestado`, NO infla este tipo (plan 009).
   estado: "pendiente" | "calificado" | "sin_entregar"
   fechaScan: string
   moodlePostId: string | null
@@ -23,6 +25,10 @@ interface Entrega {
   // Nota cualitativa SENA (A=Aprobado / D=Deficiente) — muchos cursos califican
   // con letra y notaActual queda null (ver Entrega.notaCualitativa en schema.prisma).
   notaCualitativa: string | null
+  // Subestado crudo de Moodle (submissionstatus): "draft"/"reopened"/etc.
+  // Solo presentación: la UI pinta un badge "Borrador" cuando ="draft". No
+  // afecta `estado` ni el acta. Puede venir null (foros/quiz, scans viejos).
+  subestado?: string | null
   aprendiz: Aprendiz
 }
 
@@ -48,8 +54,10 @@ function estadoVariant(estado: string): "yellow" | "green" | "gray" {
   return "gray"
 }
 
-// Nota a mostrar junto al estado ("Calificado · 100"): manda la numérica;
-// si es null se usa la cualitativa (A/D). Devuelve null si no hay ninguna.
+// Nota NUMÉRICA a mostrar junto al estado ("Calificado · 100"). La cualitativa
+// (A/D) ya NO se mezcla aquí: se pinta como badge aparte (ver más abajo) para
+// que convivan número y letra cuando existen ambos. Devuelve null si no hay nota
+// numérica.
 function notaVisible(e: Entrega): string | null {
   if (e.notaActual != null) {
     // Redondeo a 1 decimal para floats tipo 66.66667; enteros sin decimales.
@@ -57,18 +65,22 @@ function notaVisible(e: Entrega): string | null {
       ? String(e.notaActual)
       : String(Math.round(e.notaActual * 10) / 10)
   }
-  return e.notaCualitativa || null
+  return null
 }
 
 // Reprobada = numérica < 70 (umbral SENA universal, regla #10 de CLAUDE.md) o
 // cualitativa sin señal explícita de aprobación (A / "aprobad", regla #11).
 function esNotaReprobada(e: Entrega): boolean {
   if (e.notaActual != null) return e.notaActual < 70
-  if (e.notaCualitativa) {
-    const c = e.notaCualitativa.trim()
-    return !(/^a$/i.test(c) || /aprobad/i.test(c))
-  }
+  if (e.notaCualitativa) return !cualitativaAprobada(e.notaCualitativa)
   return false
+}
+
+// Aprobada cualitativa = "A" exacta o texto con "aprobad" (regla #11 de CLAUDE.md).
+// Cualquier otra letra (típicamente "D" = Deficiente) cuenta como NO aprobada.
+function cualitativaAprobada(c: string): boolean {
+  const t = c.trim()
+  return /^a$/i.test(t) || /aprobad/i.test(t)
 }
 
 export default function AprendicesPanel({ evidenciaId }: { evidenciaId: string }) {
@@ -108,6 +120,11 @@ export default function AprendicesPanel({ evidenciaId }: { evidenciaId: string }
     staleTime: 2 * 60 * 1000,
   })
 
+  // NOTA (plan 009): la calificación de foros DESDE LA APP se retiró de la UI
+  // (los inputs de nota y los botones de guardar ya no se renderizan para foros).
+  // Estas funciones y el endpoint PATCH .../foro/calificar se CONSERVAN a propósito
+  // —no se borran— para no perder el flujo (es reversible y el backend sigue vivo);
+  // simplemente ya nada las invoca desde el render de foros.
   async function guardarCalificacionIndividual(moodleId: string, nota: string) {
     const notaNum = Number(nota)
     if (!nota || Number.isNaN(notaNum)) return
@@ -283,6 +300,21 @@ export default function AprendicesPanel({ evidenciaId }: { evidenciaId: string }
   const { entregas, actId, tipo } = data
   const esForo = tipo === "forum"
 
+  // Foros (plan 009): ya NO se califica desde la app (el instructor igual debe
+  // entrar a Moodle a leer los aportes). Aquí solo señalamos si el aprendiz tiene
+  // comentarios "Pendiente de revisar" o ya "Revisado". Prioriza la verificación
+  // en vivo (pendientesMoodle) si el instructor la corrió; si no, cae al estado
+  // del último scan ("pendiente" = hay post sin rating en Moodle). sin_entregar =
+  // no participó → no hay nada que revisar (null, no se pinta etiqueta).
+  function revisionForo(e: Entrega): "pendiente" | "revisado" | null {
+    if (e.estado === "sin_entregar") return null
+    const mid = e.aprendiz.moodleId
+    if (pendientesMoodle && mid) {
+      return pendientesMoodle.has(mid) ? "pendiente" : "revisado"
+    }
+    return e.estado === "pendiente" ? "pendiente" : "revisado"
+  }
+
   if (entregas.length === 0) {
     return (
       <div className="border-t border-gray-100 bg-gray-50 px-6 py-3">
@@ -325,13 +357,15 @@ export default function AprendicesPanel({ evidenciaId }: { evidenciaId: string }
         ))}
       </div>
 
-      {/* Sprint 2.5 FIX 4: barra de calificacion bulk para foros */}
+      {/* Foros (plan 009): la calificación se hace en Moodle, no en la app. Esta
+          barra ya NO califica — solo deja "Verificar en Moodle" para refrescar
+          quién tiene comentarios sin revisar. Los inputs de nota por fila y el
+          botón "Guardar calificaciones" se quitaron (el backend de calificación
+          de foros sigue existiendo, solo dejamos de invocarlo desde aquí). */}
       {esForo && (
         <div className="px-6 pb-2 flex items-center gap-2 flex-wrap">
           <span className="text-xs text-gray-500 mr-auto">
-            {Object.values(ratings).filter((v) => v !== "" && v != null).length > 0
-              ? `${Object.values(ratings).filter((v) => v !== "" && v != null).length} calificacion(es) pendientes de enviar`
-              : "Asigna notas en los inputs de la derecha"}
+            Las calificaciones de foro se gestionan en Moodle. Verifica quién tiene comentarios sin revisar.
           </span>
           {discoverPhase !== "idle" && (
             <span className={`text-xs ${
@@ -341,20 +375,12 @@ export default function AprendicesPanel({ evidenciaId }: { evidenciaId: string }
               {discoverMsg}
             </span>
           )}
-          {savePhase !== "idle" && (
-            <span className={`text-xs ${
-              savePhase === "error" ? "text-red-600" :
-              savePhase === "success" ? "text-green-700" : "text-blue-600"
-            }`}>
-              {saveMsg}
-            </span>
-          )}
           <Button
             size="sm"
             variant="outline"
             className="h-7 text-xs gap-1"
             onClick={verificarPendientesEnMoodle}
-            disabled={discoverPhase === "running" || savePhase === "saving"}
+            disabled={discoverPhase === "running"}
             title="Verificar contra Moodle qué aprendices publicaron sin recibir nota"
           >
             {discoverPhase === "running" ? (
@@ -363,19 +389,6 @@ export default function AprendicesPanel({ evidenciaId }: { evidenciaId: string }
               <RefreshCw className="w-3.5 h-3.5" />
             )}
             Verificar en Moodle
-          </Button>
-          <Button
-            size="sm"
-            className="h-7 text-xs bg-sena-green hover:bg-sena-green/90 gap-1"
-            onClick={guardarCalificaciones}
-            disabled={savePhase === "saving" || Object.values(ratings).filter((v) => v !== "" && v != null).length === 0}
-          >
-            {savePhase === "saving" ? (
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            ) : (
-              <Save className="w-3.5 h-3.5" />
-            )}
-            Guardar calificaciones
           </Button>
         </div>
       )}
@@ -412,64 +425,46 @@ export default function AprendicesPanel({ evidenciaId }: { evidenciaId: string }
               )}
               <Badge variant={estadoVariant(e.estado)} className="text-xs shrink-0">
                 {estadoLabel(e.estado)}
-                {/* Nota junto al estado ("Calificado · 100" / "Calificado · A").
-                    En rojo si reprobada (<70 o cualitativa ≠ A) para que el
-                    instructor vea los reprobados de un vistazo. */}
+                {/* Nota NUMÉRICA junto al estado ("Calificado · 100"). En rojo si
+                    reprobada (<70) para verla de un vistazo. La cualitativa A/D
+                    va en su propio badge (abajo), no se mezcla aquí. */}
                 {notaVisible(e) !== null && (
                   <span className={esNotaReprobada(e) ? "text-red-600 font-bold" : ""}>
                     {` · ${notaVisible(e)}`}
                   </span>
                 )}
               </Badge>
-              {esForo && pendientesMoodle && e.aprendiz.moodleId && pendientesMoodle.has(e.aprendiz.moodleId) && (
-                <Badge variant="yellow" className="text-[10px] shrink-0" title="Moodle no tiene rating para este aprendiz">
-                  Sin nota en Moodle
+              {/* Badge "Borrador" (plan 009): el aprendiz empezó la entrega pero NO
+                  la envió (subestado="draft"). Es ADICIONAL al estado base (sigue
+                  siendo "pendiente"); color ámbar para distinguirlo del amarillo
+                  de "pendiente". Solo aplica a assigns (los foros no traen draft). */}
+              {e.subestado === "draft" && (
+                <Badge variant="orange" className="text-[10px] shrink-0" title="El aprendiz guardó un borrador pero aún no lo envió en Moodle">
+                  Borrador
                 </Badge>
               )}
-              {/* Sprint 2.5 FIX 4: input de calificacion para foros (solo si el alumno publico) */}
-              {esForo && e.aprendiz.moodleId && e.estado !== "sin_entregar" && (
-                <>
-                  <Input
-                    type="number"
-                    inputMode="numeric"
-                    min={0}
-                    max={100}
-                    placeholder="Nota"
-                    value={ratings[e.aprendiz.moodleId] ?? ""}
-                    onChange={(ev) => {
-                      const id = e.aprendiz.moodleId!
-                      setRatings((p) => ({ ...p, [id]: ev.target.value }))
-                    }}
-                    disabled={savePhase === "saving" || savingSingle !== null}
-                    className="h-7 w-16 text-xs shrink-0 px-2"
-                    aria-label={`Calificar a ${e.aprendiz.nombre}`}
-                  />
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className={`h-7 w-7 p-0 shrink-0 ${
-                      ratings[e.aprendiz.moodleId]
-                        ? "text-sena-green hover:bg-sena-green/10"
-                        : "text-gray-300"
-                    }`}
-                    onClick={() => {
-                      const mid = e.aprendiz.moodleId!
-                      guardarCalificacionIndividual(mid, ratings[mid] ?? "")
-                    }}
-                    disabled={
-                      savingSingle !== null ||
-                      savePhase === "saving" ||
-                      !ratings[e.aprendiz.moodleId]
-                    }
-                    title="Guardar esta calificación"
-                  >
-                    {savingSingle === e.aprendiz.moodleId ? (
-                      <Loader2 className="w-3 h-3 animate-spin" />
-                    ) : (
-                      <Save className="w-3 h-3" />
-                    )}
-                  </Button>
-                </>
+              {/* Badge cualitativo A/D (plan 009 / PLAN_NOTA Fase 5): se captura en
+                  DB pero antes no se pintaba cuando había nota numérica. Verde si
+                  aprobada ("A"/"aprobad"), rojo si no (típicamente "D"). En foros
+                  no se muestra: allí mandan las etiquetas de revisión de abajo. */}
+              {!esForo && e.notaCualitativa && (
+                <Badge variant={cualitativaAprobada(e.notaCualitativa) ? "green" : "destructive"} className="text-[10px] shrink-0" title="Nota cualitativa de la escala SENA (A=Aprobado / D=Deficiente)">
+                  {e.notaCualitativa}
+                </Badge>
+              )}
+              {/* Foros (plan 009): en vez de calificar, marcamos si el aporte está
+                  "Pendiente de revisar" (hay comentario sin revisar) o "Revisado".
+                  Reemplaza al antiguo badge "Sin nota en Moodle" + inputs de nota,
+                  que ya se quitaron. Ver helper revisionForo(). */}
+              {esForo && revisionForo(e) === "pendiente" && (
+                <Badge variant="yellow" className="text-[10px] shrink-0" title="El aprendiz tiene comentarios sin revisar — entra a Moodle a leerlos">
+                  Pendiente de revisar
+                </Badge>
+              )}
+              {esForo && revisionForo(e) === "revisado" && (
+                <Badge variant="green" className="text-[10px] shrink-0" title="No hay comentarios sin revisar para este aprendiz">
+                  Revisado
+                </Badge>
               )}
               {actId && (esForo ? (
                 <a

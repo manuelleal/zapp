@@ -155,7 +155,16 @@ async function revisarEntregas(page, actId) {
       estado = "pendiente";
     }
 
-    entregas.push({ nombre, aprendizMoodleId, estado });
+    // subestado (plan 009): subestado crudo de Moodle para la UI ("Borrador").
+    // NO cambia `estado` (un borrador sigue siendo "pendiente" para el acta);
+    // solo expone la distinción fina que el DOM imprime literal en el texto de
+    // estado. El AJAX (estadoDesdeParticipante) lo trae como p.submissionstatus;
+    // aquí lo derivamos del texto del grading DOM (fallback sin sesskey).
+    let subestado = null;
+    if (/borrador|draft/i.test(estadoTexto))       subestado = "draft";
+    else if (/reabierto|reopened/i.test(estadoTexto)) subestado = "reopened";
+
+    entregas.push({ nombre, aprendizMoodleId, estado, subestado });
   }
 
   log(`Aprendices encontrados: ${entregas.length}`);

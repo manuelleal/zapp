@@ -199,6 +199,12 @@ model Entrega {
   // Nota cualitativa de la escala SENA (A=Aprobado / D=Deficiente). Muchos cursos
   // califican con letra, no con número; antes se perdía (parseFloat("A")=NaN).
   notaCualitativa String?
+  // Subestado crudo de Moodle (submissionstatus): "draft"/"reopened"/"submitted"/
+  // "new"/"". Es PURAMENTE informativo para la UI (ej. badge "Borrador" cuando
+  // ="draft"); NO altera `estado` (que sigue siendo pendiente/calificado/
+  // sin_entregar) ni entra al motor de actas. Nullable: foros/quiz y scans viejos
+  // no lo traen. Ver plan 009 y docs/PLAN_NOTA_Y_PRODUCCION.md Fase 6.
+  subestado    String?
   evidencia    Evidencia        @relation(fields: [evidenciaId], references: [id])
   aprendiz     Aprendiz         @relation(fields: [aprendizId], references: [id])
   historial    HistorialEstado[]
