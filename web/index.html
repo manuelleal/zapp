@@ -1,7 +1,13 @@
 <!doctype html>
-<html lang="en">
+<!-- lang="es": el contenido es español. Antes decia "en" y Chrome auto-traducia
+     con Google Translate, reescribiendo nodos de texto; al re-renderizar React
+     hacia removeChild sobre un nodo movido por el traductor → crash "removeChild"
+     (lo atrapaba ErrorBoundary, mas visible en /actas). notranslate/translate=no
+     evitan que cualquier traductor toque el DOM de React. Ver plans/008. -->
+<html lang="es" translate="no">
   <head>
     <meta charset="UTF-8" />
+    <meta name="google" content="notranslate" />
     <link rel="icon" href="data:," />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Helper</title>
