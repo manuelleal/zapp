@@ -232,6 +232,10 @@ async function fichasRoutes(fastify) {
       pendBg:'FFFEF08A', pendTx:'FF854D0E', pendLink:'FF2563EB', // por calificar
       seBg:  'FFE5E7EB', seTx:  'FF6B7280',         // no entregó
       nsBg:  'FFF8FAFC', nsTx:  'FF94A3B8',         // sin escanear / sin dato (—)
+      // Estados finos (plan 010): subestado de Moodle (assigns) + estado de foros.
+      draftBg:'FFFED7AA', draftTx:'FF9A3412',       // borrador (naranja): empezó pero no envió
+      reabBg: 'FFFBCFE8', reabTx: 'FF9D174D',       // reabierto (rosa): Moodle reopened (no es reenvío confirmado)
+      foroPendBg:'FFCFFAFE', foroPendTx:'FF155E75', // foro pendiente de revisar (cian)
     };
     const borde = { top:{style:'thin'}, left:{style:'thin'}, bottom:{style:'thin'}, right:{style:'thin'} };
     const fill = (argb) => ({ type:'pattern', pattern:'solid', fgColor:{ argb } });
@@ -359,6 +363,9 @@ async function fichasRoutes(fastify) {
         const est = entrega ? String(entrega.estado || "").toLowerCase() : null;
         // "sin_entregar" = el aprendiz NO subió nada (no hay envío que calificar).
         const noEntrego = est != null && (est.includes("sin_entreg") || est.includes("no_entreg") || est.includes("sin entregar"));
+        // subestado fino de Moodle (plan 010): "draft"/"reopened"/null. Solo lo traen
+        // los assigns; foros/quiz vienen null. Sirve para distinguir "borrador" y "reabierto".
+        const sube = entrega ? String(entrega.subestado || "").toLowerCase() : null;
 
         // Link directo a la evidencia del aprendiz en Zajuna (grader con su userid).
         // Va en TODAS las celdas para revisar/rectificar cualquier estado: si el
@@ -372,14 +379,31 @@ async function fichasRoutes(fastify) {
           cell.font = { color: { argb: tx }, bold: !!bold, size: 9, underline: url ? true : undefined };
         };
 
+        // Precedencia: sin dato → no entregó → nota (lo importante para el acta) →
+        // foro (pendiente de revisar / revisado) → borrador → reabierto → por calificar.
+        // La nota gana sobre borrador/reabierto: si ya está calificado se ve la nota;
+        // los estados finos solo aparecen cuando aún NO hay nota (aportan info real).
         if (!entrega) {
           poner("—", C.nsBg, C.nsTx, false);                 // Sin escanear / sin dato
         } else if (noEntrego) {
           poner("NE", C.seBg, C.seTx, false);                // No entregó
         } else if (tieneNota) {
           const aprob = cual === "A" || (num !== null && num >= 70);
-          poner(cual !== null ? cual : num, aprob ? C.okBg : C.malBg, aprob ? C.okTx : C.malTx, true);
+          // Si además hay un borrador/reabierto nuevo, se marca junto a la nota
+          // ("A ·BD" / "85 ·RE"): el instructor decidió ver AMBOS (la nota manda,
+          // pero el estado fino igual se señala — coherente con el badge de la UI).
+          const marca = sube === "draft" ? " ·BD" : sube === "reopened" ? " ·RE" : "";
+          poner(`${cual !== null ? cual : num}${marca}`, aprob ? C.okBg : C.malBg, aprob ? C.okTx : C.malTx, true);
           if (aprob) aprobadas++;
+        } else if (ev.tipo === "forum") {
+          // Foros (plan 009/010): no se califican con nota en la app — se revisan en
+          // Moodle. "pendiente" = hay aporte sin revisar; cualquier otro estado = revisado.
+          if (est === "pendiente") poner("FP", C.foroPendBg, C.foroPendTx, true);  // Foro pendiente de revisar
+          else                     poner("RV", C.okBg, C.okTx, false);             // Revisado
+        } else if (sube === "draft") {
+          poner("BD", C.draftBg, C.draftTx, true);           // Borrador: empezó pero no envió
+        } else if (sube === "reopened") {
+          poner("RE", C.reabBg, C.reabTx, true);             // Reabierto (Moodle reopened)
         } else {
           poner("PC ▸", C.pendBg, C.pendLink, true);         // Entregó, por calificar
         }
@@ -403,6 +427,10 @@ async function fichasRoutes(fastify) {
       ["D",    "Deficiente / no aprobado (cualitativa D o nota < 70)",     C.malBg, C.malTx],
       ["0-100","Nota numérica (verde si ≥70, rojo si <70)",               C.okBg, C.okTx],
       ["PC ▸", "Por calificar — el aprendiz SÍ entregó; clic para ir al grader de Moodle", C.pendBg, C.pendLink],
+      ["BD",   "Borrador — el aprendiz empezó la entrega pero NO la envió en Moodle",       C.draftBg, C.draftTx],
+      ["RE",   "Reabierto — Moodle reabrió el intento (no es un reenvío confirmado)",       C.reabBg, C.reabTx],
+      ["FP",   "Foro pendiente — hay aporte sin revisar (los foros se revisan en Moodle)",  C.foroPendBg, C.foroPendTx],
+      ["RV",   "Revisado — foro sin aportes pendientes de revisar",                         C.okBg, C.okTx],
       ["NE",   "No entregó — el aprendiz no subió ninguna evidencia",      C.seBg, C.seTx],
       ["—",    "Sin escanear — no hay datos; escanea la ficha en Helper",  C.nsBg, C.nsTx],
     ].forEach(([cod, sig, bg, tx]) => {
@@ -420,6 +448,7 @@ async function fichasRoutes(fastify) {
     leg.addRow([]);
     const rAct = leg.addRow(["", `Última actualización de los datos: ${fmt(maxScan)}`]);
     rAct.getCell(2).font = { bold: true, color: { argb: C.rap } };
+    leg.addRow(["", "Una nota seguida de ·BD o ·RE indica que, además de la nota, el aprendiz tiene un borrador o un intento reabierto nuevo en Moodle."]);
     leg.addRow(["", "Encabezados por tipo: azul = tarea · rosa = cuestionario · verde = foro"]);
     leg.addRow(["", "💡 Cada celda de evidencia es un enlace: clic para abrir esa entrega del aprendiz en Zajuna (revisar o rectificar la nota)."]);
     leg.addRow(["", `Generado por Helper — ${new Date().toLocaleDateString("es-CO")}`]);
