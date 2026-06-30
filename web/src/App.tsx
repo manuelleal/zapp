@@ -10,6 +10,7 @@ import ActasPage from "@/pages/ActasPage"
 import MensajesPage from "@/pages/MensajesPage"
 import AjustesPage from "@/pages/AjustesPage"
 import AdminPage from "@/pages/AdminPage"
+import AyudaPage from "@/pages/AyudaPage"
 import ErrorBoundary from "@/components/ErrorBoundary"
 
 function App() {
@@ -29,6 +30,7 @@ function App() {
           <Route path="/mensajes/nuevo"    element={<MensajesPage />} />
           <Route path="/ajustes"           element={<AjustesPage />} />
           <Route path="/admin"             element={<AdminPage />} />
+          <Route path="/ayuda"             element={<AyudaPage />} />
           <Route path="*"                  element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </BrowserRouter>

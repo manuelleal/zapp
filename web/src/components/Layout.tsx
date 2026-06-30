@@ -1,11 +1,13 @@
+import { useEffect } from "react"
 import { NavLink, useNavigate } from "react-router-dom"
-import { LogOut, LayoutDashboard, FolderOpen, Settings2, BookOpen, ClipboardList, Mail, Settings, KeyRound, Loader2, ShieldCheck } from "lucide-react"
+import { LogOut, LayoutDashboard, FolderOpen, Settings2, BookOpen, ClipboardList, Mail, Settings, KeyRound, Loader2, ShieldCheck, HelpCircle } from "lucide-react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Button } from "@/components/ui/button"
 import { useAuthStore } from "@/store/auth"
 import { apiFetch } from "@/api/client"
 import LegalFooter from "@/components/LegalFooter"
 import WelcomeModal from "@/components/WelcomeModal"
+import { startTour, TOUR_KEY } from "@/lib/tour"
 
 function getUserInitials(nombre: string): string {
   return nombre.split(" ").filter(Boolean).map(w => w[0]).slice(0, 2).join("").toUpperCase()
@@ -48,6 +50,7 @@ const navItems = [
   { to: "/actas",            label: "Actas",           icon: ClipboardList },
   { to: "/mensajes",         label: "Mensajes",        icon: Mail },
   { to: "/ajustes",          label: "Ajustes",         icon: Settings },
+  { to: "/ayuda",            label: "Ayuda",           icon: HelpCircle },
 ]
 
 interface Me { id: string; nombre: string; email: string; rol: string; competenciaNombre: string; aceptoTerminosAt: string | null }
@@ -67,6 +70,22 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   })
   const esSuperadmin = meData?.user?.rol === "superadmin"
   const mostrarBienvenida = !!meData?.user && !meData.user.aceptoTerminosAt
+
+  // Tour de bienvenida la 1ª vez. Condiciones: hay usuario, YA aceptó los términos
+  // (para no chocar con el WelcomeModal legal — el tour sale después), y nunca lo
+  // vio (flag en localStorage). Esperamos ~600 ms a que la nav pinte sus <NavLink>
+  // (el tour resalta esos elementos por su data-tour). Luego marcamos el flag para
+  // que no se repita; el botón "Ver tutorial de nuevo" en /ayuda lo re-dispara.
+  const yaAceptoTerminos = !!meData?.user?.aceptoTerminosAt
+  useEffect(() => {
+    if (!yaAceptoTerminos) return
+    if (localStorage.getItem(TOUR_KEY)) return
+    const t = setTimeout(() => {
+      startTour()
+      localStorage.setItem(TOUR_KEY, new Date().toISOString())
+    }, 600)
+    return () => clearTimeout(t)
+  }, [yaAceptoTerminos])
 
   // El item de Admin solo se agrega para el superadmin (el backend igual exige rol).
   const items = esSuperadmin
@@ -126,6 +145,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                 <NavLink
                   key={to}
                   to={to}
+                  data-tour={to}
                   className={({ isActive }) =>
                     `flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
                       isActive
