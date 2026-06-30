@@ -232,7 +232,11 @@ export default function AyudaPage() {
 
         {/* Nota de cierre */}
         <p className="text-xs text-gray-500 px-1">
-          ¿Algo no funciona o falta? Avisale al administrador.
+          ¿Algo no funciona o falta? Avisale al administrador.{" "}
+          <a href="/terminos" target="_blank" rel="noopener noreferrer" className="text-sena-green underline hover:text-sena-green/80">
+            Términos y Política de Privacidad
+          </a>
+          .
         </p>
       </div>
     </Layout>

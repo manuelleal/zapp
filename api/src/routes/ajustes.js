@@ -158,15 +158,51 @@ async function ajustesRoutes(fastify) {
     return reply.code(200).send({ ok: true });
   });
 
-  // ═══ SUPERADMIN: Simulador de Competencias ════════════════════════════════
-  // Todos los endpoints siguientes están estrictamente restringidos a SUPERADMIN.
-
   // ── GET /api/competencias ────────────────────────────────────────────────────
-  fastify.get("/api/competencias", { preHandler: fastify.authenticate }, async (req, reply) => {
-    if (!esSuperadmin(req.user)) return reply.code(403).send({ error: "Acceso restringido." });
+  // Catálogo de competencias sembradas. Abierto a CUALQUIER instructor autenticado:
+  // es solo el catálogo (código + nombre, sin PII de otros usuarios) y lo necesita el
+  // selector "Mi competencia" de Ajustes (plan 008 #1) además del simulador del admin.
+  fastify.get("/api/competencias", { preHandler: fastify.authenticate }, async (req) => {
     const competencias = await prisma.competencia.findMany({ orderBy: { codigo: "asc" } });
     return competencias;
   });
+
+  // ── POST /api/ajustes/mi-competencia ─────────────────────────────────────────
+  // Cualquier instructor autenticado fija SU PROPIA competencia (vía req.user.id, no
+  // por parámetro → no puede tocar la de otro: multi-tenant, regla #1). Reemplaza al
+  // viejo flujo de pedirla en el registro (plan 008 #1). Re-firma el JWT con la
+  // competencia nueva INCLUYENDO `rol` (a diferencia de simular-competencia, que omite
+  // el claim de rol — no copiamos ese hueco aquí).
+  fastify.post("/api/ajustes/mi-competencia", {
+    preHandler: fastify.authenticate,
+    schema: {
+      body: {
+        type: "object",
+        required: ["competenciaCodigo"],
+        properties: { competenciaCodigo: { type: "string", minLength: 1 } },
+      },
+    },
+  }, async (req, reply) => {
+    const { competenciaCodigo } = req.body;
+    const competencia = await prisma.competencia.findUnique({ where: { codigo: competenciaCodigo } });
+    if (!competencia) return reply.code(404).send({ error: "Competencia no encontrada." });
+
+    await prisma.user.update({
+      where: { id: req.user.id },
+      data:  { competenciaCodigo, competenciaNombre: competencia.nombre, competenciaId: competencia.id },
+    });
+
+    const token = fastify.jwt.sign(
+      { id: req.user.id, email: req.user.email, nombre: req.user.nombre, rol: req.user.rol, competenciaCodigo, competenciaNombre: competencia.nombre },
+      { expiresIn: "7d" },
+    );
+
+    return { token, competenciaCodigo, competenciaNombre: competencia.nombre };
+  });
+
+  // ═══ SUPERADMIN: Simulador de Competencias ════════════════════════════════
+  // Los endpoints siguientes (descubrir-competencias y simular-competencia) están
+  // estrictamente restringidos a SUPERADMIN.
 
   // ── POST /api/ajustes/descubrir-competencias ─────────────────────────────────
   // Encola un job que escanea las evidencias en DB y extrae códigos de competencia.

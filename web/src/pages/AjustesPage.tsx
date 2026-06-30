@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Settings, Loader2, Mail, CheckCircle2, Trash2, FlaskConical, KeyRound, AlertTriangle } from "lucide-react"
+import { Settings, Loader2, Mail, CheckCircle2, Trash2, FlaskConical, KeyRound, AlertTriangle, GraduationCap } from "lucide-react"
 import Layout from "@/components/Layout"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -63,10 +63,42 @@ export default function AjustesPage() {
   const [compSeleccionada, setCompSeleccionada] = useState("")
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
+  // Catálogo de competencias: lo usan el Simulador (superadmin) y la tarjeta
+  // "Mi competencia" (cualquier instructor), así que se habilita con solo tener sesión.
   const { data: competencias, refetch: refetchComps } = useQuery<Competencia[]>({
     queryKey: ["competencias-admin"],
     queryFn:  () => apiFetch<Competencia[]>("/api/competencias"),
-    enabled:  !!jwt && esSuperAdmin,
+    enabled:  !!jwt,
+  })
+
+  // ── "Mi competencia" (instructor no-superadmin) ────────────────────────────
+  // El instructor elige su competencia aquí (ya no se pide en el registro, plan 008 #1).
+  const [miCompSel, setMiCompSel] = useState(user?.competenciaCodigo ?? "")
+  // Sincroniza el selector cuando el user del store carga/cambia (p.ej. tras el
+  // efecto de hidratación del JWT más abajo).
+  useEffect(() => {
+    if (user?.competenciaCodigo) setMiCompSel(user.competenciaCodigo)
+  }, [user?.competenciaCodigo])
+
+  const miCompetenciaMutation = useMutation({
+    mutationFn: () => apiFetch<{ token: string; competenciaCodigo: string; competenciaNombre: string }>(
+      "/api/ajustes/mi-competencia",
+      { method: "POST", body: JSON.stringify({ competenciaCodigo: miCompSel }) }
+    ),
+    onSuccess: (r) => {
+      // Re-setear auth con el token nuevo (incluye la competencia recién fijada),
+      // igual que simularMutation. Conservamos el rol del usuario actual.
+      setAuth(r.token, {
+        id:                user!.id,
+        nombre:            user!.nombre,
+        email:             user!.email,
+        rol:               user!.rol,
+        competenciaCodigo: r.competenciaCodigo,
+        competenciaNombre: r.competenciaNombre,
+      })
+      toast.success(`Competencia actualizada: ${r.competenciaNombre}.`)
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : "Error al guardar tu competencia."),
   })
 
   // Polling del job de descubrimiento
@@ -306,6 +338,67 @@ export default function AjustesPage() {
             </div>
           )}
         </div>
+
+        {/* ── Mi competencia (instructor no-superadmin) ──────────────────────
+            El superadmin ya tiene el Simulador (abajo), que hace lo mismo. */}
+        {!esSuperAdmin && (
+          <div className="bg-white rounded-lg border border-gray-200 p-5 space-y-4">
+            <div className="flex items-center gap-2 border-b border-gray-100 pb-3">
+              <GraduationCap className="w-4 h-4 text-sena-green" />
+              <h2 className="text-sm font-semibold text-gray-900">Mi competencia</h2>
+            </div>
+
+            <p className="text-xs text-gray-600">
+              Elige la competencia que impartes. La app la usa para mostrarte tus RAPs,
+              generar actas y filtrar evidencias en los mensajes.
+            </p>
+
+            {user?.competenciaCodigo ? (
+              <p className="text-xs text-gray-500">
+                Competencia actual:{" "}
+                <span className="font-mono text-gray-700">{user.competenciaCodigo}</span>
+                {user.competenciaNombre ? ` — ${user.competenciaNombre}` : ""}
+              </p>
+            ) : (
+              <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                Aún no has elegido tu competencia. Elígela aquí para activar tus RAPs y actas.
+              </p>
+            )}
+
+            {!competencias || competencias.length === 0 ? (
+              <p className="text-xs text-gray-400 italic">No hay competencias disponibles todavía.</p>
+            ) : (
+              <select
+                className="w-full text-sm border border-gray-200 rounded-md px-3 py-2 bg-white focus:outline-none focus:ring-1 focus:ring-sena-green"
+                value={miCompSel}
+                onChange={e => setMiCompSel(e.target.value)}
+              >
+                <option value="">— Selecciona tu competencia —</option>
+                {competencias.map(c => (
+                  <option key={c.id} value={c.codigo}>
+                    [{c.codigo}] {c.nombre}
+                  </option>
+                ))}
+              </select>
+            )}
+
+            <p className="text-xs text-gray-400">
+              ¿No ves tu competencia? Pídele al administrador que la cargue.
+            </p>
+
+            <div className="flex items-center gap-2 pt-2 border-t border-gray-100">
+              <Button
+                size="sm"
+                className="bg-sena-green hover:bg-sena-green/90 text-xs"
+                onClick={() => miCompetenciaMutation.mutate()}
+                disabled={!miCompSel || miCompSel === user?.competenciaCodigo || miCompetenciaMutation.isPending}
+              >
+                {miCompetenciaMutation.isPending && <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />}
+                Guardar competencia
+              </Button>
+            </div>
+          </div>
+        )}
 
         <div className="bg-white rounded-lg border border-gray-200 p-5 space-y-5">
           <div className="flex items-center gap-2 border-b border-gray-100 pb-3">

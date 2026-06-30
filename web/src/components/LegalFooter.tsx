@@ -16,7 +16,11 @@ export default function LegalFooter() {
           su formación en el SENA. Procesa únicamente información a la que el instructor ya tiene
           acceso en la plataforma Zajuna, no la comparte con terceros y la utiliza solo para esa
           labor. Los datos personales de los aprendices son responsabilidad del SENA conforme a la
-          Ley 1581 de 2012 de Protección de Datos Personales.
+          Ley 1581 de 2012 de Protección de Datos Personales.{" "}
+          <a href="/terminos" className="font-medium text-gray-600 underline hover:text-gray-800">
+            Términos y Privacidad
+          </a>
+          .
         </p>
       </div>
     </footer>

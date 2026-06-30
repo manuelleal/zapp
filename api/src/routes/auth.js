@@ -2,9 +2,9 @@
  * api/src/routes/auth.js — Registro e inicio de sesión de instructores.
  *
  * Rutas:
- *   POST /api/auth/register — crear cuenta (nombre, email, password, credenciales Zajuna,
- *                              competenciaCodigo). Las credenciales Moodle se cifran con
- *                              AES-256-GCM (lib/crypto.js) antes de persistir.
+ *   POST /api/auth/register — crear cuenta (nombre, email, password, credenciales Zajuna).
+ *                              Las credenciales Moodle se cifran con AES-256-GCM
+ *                              (lib/crypto.js) antes de persistir.
  *   POST /api/auth/login    — autenticar y devolver JWT (7d de vida).
  *
  * Rate limiting: Map en memoria (no Redis), max RATE_MAX intentos / 15 min por IP.
@@ -12,10 +12,15 @@
  * LIMITACIÓN: no sobrevive reinicios ni se comparte si hubiera múltiples procesos API
  * (hoy solo hay 1 instancia PM2).
  *
- * competenciaId: se vincula por código en el registro. Sin esto el matching IA
- * falla con "El usuario no tiene competencia asignada". Si la competencia aún no
- * existe en DB (instructor de programa nuevo) queda null y se asigna luego vía
- * descubrir-competencias o el extractor de guías.
+ * Competencia: YA NO se pide en el registro (las competencias cambian por guía y el
+ * instructor no sabe cuál es la suya al registrarse — plan 008 #1). La elige luego en
+ * Ajustes → "Mi competencia" (POST /api/ajustes/mi-competencia). Si el front igual
+ * manda un código (compatibilidad), se vincula la FK competenciaId por código; si no
+ * llega, queda "" / null y `lib/competencia.js` lo trata como "sin competencia".
+ *
+ * Consentimiento (Ley 1581): si el front manda `aceptoTerminos === true` (casilla
+ * obligatoria del formulario de registro), se sella `aceptoTerminosAt` desde el signup
+ * para que el WelcomeModal post-login NO se le repita al usuario nuevo.
  */
 const bcrypt = require("bcrypt");
 const prisma = require("../db/client");
@@ -56,9 +61,10 @@ async function authRoutes(fastify) {
       return reply.code(429).send({ error: "Demasiados intentos. Espera 15 minutos." });
     }
 
-    const { nombre, email, password, zajunaUser, zajunaPass, competenciaCodigo, competenciaNombre } = req.body || {};
+    const { nombre, email, password, zajunaUser, zajunaPass, competenciaCodigo, competenciaNombre, aceptoTerminos } = req.body || {};
 
-    if (!nombre || !email || !password || !zajunaUser || !zajunaPass || !competenciaCodigo) {
+    // La competencia ya NO es obligatoria en el registro (se elige en Ajustes, plan 008 #1).
+    if (!nombre || !email || !password || !zajunaUser || !zajunaPass) {
       return reply.code(400).send({ error: "Faltan campos obligatorios." });
     }
 
@@ -69,12 +75,14 @@ async function authRoutes(fastify) {
     const zajunaUserEnc  = encrypt(zajunaUser);
     const zajunaPassEnc  = encrypt(zajunaPass);
 
-    // Vincular la FK competenciaId si la competencia ya existe en DB (por código).
-    // Sin esto, el Matching IA falla con "El usuario no tiene competencia asignada"
-    // y había que asignarla a mano (le pasó al superadmin el 9-jun-2026). Si la
-    // competencia aún no existe (instructor de un programa nuevo), queda null y se
-    // vincula después vía descubrir-competencias / extractor de guías.
-    const competencia = await prisma.competencia.findUnique({ where: { codigo: competenciaCodigo } });
+    // Vincular la FK competenciaId SOLO si el front mandó un código y esa competencia
+    // ya existe en DB. Lo normal ahora es que NO llegue código (se elige en Ajustes,
+    // plan 008 #1) → competencia = null y los campos quedan vacíos. `lib/competencia.js`
+    // trata competenciaCodigo "" como "sin competencia" (las páginas de RAPs/Actas
+    // avisan que falta elegirla, no crashean).
+    const competencia = competenciaCodigo
+      ? await prisma.competencia.findUnique({ where: { codigo: competenciaCodigo } })
+      : null;
 
     // Registro CERRADO: las cuentas nuevas quedan PENDIENTES de aprobación del
     // superadmin (aprobadoAt = null por defecto). Excepción: si el correo es el del
@@ -83,9 +91,15 @@ async function authRoutes(fastify) {
 
     const user = await prisma.user.create({
       data: {
-        nombre, email, passwordHash, zajunaUserEnc, zajunaPassEnc, competenciaCodigo,
+        nombre, email, passwordHash, zajunaUserEnc, zajunaPassEnc,
+        // competenciaCodigo/Nombre son String NOT NULL en el schema → "" (no null) si no vino.
+        competenciaCodigo: competenciaCodigo || "",
         competenciaNombre: competenciaNombre || competencia?.nombre || "",
         competenciaId:     competencia?.id ?? null,
+        // Consentimiento registrado desde el signup si marcó la casilla obligatoria
+        // (Ley 1581). Así el WelcomeModal post-login no se le repite. Si no llegó,
+        // queda null y el modal aparece en el primer ingreso (comportamiento previo).
+        aceptoTerminosAt:  aceptoTerminos === true ? new Date() : null,
         ...(esDueno ? { aprobadoAt: new Date(), rol: "superadmin" } : {}),
       },
     });

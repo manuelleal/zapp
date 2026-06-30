@@ -6,13 +6,6 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { useAuthStore } from "@/store/auth"
 
-const COMPETENCIAS = [
-  { codigo: "240202501", nombre: "Inglés" },
-  { codigo: "220501046", nombre: "Bases de datos" },
-  { codigo: "220501040", nombre: "Análisis y desarrollo" },
-  { codigo: "228118003", nombre: "Programación de software" },
-]
-
 type Tab = "login" | "register"
 
 export default function Login() {
@@ -33,17 +26,12 @@ export default function Login() {
   const [regPass2, setRegPass2] = useState("")
   const [regZajunaUser, setRegZajunaUser] = useState("")
   const [regZajunaPass, setRegZajunaPass] = useState("")
-  const [regCompetencia, setRegCompetencia] = useState("")
-  const [regCodigoManual, setRegCodigoManual] = useState("")
+  // Consentimiento obligatorio (Ley 1581): el botón de registro queda deshabilitado
+  // hasta marcar la casilla. La competencia ya NO se pide aquí (se elige en Ajustes).
+  const [regAcepto, setRegAcepto] = useState(false)
   const [regError, setRegError] = useState("")
   const [regOk, setRegOk]       = useState("")
   const [regLoading, setRegLoading] = useState(false)
-
-  const competenciaEsOtra = regCompetencia === "otra"
-  const codigoFinal = competenciaEsOtra ? regCodigoManual.trim() : regCompetencia
-  const nombreFinal = competenciaEsOtra
-    ? (regCodigoManual.trim() || "Otra")
-    : (COMPETENCIAS.find(c => c.codigo === regCompetencia)?.nombre || "")
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault()
@@ -78,6 +66,11 @@ export default function Login() {
       setRegError("Las contraseñas no coinciden.")
       return
     }
+    // El consentimiento (Ley 1581) es obligatorio para registrarse.
+    if (!regAcepto) {
+      setRegError("Debes aceptar los Términos y el tratamiento de datos personales.")
+      return
+    }
     setRegLoading(true)
     try {
       const res = await fetch("/api/auth/register", {
@@ -89,8 +82,7 @@ export default function Login() {
           password: regPass,
           zajunaUser: regZajunaUser,
           zajunaPass: regZajunaPass,
-          competenciaCodigo: codigoFinal,
-          competenciaNombre: nombreFinal,
+          aceptoTerminos: true,
         }),
       })
       const data = await res.json()
@@ -273,40 +265,35 @@ export default function Login() {
                     />
                   </div>
                 </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="reg-competencia">Competencia</Label>
-                  <select
-                    id="reg-competencia"
-                    required
-                    value={regCompetencia}
-                    onChange={(e) => setRegCompetencia(e.target.value)}
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                  >
-                    <option value="" disabled>Selecciona tu competencia</option>
-                    {COMPETENCIAS.map((c) => (
-                      <option key={c.codigo} value={c.codigo}>
-                        {c.nombre} ({c.codigo})
-                      </option>
-                    ))}
-                    <option value="otra">Otra (ingresar código manual)</option>
-                  </select>
-                  {competenciaEsOtra && (
-                    <Input
-                      className="mt-2"
-                      placeholder="Código de competencia ej: 220501043"
-                      value={regCodigoManual}
-                      onChange={e => setRegCodigoManual(e.target.value)}
-                      required
-                    />
-                  )}
-                </div>
+                {/* Consentimiento obligatorio (Ley 1581). El link abre /terminos en
+                    pestaña nueva (página pública, sin sesión). */}
+                <label className="flex items-start gap-2.5 cursor-pointer pt-1">
+                  <input
+                    type="checkbox"
+                    checked={regAcepto}
+                    onChange={(e) => setRegAcepto(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 text-sena-green"
+                  />
+                  <span className="text-xs text-gray-600 leading-relaxed">
+                    Acepto los{" "}
+                    <a
+                      href="/terminos"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-medium text-sena-green underline hover:text-sena-green/80"
+                    >
+                      Términos y el tratamiento de datos personales
+                    </a>{" "}
+                    (Ley 1581 de 2012).
+                  </span>
+                </label>
                 {regOk && (
                   <p className="text-sm text-green-700 bg-green-50 border border-green-200 px-3 py-2 rounded-md">{regOk}</p>
                 )}
                 {regError && (
                   <p className="text-sm text-red-600 bg-red-50 px-3 py-2 rounded-md">{regError}</p>
                 )}
-                <Button type="submit" className="w-full bg-sena-green hover:bg-sena-green/90" disabled={regLoading}>
+                <Button type="submit" className="w-full bg-sena-green hover:bg-sena-green/90" disabled={regLoading || !regAcepto}>
                   {regLoading ? "Creando cuenta..." : "Crear cuenta"}
                 </Button>
               </form>

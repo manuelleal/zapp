@@ -11,6 +11,7 @@ import MensajesPage from "@/pages/MensajesPage"
 import AjustesPage from "@/pages/AjustesPage"
 import AdminPage from "@/pages/AdminPage"
 import AyudaPage from "@/pages/AyudaPage"
+import TerminosPage from "@/pages/TerminosPage"
 import ErrorBoundary from "@/components/ErrorBoundary"
 
 function App() {
@@ -31,6 +32,8 @@ function App() {
           <Route path="/ajustes"           element={<AjustesPage />} />
           <Route path="/admin"             element={<AdminPage />} />
           <Route path="/ayuda"             element={<AyudaPage />} />
+          {/* Pública: accesible sin sesión (se enlaza desde el registro y avisos legales). */}
+          <Route path="/terminos"          element={<TerminosPage />} />
           <Route path="*"                  element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </BrowserRouter>

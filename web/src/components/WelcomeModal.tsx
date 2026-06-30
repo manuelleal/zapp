@@ -47,6 +47,19 @@ export default function WelcomeModal({ open, onAccepted }: { open: boolean; onAc
             <span className="font-medium text-gray-800"> Ley 1581 de 2012</span> de Protección de Datos
             Personales, cuyo Responsable del Tratamiento es el SENA.
           </p>
+          <p>
+            Los titulares de los datos pueden ejercer sus derechos a conocer, actualizar, rectificar y
+            suprimir su información, así como a revocar la autorización, ante el SENA.{" "}
+            <a
+              href="/terminos"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-medium text-sena-green underline hover:text-sena-green/80"
+            >
+              Ver Términos y Política de Privacidad
+            </a>
+            .
+          </p>
         </div>
 
         <DialogFooter>
