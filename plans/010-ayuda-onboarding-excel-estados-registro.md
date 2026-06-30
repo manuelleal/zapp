@@ -1,6 +1,6 @@
 # Plan 010 — Sistema de Ayuda/Onboarding + estados nuevos en Excel + registro sin competencia
 
-> **Estado:** EN EJECUCIÓN (29-jun-2026). Organiza 3 frentes pedidos por el usuario. App en PRODUCCIÓN → ramas + verificación + luz verde para deploy.
+> **Estado:** ✅ COMPLETADO en rama `feat/plan-010` (29-jun-2026), SIN desplegar (el usuario revisa el diff + texto legal antes de subir). Commits: `0264d51` (plan) · `4bb417b` (Excel) · `e07261c` (Ayuda+tour) · `c3b2fc1` (registro+legal). Verificado: build TS, motor de actas 29/29, Excel probado en vivo (5 borradores → "·BD"), auth revisado con lupa. ⚠️ Deploy: necesita `npm install` en web/ (dep nueva driver.js) + rebuild + pm2 restart; NO hay migración nueva. Texto legal = borrador, revisar con alguien calificado.
 > **Decisiones tomadas con el usuario:**
 > - Ayuda = **Página de Ayuda (guías escritas) + tour de bienvenida** la primera vez.
 > - Lote = los **3 frentes**: Excel, Ayuda/onboarding, Registro sin competencia (plan 008 #1).
