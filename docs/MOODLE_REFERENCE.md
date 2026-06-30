@@ -188,7 +188,14 @@ document.querySelector('input[name="grade[12345][678]"]').value = "A"
 
 ## Sofía Plus — Reporte de juicios de evaluación
 
-**No hay API.** El instructor descarga manualmente desde:
+> ⚠️ **CORRECCIÓN (2026-06-29):** lo de "solo descarga manual / no hay API" quedó **incompleto**. El análisis
+> del bundle real `root.PiOpq-8m.js` (líneas **882/887**) confirma que la Extensión Z **REGISTRA juicios en
+> SOFIA Plus de forma AUTOMÁTICA**: login propio por **JOSSO SSO** → genera el reporte
+> `reporteJuiciosEvaluacion.faces` (con `javax.faces.ViewState`) → **POST JSF** que pone el juicio en
+> "A"=Aprobado por aprendiz×RAP (reporta "Guardados/Ya aprobados/Omitidos"). Es el mismo patrón
+> serializar-form + POST que Helper usa en Moodle. Corrección completa: `docs/INVESTIGACION_EXTENSION_SOFIA.md`.
+
+**Descarga manual del reporte (camino verificado antes, sigue siendo válido como lectura):** el instructor descarga desde:
 ```
 https://senasofiaplus.edu.co/sofia/ejecucionformacion/reportes/reporteJuiciosEvaluacion.faces
 ```

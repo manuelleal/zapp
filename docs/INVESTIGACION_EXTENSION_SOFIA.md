@@ -9,6 +9,34 @@
 
 ---
 
+> ## ⚠️ CORRECCIÓN (2026-06-29) — esta investigación quedó DESACTUALIZADA en lo de SOFIA Plus
+>
+> Un análisis posterior del **bundle real de la Extensión Z** (`root.PiOpq-8m.js`, que **SÍ está** en el
+> repo, en worktrees de agente: `.claude/worktrees/agent-a58e3042986579dd3/root.PiOpq-8m.js`, líneas
+> **882 y 887**) demostró que **la conclusión central de abajo es INCORRECTA**:
+>
+> - ❌ Decía: *"la Extensión Z NO califica en SOFIA Plus; el flujo es 100% manual; el bundle no existe en el repo."*
+> - ✅🟣 **Real (verificado en el bundle):** la extensión tiene un módulo **"Evaluación Automática"** que
+>   **REGISTRA juicios evaluativos en SOFIA Plus de forma automática**: login propio a SOFIA por **JOSSO
+>   SSO** (`authpre.senasofiaplus.edu.co/josso/...`, lee `token` de localStorage, exige rol `value="13"`),
+>   genera el reporte de juicios de la ficha (`reporteJuiciosEvaluacion.faces` con `javax.faces.ViewState`),
+>   y por cada aprendiz×competencia/RAP hace un **POST JSF** serializando `formBusqueda` y poniendo el
+>   `<select>` del juicio en **"A" (Aprobado)** + ViewState; al final reporta *"Guardados: X · Ya aprobados:
+>   Y · Omitidos: Z"*. También consume un "archivo de evaluación automática" de entrada.
+>
+> **Incierto aún (❓):** el formato exacto de ese archivo de entrada, si registra valores distintos a "A"
+> (p.ej. "No Aprobado"/"Por Evaluar"), y si la URL `authpre.` es pre-producción o la de prod.
+>
+> **Implicación para Helper:** es el MISMO patrón que Helper ya usa en Moodle (serializar form + POST
+> `x-www-form-urlencoded`). Camino recomendado por valor/riesgo: (1) **exportar** el archivo que SOFIA/la
+> extensión consumen [riesgo nulo], (2) **conciliar** el reporte de SOFIA, (3) extraer el contrato exacto
+> del bundle, y dejar (4) el **registro automático en SOFIA** como fase final con confirmación humana +
+> idempotencia + probe real (JSF/ViewState es frágil, SSO aparte de Zajuna, riesgo académico real).
+>
+> Lo de abajo se conserva como registro histórico; donde diga "SOFIA es manual / no hay bundle", prevalece esta corrección.
+
+---
+
 ## 1. Resumen ejecutivo
 
 - La "Extensión Z" **NO califica en SOFIA Plus**. Toda su evaluación verificable ocurre en **Zajuna (Moodle)**: lee y escribe notas en el *grader report* y en los *rating forms* de foros. ✅
