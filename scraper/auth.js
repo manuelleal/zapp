@@ -24,8 +24,18 @@
  *   Sin verificar esa URL, login() reportaría "Sesión iniciada ✓" en falso y el
  *   scrape devolvería 0 notas silenciosamente (confirmado en log real 18-jun-2026).
  *
+ * Verificación REAL de sesión (fix 10-jul-2026, plan 012):
+ *   El portal también puede aceptar el clic SIN navegar ni mostrar error (visto
+ *   durante el mantenimiento del SENA del 9-13 jul 2026) → otro "✓" en falso.
+ *   Por eso login() termina navegando a ${BASE_URL}/my/ y valida con
+ *   esSesionValidaUrl() que Moodle de verdad estableció la sesión; si rebota,
+ *   lanza un error claro (incluye el aviso de mantenimiento si el portal lo
+ *   muestra). Ver plans/012-login-verificado-mantenimiento.md.
+ *
  * Exporta: { login, cerrarModal, BASE_URL, TIMEOUT, log }
  */
+
+const { esSesionValidaUrl } = require("../api/src/lib/esSesionValida");
 
 const BASE_URL = "https://zajuna.sena.edu.co/zajuna";
 const TIMEOUT  = 90_000;
@@ -104,7 +114,50 @@ async function login(page, user, pass) {
     .isVisible()
     .catch(() => false);
   if (hayError) throw new Error("Credenciales incorrectas.");
-  log("Sesión iniciada ✓");
+
+  // ── Verificación REAL de la sesión en Moodle (fix 10-jul-2026) ──
+  // El portal puede "aceptar" el clic sin navegar NI mostrar error (visto en el
+  // mantenimiento del SENA del 9-13 jul 2026): el waitForFunction de arriba se
+  // traga el timeout y hasta aquí llegábamos reportando "Sesión iniciada ✓" en
+  // FALSO → todos los scrapes corrían con sesión muerta (0 aprendices, rebotes
+  // al portal). La única prueba de login válido es que Moodle nos deje en /my/
+  // (mismo criterio que esSesionValidaUrl usa para las sesiones guardadas).
+  try {
+    await page.goto(`${BASE_URL}/my/`, { waitUntil: "domcontentloaded", timeout: TIMEOUT });
+  } catch (e) {
+    throw new Error(
+      `Zajuna no respondió al verificar la sesión (${e.message}). ` +
+      "Posible mantenimiento del SENA; reintenta más tarde."
+    );
+  }
+  await cerrarModal(page);
+
+  if (!esSesionValidaUrl(page.url())) {
+    // Rebotados al portal: buscar un aviso de mantenimiento para dar la causa
+    // real al instructor. El banner puede ser imagen (alt/title) o texto.
+    const avisoMantenimiento = await page
+      .evaluate(() => {
+        const textos = [document.body ? document.body.innerText : ""];
+        for (const img of document.querySelectorAll("img[alt], img[title]")) {
+          textos.push(img.getAttribute("alt") || "", img.getAttribute("title") || "");
+        }
+        const linea = textos
+          .join("\n")
+          .split("\n")
+          .map((t) => t.trim())
+          .find((t) => /mantenimiento/i.test(t));
+        return linea ? linea.slice(0, 200) : null;
+      })
+      .catch(() => null);
+
+    throw new Error(
+      avisoMantenimiento
+        ? `Zajuna está en mantenimiento del SENA ("${avisoMantenimiento}"). Reintenta cuando termine.`
+        : "Zajuna no estableció la sesión tras el login (posible mantenimiento o " +
+          "cambio en el portal del SENA). Reintenta más tarde."
+    );
+  }
+  log("Sesión iniciada ✓ (verificada en Moodle /my)");
 }
 
 module.exports = { login, cerrarModal, BASE_URL, TIMEOUT, log };
