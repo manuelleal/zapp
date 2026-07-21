@@ -70,6 +70,22 @@ async function login(page, user, pass) {
   await page.goto("https://zajuna.sena.edu.co", { waitUntil: "load", timeout: TIMEOUT });
   await cerrarModal(page);
 
+  // Detección del bloqueo WAF (fix 21-jul-2026): desde el mantenimiento del SENA
+  // (11-13 jul) un WAF Fortinet devuelve "Web Page Blocked!" (Attack ID 20000051)
+  // a cualquier request con User-Agent "HeadlessChrome". El fix real es el UA
+  // camuflado de api/src/lib/browserPool.js (uaCamuflado); este chequeo evita que,
+  // si eso regresara, el login muera 90 s después con un timeout críptico de
+  // selector en vez de decir la causa. Ver scripts/probe-waf-ua.js.
+  const bloqueoWaf = await page
+    .evaluate(() => /Web Page Blocked|Attack ID/i.test(document.body ? document.body.innerText : ""))
+    .catch(() => false);
+  if (bloqueoWaf) {
+    throw new Error(
+      "El WAF del SENA bloqueó el navegador ('Web Page Blocked'). " +
+      "Verificar que el User-Agent camuflado esté activo (api/src/lib/browserPool.js)."
+    );
+  }
+
   await page.locator('select[name="typeDocument"]').selectOption("CC");
   log("Tipo documento: CC.");
 
@@ -107,6 +123,21 @@ async function login(page, user, pass) {
   try { urlDecodificada = decodeURIComponent(urlPostLogin); } catch { /* URL malformada */ }
   if (/[?&]error=/i.test(urlPostLogin) || /datos\s+de\s+acceso\s+son\s+incorrectos/i.test(urlDecodificada)) {
     throw new Error("Credenciales incorrectas.");
+  }
+
+  // Backend de login caído (fix 21-jul-2026): si el POST a singIn.php devuelve
+  // 5xx (visto en vivo: HTTP 502 intermitente tras el mantenimiento del SENA),
+  // el browser se queda EN esa URL mostrando la página de error cruda. Sin este
+  // chequeo caeríamos al goto /my de abajo y reportaríamos "posible
+  // mantenimiento", que despista. Ver scripts/probe-login-post.js.
+  if (/singIn\.php/i.test(urlPostLogin)) {
+    const cuerpo = await page
+      .evaluate(() => (document.body ? document.body.innerText : "").trim().slice(0, 120))
+      .catch(() => "");
+    throw new Error(
+      `El login del portal SENA falló del lado del servidor${cuerpo ? ` ("${cuerpo}")` : ""}. ` +
+      "El backend de autenticación del SENA está inestable; reintenta más tarde."
+    );
   }
 
   const hayError = await page

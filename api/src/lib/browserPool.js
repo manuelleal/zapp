@@ -27,6 +27,19 @@ const BLOCKED_TYPES   = new Set(["image", "stylesheet", "font", "media", "other"
 const MAX_CONTEXTS = Number(process.env.BROWSER_MAX_CONTEXTS) || 10;
 let activeContexts = 0;
 
+// ─── UA CAMUFLADO (anti-WAF) ──────────────────────────────────────────────────
+// Desde el mantenimiento del SENA (11-13 jul 2026) el WAF del portal
+// (Fortinet — "Web Page Blocked!", Attack ID 20000051) bloquea cualquier
+// request cuyo User-Agent contenga "HeadlessChrome", que es lo que manda el
+// Chromium headless de Playwright. El MISMO Chromium con UA de Chrome normal
+// pasa sin problema (verificado con scripts/probe-waf-ua.js, 21-jul-2026).
+// Se construye con el major real del browser (formato UA-reduction de Chrome:
+// solo el major, resto en ceros) para no desincronizar versiones.
+function uaCamuflado(browser) {
+  const major = (browser.version() || "").split(".")[0] || "126";
+  return `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`;
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 let browserPromise = null;
@@ -77,7 +90,9 @@ async function acquireContext(opts = {}) {
   let context = null;
   try {
     const browser = await getBrowser();
-    context = await browser.newContext(opts);
+    // userAgent camuflado por defecto (anti-WAF, ver uaCamuflado); el caller
+    // puede pisarlo pasando su propio opts.userAgent.
+    context = await browser.newContext({ userAgent: uaCamuflado(browser), ...opts });
 
     if (BLOCK_RESOURCES) {
       await context.route("**/*", (route) => {

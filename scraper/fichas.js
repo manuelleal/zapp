@@ -378,7 +378,8 @@ async function main() {
   log(`Competencia seleccionada: ${competencia.nombre} (${competencia.codigo})`);
 
   const browser = await chromium.launch({ headless, slowMo: headless ? 0 : 80 });
-  const ctx     = await browser.newContext({ locale: "es-CO", timezoneId: "America/Bogota" });
+  // userAgent camuflado: el WAF del SENA bloquea "HeadlessChrome" (jul-2026).
+  const ctx     = await browser.newContext({ locale: "es-CO", timezoneId: "America/Bogota", userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36" });
   const page    = await ctx.newPage();
   page.setDefaultTimeout(TIMEOUT);
 

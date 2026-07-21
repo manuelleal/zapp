@@ -42,7 +42,9 @@ async function fetchDiag(url, cookieStr, redirect) {
   if (!user || !pass) { console.error("Faltan ZAJUNA_USER/ZAJUNA_PASS en .env"); process.exit(1); }
 
   const browser = await chromium.launch({ headless: true });
-  const ctx = await browser.newContext({ ignoreHTTPSErrors: true, locale: "es-CO", timezoneId: "America/Bogota" });
+  // userAgent camuflado: el WAF del SENA bloquea "HeadlessChrome" desde el
+  // mantenimiento de jul-2026 ("Web Page Blocked!"). Ver scripts/probe-waf-ua.js.
+  const ctx = await browser.newContext({ ignoreHTTPSErrors: true, locale: "es-CO", timezoneId: "America/Bogota", userAgent: UA });
   const page = await ctx.newPage();
   page.setDefaultTimeout(90_000);
 
